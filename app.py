@@ -41,25 +41,28 @@ with st.sidebar:
 
     st.divider()
 
-    with st.expander("ID-ji skladišč", expanded=True):
-        st.caption("Vnesite Warehouse ID za vsako lokacijo (vidno v Minimax → Šifranti → Skladišča)")
-        wh_mpk1 = st.number_input("MPK1 — Potujoča 1",    min_value=0, value=0, step=1)
-        wh_mpk2 = st.number_input("MPK2 — Potujoča 2",    min_value=0, value=0, step=1)
-        wh_mpk3 = st.number_input("MPK3 — Potujoča 3",    min_value=0, value=0, step=1)
-        wh_mpoc = st.number_input("MPOC — Rib. Domžale",  min_value=0, value=0, step=1)
+    with st.expander("Kode skladišč", expanded=True):
+        st.caption("Vnesite šifro skladišča kot je v Minimaxu (npr. MP-K1)")
+        wh_mpk1 = st.text_input("MPK1 — Potujoča 1",   value="MP-K1")
+        wh_mpk2 = st.text_input("MPK2 — Potujoča 2",   value="MP-K2")
+        wh_mpk3 = st.text_input("MPK3 — Potujoča 3",   value="MP-K3")
+        wh_mpoc = st.text_input("MPOC — Rib. Domžale",  value="MP-RD")
 
     st.divider()
 
-    with st.expander("ID-ji analitik", expanded=True):
-        st.caption("Vnesite Analytic ID za vsako lokacijo (Agent Hub jih poišče avtomatsko)")
-        an_mpk1 = st.number_input("Analytic ID MPK1", min_value=0, value=0, step=1)
-        an_mpk2 = st.number_input("Analytic ID MPK2", min_value=0, value=0, step=1)
-        an_mpk3 = st.number_input("Analytic ID MPK3", min_value=0, value=0, step=1)
-        an_mpoc = st.number_input("Analytic ID MPOC", min_value=0, value=0, step=1)
+    with st.expander("Kode analitik", expanded=True):
+        st.caption("Vnesite kodo analitike kot je v Minimaxu (npr. MPK1)")
+        an_mpk1 = st.text_input("Analytic koda MPK1", value="MPK1")
+        an_mpk2 = st.text_input("Analytic koda MPK2", value="MPK2")
+        an_mpk3 = st.text_input("Analytic koda MPK3", value="MPK3")
+        an_mpoc = st.text_input("Analytic koda MPOC", value="MPOC")
 
     st.divider()
     if st.button("🔍 Poišči ID-je analitik avtomatsko"):
         st.session_state["auto_find_analytics"] = True
+    if st.button("🔍 Poišči ID-je skladišč avtomatsko"):
+        st.session_state["auto_find_warehouses"] = True
+
 
 
 # ── Preverjanje nastavitev ────────────────────────────────────────────────────
@@ -79,18 +82,54 @@ def _make_client() -> MinimaxClient:
         org_id        = int(org_id),
     )
 
-WH_IDS = {
-    "MPK1": int(wh_mpk1),
-    "MPK2": int(wh_mpk2),
-    "MPK3": int(wh_mpk3),
-    "MPOC": int(wh_mpoc),
-}
-AN_IDS = {
-    "MPK1": int(an_mpk1),
-    "MPK2": int(an_mpk2),
-    "MPK3": int(an_mpk3),
-    "MPOC": int(an_mpoc),
-}
+# Kode ki jih je vnesel uporabnik — numerične ID-je poiščemo dinamično
+WH_CODES = {"MPK1": wh_mpk1, "MPK2": wh_mpk2, "MPK3": wh_mpk3, "MPOC": wh_mpoc}
+AN_CODES = {"MPK1": an_mpk1, "MPK2": an_mpk2, "MPK3": an_mpk3, "MPOC": an_mpoc}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _resolve_ids(_username, _password, _client_id, _client_secret, _org_id):
+    """Poišče numerične ID-je skladišč in analitik iz kod. Cache 1h."""
+    cli = MinimaxClient(
+        username=_username, password=_password,
+        client_id=_client_id, client_secret=_client_secret,
+        org_id=int(_org_id),
+    )
+    wh_map, an_map = {}, {}
+    try:
+        for row in cli.get_warehouses():
+            code = (row.get("Code") or "").strip().upper()
+            wid  = row.get("WarehouseId") or row.get("ID")
+            if code and wid:
+                wh_map[code] = int(wid)
+    except Exception:
+        pass
+    try:
+        for row in cli.get_analytics():
+            code = (row.get("Code") or "").strip().upper()
+            aid  = row.get("AnalyticId")
+            if code and aid:
+                an_map[code] = int(aid)
+    except Exception:
+        pass
+    return wh_map, an_map
+
+def _get_wh_id(loc_key: str) -> int:
+    code = WH_CODES.get(loc_key, "").strip().upper()
+    if not code:
+        return 0
+    if all([username, password, client_id, client_secret, org_id]):
+        wh_map, _ = _resolve_ids(username, password, client_id, client_secret, org_id)
+        return wh_map.get(code, 0)
+    return 0
+
+def _get_an_id(loc_key: str) -> int:
+    code = AN_CODES.get(loc_key, "").strip().upper()
+    if not code:
+        return 0
+    if all([username, password, client_id, client_secret, org_id]):
+        _, an_map = _resolve_ids(username, password, client_id, client_secret, org_id)
+        return an_map.get(code, 0)
+    return 0
 
 # ── Auto-iskanje analitik ─────────────────────────────────────────────────────
 
@@ -111,6 +150,25 @@ if st.session_state.get("auto_find_analytics") and _check_config():
         except Exception as e:
             st.sidebar.error(f"Napaka: {e}")
 
+# ── Auto-iskanje skladišč ────────────────────────────────────────────────────
+
+if st.session_state.get("auto_find_warehouses") and _check_config():
+    st.session_state.pop("auto_find_warehouses")
+    with st.spinner("Iščem skladišča v Minimaxu ..."):
+        try:
+            cli  = _make_client()
+            rows = cli.get_warehouses()
+            df   = pd.DataFrame([{
+                "Naziv":        r.get("Name",""),
+                "Koda":         r.get("Code",""),
+                "Warehouse ID": r.get("WarehouseId") or r.get("ID",""),
+            } for r in rows])
+            st.sidebar.success("✅ Skladišča najdena!")
+            st.sidebar.dataframe(df, use_container_width=True)
+            st.sidebar.caption("Poiščite MPK1/MPK2/MPK3/MPOC in prekopirajte ID-je v polja zgoraj.")
+        except Exception as e:
+            st.sidebar.error(f"Napaka: {e}")
+
 # ── Zavihki za lokacije ───────────────────────────────────────────────────────
 
 tabs = st.tabs([
@@ -125,8 +183,8 @@ LOC_KEYS = ["MPK1", "MPK2", "MPK3", "MPOC"]
 for tab, loc_key in zip(tabs, LOC_KEYS):
     with tab:
         loc_name  = LOCATIONS[loc_key]["name"]
-        wh_id     = WH_IDS[loc_key]
-        an_id     = AN_IDS[loc_key]
+        wh_id     = _get_wh_id(loc_key)
+        an_id     = _get_an_id(loc_key)
 
         col1, col2 = st.columns([2, 1])
         with col1:
