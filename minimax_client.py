@@ -43,7 +43,10 @@ class MinimaxClient:
             "client_id":     self.client_id,
             "client_secret": self.client_secret,
         }, timeout=15)
-        r.raise_for_status()
+        if not r.ok:
+            raise Exception(
+                f"Prijava neuspešna ({r.status_code}): {r.text[:300]}"
+            )
         data = r.json()
         self._token = data["access_token"]
         expires_in  = int(data.get("expires_in", 3600))
@@ -235,4 +238,3 @@ def parse_entry_to_lines(entry_detail: dict) -> list[dict]:
             "opis":          item.get("Note", "") or "",
         })
     return lines
-
