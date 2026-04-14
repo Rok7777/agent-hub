@@ -30,14 +30,18 @@ with st.sidebar:
     st.header("⚙️ Nastavitve API")
 
     with st.expander("Minimax dostop", expanded=True):
-        username      = st.text_input("Uporabniško ime (zunanja aplikacija)", type="password",
-                                       help="Iz: Minimax → Moj profil → Gesla za dostop zunanjih aplikacij")
-        password      = st.text_input("Geslo (zunanja aplikacija)", type="password")
-        client_id     = st.text_input("Client ID",
-                                       help="Pridobite pri Minimax podpori skupaj s client_secret")
-        client_secret = st.text_input("Client Secret", type="password")
-        org_id        = st.text_input("ID organizacije",
-                                       help="Vidno v URL-ju ko ste prijavljeni v Minimax (npr. 12345)")
+        st.caption("**Podatki odjemalca** (iz emaila Minimax podpore):")
+        client_id     = st.text_input("Client ID", value="OltreCon")
+        client_secret = st.text_input("Client Secret", type="password",
+                                       help="Iz emaila Minimax podpore")
+        st.caption("**Podatki uporabnika** (iz Minimax → Moj profil → Gesla za dostop zunanjih aplikacij):")
+        username      = st.text_input("Uporabniško ime aplikacije",
+                                       value="Agent-hub",
+                                       help="Uporabniško ime ki ste ga določili pri 'Nova aplikacija'")
+        password      = st.text_input("Geslo aplikacije", type="password",
+                                       help="Geslo ki ste ga določili pri 'Nova aplikacija'")
+        st.caption("**Organizacija:**")
+        org_id        = st.text_input("ID organizacije", value="49940465")
 
     st.divider()
 
