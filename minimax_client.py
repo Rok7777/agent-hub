@@ -235,7 +235,7 @@ def parse_entry_to_lines(entry_detail: dict) -> list[dict]:
             "row_id":            i,
             "stock_entry_row_id": item.get("StockEntryRowId"),
             "article_id":        item_fk.get("ID"),
-            "article_code":      item_fk.get("Code", "") or "",
+            "article_code":      item.get("ItemCode", "") or item_fk.get("Code", "") or str(item_fk.get("ID", "")),
             "article_name":      item.get("ItemName", "") or item_fk.get("Name", ""),
             "quantity":          float(item.get("Quantity") or 0),
             "unit":              item.get("UnitOfMeasurement", "kg") or "kg",
