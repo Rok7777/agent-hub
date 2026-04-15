@@ -198,25 +198,34 @@ class MinimaxClient:
 def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
     """
     Pretvori /stocks odgovor v format ki ga pričakuje assign_lots():
+    Primarni ključ je article_id (int) za zanesljivo ujemanje.
     { article_name: { 'article_id': int, 'article_code': str, 'lots': [...] } }
+    Hkrati gradi id_to_name mapo za hitro iskanje po ID.
     """
     result: dict[str, dict] = {}
     for row in stock_rows:
         name  = row.get("ItemName", "")
-        code  = row.get("ItemCode", "")
+        code  = row.get("ItemCode", "") or ""
         aid   = row.get("Item", {}).get("ID")
         batch = row.get("BatchNumber", "")
         qty   = float(row.get("Quantity") or 0)
         unit  = row.get("UnitOfMeasurement", "kg")
 
-        if not name or qty <= 0:
+        if not aid or qty <= 0:
             continue
 
-        if name not in result:
-            result[name] = {"article_id": aid, "article_code": code, "lots": []}
+        # Ključ je artikel ID pretvorjen v string za zanesljivo ujemanje
+        key = str(aid)
+        if key not in result:
+            result[key] = {
+                "article_id":   aid,
+                "article_code": code,
+                "article_name": name,
+                "lots": []
+            }
 
         if batch:
-            result[name]["lots"].append({"code": batch, "quantity": qty, "unit": unit})
+            result[key]["lots"].append({"code": batch, "quantity": qty, "unit": unit})
 
     return result
 
