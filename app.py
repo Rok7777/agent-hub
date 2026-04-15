@@ -67,6 +67,8 @@ with st.sidebar:
         st.session_state["auto_find_analytics"] = True
     if st.button("🔍 Poišči ID-je skladišč avtomatsko"):
         st.session_state["auto_find_warehouses"] = True
+    if st.button("🔧 Diagnostika lotov (MPK2)"):
+        st.session_state["diagnose_lots"] = True
 
 
 
@@ -152,6 +154,25 @@ if st.session_state.get("auto_find_analytics") and _check_config():
             st.sidebar.success("✅ Analitike najdene!")
             st.sidebar.dataframe(df, use_container_width=True)
             st.sidebar.caption("Prekopirajte ID-je v polja zgoraj.")
+        except Exception as e:
+            st.sidebar.error(f"Napaka: {e}")
+
+# ── Diagnostika lotov ────────────────────────────────────────────────────────
+
+if st.session_state.get("diagnose_lots") and _check_config():
+    st.session_state.pop("diagnose_lots")
+    with st.spinner("Iščem dokumente z loti za MPK2 ..."):
+        try:
+            cli  = _make_client()
+            wh   = _get_wh_id("MPK2")
+            diag = cli.diagnose_lots(wh)
+            st.sidebar.success("✅ Diagnostika:")
+            st.sidebar.write(f"Warehouse ID: {diag['warehouse_id']}")
+            if diag['found']:
+                for f in diag['found']:
+                    st.sidebar.write(f"Tip {f['type']}: lot={f['batch']}, wh_from={f['wh_from']}, wh_to={f['wh_to']}")
+            else:
+                st.sidebar.warning("Ni dokumentov z loti v zadnjih 14 dneh!")
         except Exception as e:
             st.sidebar.error(f"Napaka: {e}")
 
