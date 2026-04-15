@@ -139,7 +139,8 @@ class MinimaxClient:
     def get_stock_by_lots(self, warehouse_id: int) -> list[dict]:
         """
         Vrne zalogo po lotih za dano skladišče.
-        ResultsByBatchNumber=Y → razdeli po serijah.
+        Najprej poskusi ResultsByBatchNumber=Y za celotno skladišče.
+        Če loti niso vrnjeni, jih poišče po posameznem artiklu.
         """
         result = []
         page   = 1
@@ -155,6 +156,28 @@ class MinimaxClient:
             if len(result) >= data.get("TotalRows", 0):
                 break
             page += 1
+        return result
+
+    def get_stock_for_items(self, warehouse_id: int, item_ids: list[int]) -> list[dict]:
+        """
+        Za seznam article ID-jev vrne zalogo po lotih.
+        Kliče /stocks?ItemID=X&ResultsByBatchNumber=Y za vsak artikel posebej.
+        Uporabi kadar skladišče ne vrne lotov pri splošnem klicu.
+        """
+        result = []
+        for item_id in item_ids:
+            try:
+                data = self._get("/stocks", params={
+                    "WarehouseId":          warehouse_id,
+                    "ItemID":               item_id,
+                    "ResultsByBatchNumber": "Y",
+                    "CurrentPage":          1,
+                    "PageSize":             100,
+                })
+                rows = data.get("Rows", [])
+                result.extend(rows)
+            except Exception:
+                continue
         return result
 
     def get_warehouses(self) -> list[dict]:
