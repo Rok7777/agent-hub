@@ -271,6 +271,15 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                     stock        = parse_stock_to_engine_format(stock_raw)
                     today        = datetime.now()
                     result_lines = assign_lots(doc_lines, stock, today)
+                    
+                    # Debug info
+                    entry_keys = list(entry_data.keys()) if isinstance(entry_data, dict) else str(type(entry_data))
+                    st.session_state[f"debug_{loc_key}_{selected_id}"] = {
+                        "entry_keys": entry_keys,
+                        "doc_lines_count": len(doc_lines),
+                        "stock_count": len(stock),
+                        "raw_sample": str(entry_data)[:500] if isinstance(entry_data, dict) else str(entry_data)[:500],
+                    }
 
                     st.session_state[f"result_{loc_key}_{selected_id}"] = {
                         "lines":      result_lines,
@@ -290,6 +299,16 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
             st.divider()
             lines = result["lines"]
             label = result["label"]
+
+            # Debug prikaz
+            debug_key = f"debug_{loc_key}_{selected_id}"
+            if debug_key in st.session_state:
+                dbg = st.session_state[debug_key]
+                with st.expander("🔧 Debug info (za razvijalca)"):
+                    st.write(f"Ključi dokumenta: {dbg['entry_keys']}")
+                    st.write(f"Vrstic v dokumentu: {dbg['doc_lines_count']}")
+                    st.write(f"Artiklov v zalogi: {dbg['stock_count']}")
+                    st.code(dbg['raw_sample'])
 
             # Statistika
             ok_lines      = [l for l in lines if l['status'] == 'ok']
