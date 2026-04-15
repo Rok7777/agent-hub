@@ -109,7 +109,7 @@ class MinimaxClient:
         result = []
         page   = 1
         while True:
-            data = self._get("/stockentries", params={
+            data = self._get("/stockentry", params={
                 "StockEntryType":    "I",
                 "StockEntrySubtype": "S",
                 "Status":            "O",
@@ -132,7 +132,7 @@ class MinimaxClient:
 
     def get_entry_detail(self, entry_id: int) -> dict:
         """Vrne podrobnosti posameznega dokumenta (vrstice)."""
-        return self._get(f"/stockentries/{entry_id}")
+        return self._get(f"/stockentry/{entry_id}")
 
     # ── Zaloga po lotih ───────────────────────────────────────────────────────
 
@@ -190,7 +190,7 @@ class MinimaxClient:
             api_rows.append(row)
 
         body = {**entry_data, "StockEntryItems": api_rows}
-        return self._put(f"/stockentries/{entry_id}", body)
+        return self._put(f"/stockentry/{entry_id}", body)
 
 
 # ── Pretvorba API odgovora v format za lot_engine ─────────────────────────────
