@@ -288,6 +288,22 @@ class MinimaxClient:
                     pass
         return {"found": found, "warehouse_id": warehouse_id}
 
+    def get_item_units(self, item_ids: list[int]) -> dict[int, str]:
+        """
+        Vrne enote meritve za seznam artikel ID-jev.
+        {item_id: 'kg'/'kos'/...}
+        """
+        result = {}
+        for item_id in item_ids:
+            try:
+                data = self._get(f"/item/{item_id}")
+                unit = data.get("UnitOfMeasurement") or data.get("Unit") or ""
+                if unit:
+                    result[item_id] = unit
+            except Exception:
+                continue
+        return result
+
     def get_warehouses(self) -> list[dict]:
         """Vrne seznam skladišč za iskanje WarehouseId."""
         data = self._get("/warehouses", params={"CurrentPage": 1, "PageSize": 100})
@@ -362,24 +378,27 @@ def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
     return result
 
 
-def parse_entry_to_lines(entry_detail: dict) -> list[dict]:
+def parse_entry_to_lines(entry_detail: dict, item_units: dict = None) -> list[dict]:
     """
     Pretvori /stockentry/{id} odgovor v seznam vrstic za assign_lots().
-    Polja po API dokumentaciji StockEntryRow:
-    Item (FK), ItemName, Quantity, Price, SellingPrice, BatchNumber, SerialNumber, Mass
+    item_units: {item_id: unit} — opcijsko za pravilne enote (kos/kg)
     """
     rows = entry_detail.get("StockEntryRows") or []
     lines = []
     for i, item in enumerate(rows):
-        item_fk   = item.get("Item") or {}
+        item_fk  = item.get("Item") or {}
+        item_id  = item_fk.get("ID")
+        # Enota: najprej iz API, nato iz item_units, nazadnje prazen
+        unit = (item.get("UnitOfMeasurement") or item.get("Unit") or
+                (item_units.get(item_id) if item_units and item_id else None) or "")
         lines.append({
             "row_id":            i,
             "stock_entry_row_id": item.get("StockEntryRowId"),
-            "article_id":        item_fk.get("ID"),
-            "article_code":      item.get("ItemCode", "") or item_fk.get("Code", "") or str(item_fk.get("ID", "")),
+            "article_id":        item_id,
+            "article_code":      item.get("ItemCode", "") or item_fk.get("Code", "") or str(item_id or ""),
             "article_name":      item.get("ItemName", "") or item_fk.get("Name", ""),
             "quantity":          float(item.get("Quantity") or 0),
-            "unit":              item.get("UnitOfMeasurement") or item.get("Unit") or "",
+            "unit":              unit,
             "selling_price":     item.get("SellingPrice") or item.get("Price"),
             "lot":               item.get("BatchNumber", "") or "",
             "opis":              item.get("SerialNumber", "") or "",
