@@ -302,6 +302,8 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                     all_entry_data = {}
                     all_doc_lines  = {}
                     all_item_ids   = set()
+
+                    # Prvo branje brez enot (da dobimo article IDs)
                     for eid in sorted_ids:
                         ed = cli.get_entry_detail(eid)
                         dl = parse_entry_to_lines(ed)
@@ -310,6 +312,13 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                         for l in dl:
                             if l.get("article_id"):
                                 all_item_ids.add(l["article_id"])
+
+                    # Pridobi pravilne enote iz artikelskega šifranta
+                    item_units = cli.get_item_units(list(all_item_ids))
+
+                    # Ponovno razčleni z enotami
+                    for eid in sorted_ids:
+                        all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
                     # Preberi zalogo enkrat za vse
                     stock_raw = cli.get_stock_by_lots(wh_id)
