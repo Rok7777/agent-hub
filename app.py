@@ -26,40 +26,41 @@ st.caption("Avtomatska FIFO dodelitev serij za maloprodajne dokumente v Minimaxu
 
 # ── Stranska vrstica: nastavitve ──────────────────────────────────────────────
 
+# ── Branje iz Streamlit Secrets (ali privzetih vrednosti) ──────────────────
+def _secret(key, default=""):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return default
+
 with st.sidebar:
     st.header("⚙️ Nastavitve API")
 
     with st.expander("Minimax dostop", expanded=True):
-        st.caption("**Podatki odjemalca** (iz emaila Minimax podpore):")
-        client_id     = st.text_input("Client ID", value="OltreCon")
-        client_secret = st.text_input("Client Secret", type="password",
-                                       help="Iz emaila Minimax podpore")
-        st.caption("**Podatki uporabnika** (iz Minimax → Moj profil → Gesla za dostop zunanjih aplikacij):")
-        username      = st.text_input("Uporabniško ime aplikacije",
-                                       value="Agent-hub",
-                                       help="Uporabniško ime ki ste ga določili pri 'Nova aplikacija'")
-        password      = st.text_input("Geslo aplikacije", type="password",
-                                       help="Geslo ki ste ga določili pri 'Nova aplikacija'")
-        st.caption("**Organizacija:**")
-        org_id        = st.text_input("ID organizacije", value="49940465")
+        st.caption("Podatki odjemalca (iz emaila Minimax podpore):")
+        client_id     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID", "OltreCon"))
+        client_secret = st.text_input("Client Secret",    value=_secret("MINIMAX_CLIENT_SECRET", ""), type="password")
+        st.caption("Podatki uporabnika:")
+        username      = st.text_input("Uporabniško ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
+        password      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD", ""), type="password")
+        st.caption("Organizacija:")
+        org_id        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID", "171038"))
 
     st.divider()
 
     with st.expander("Kode skladišč", expanded=True):
-        st.caption("Vnesite šifro skladišča kot je v Minimaxu (npr. MP-K1)")
-        wh_mpk1 = st.text_input("MPK1 — Potujoča 1",   value="MP-K1")
-        wh_mpk2 = st.text_input("MPK2 — Potujoča 2",   value="MP-K2")
-        wh_mpk3 = st.text_input("MPK3 — Potujoča 3",   value="MP-K3")
-        wh_mpoc = st.text_input("MPOC — Rib. Domžale",  value="MP-RD")
+        wh_mpk1 = st.text_input("MPK1 — Potujoča 1",  value=_secret("WH_MPK1", "MP-K1"))
+        wh_mpk2 = st.text_input("MPK2 — Potujoča 2",  value=_secret("WH_MPK2", "MP-K2"))
+        wh_mpk3 = st.text_input("MPK3 — Potujoča 3",  value=_secret("WH_MPK3", "MP-K3"))
+        wh_mpoc = st.text_input("MPOC — Rib. Domžale", value=_secret("WH_MPOC", "MP-RD"))
 
     st.divider()
 
     with st.expander("Kode analitik", expanded=True):
-        st.caption("Vnesite kodo analitike kot je v Minimaxu (npr. MPK1)")
-        an_mpk1 = st.text_input("Analytic koda MPK1", value="MPK1")
-        an_mpk2 = st.text_input("Analytic koda MPK2", value="MPK2")
-        an_mpk3 = st.text_input("Analytic koda MPK3", value="MPK3")
-        an_mpoc = st.text_input("Analytic koda MPOC", value="MPOC")
+        an_mpk1 = st.text_input("Analytic koda MPK1", value=_secret("AN_MPK1", "MPK1"))
+        an_mpk2 = st.text_input("Analytic koda MPK2", value=_secret("AN_MPK2", "MPK2"))
+        an_mpk3 = st.text_input("Analytic koda MPK3", value=_secret("AN_MPK3", "MPK3"))
+        an_mpoc = st.text_input("Analytic koda MPOC", value=_secret("AN_MPOC", "MPOC"))
 
     st.divider()
     if st.button("🔍 Poišči ID-je analitik avtomatsko"):
@@ -204,7 +205,16 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
             if not _check_config():
                 st.stop()
             if an_id == 0:
-                st.error("Vnesite Analytic ID za to lokacijo v nastavitvah.")
+                # Poskusi prisilno razrešiti analitike
+                with st.spinner("Iščem analitike..."):
+                    try:
+                        cli2 = _make_client()
+                        _resolve_ids.clear()
+                        an_id = _get_an_id(loc_key)
+                    except Exception:
+                        pass
+            if an_id == 0:
+                st.error("Ne najdem analitike za to lokacijo. Preverite kodo analitike v nastavitvah.")
                 st.stop()
 
             with st.spinner("Iščem osnutke dokumentov ..."):
