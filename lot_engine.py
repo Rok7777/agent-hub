@@ -235,52 +235,60 @@ def assign_lots(
 
     Vrne seznam outputnih vrstic z: lot, quantity_assigned, opis, status
     """
-    # Indeks: article_code → article_name v zalogi
-    by_code = {v['article_code']: k for k, v in stock.items()}
+    # Indeks: article_id (str) → stock key
+    # Stock ključi so str(article_id)
+    by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
+    by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
+    by_name = {v.get('article_name',''): k for k, v in stock.items()}
 
-    # Virtualna zaloga (za sledenje znotraj dokumenta pred potrditvijo)
+    # Virtualna zaloga
     virtual: dict[str, list[dict]] = {
-        name: [lot.copy() for lot in data['lots']]
-        for name, data in stock.items()
+        key: [lot.copy() for lot in data['lots']]
+        for key, data in stock.items()
     }
 
     output = []
 
     for line in document_lines:
-        art_code   = line['article_code']
-        art_name   = line['article_name']
+        art_id     = str(line.get('article_id') or '')
+        art_code   = line.get('article_code', '')
+        art_name   = line.get('article_name', '')
         qty_needed = round(float(line['quantity']), 4)
         unit       = line['unit']
         base_opis  = (line.get('opis') or '').strip()
 
         matched_note = ''
-        stock_name   = by_code.get(art_code)
+
+        # Iskanje v zalogi: najprej po ID, nato po kodi, nato po imenu
+        stock_key = by_id.get(art_id) or by_code.get(art_code) or by_name.get(art_name)
 
         # Preverimo ali ima zaloga
         has_vstock = (
-            stock_name is not None and
-            any(l.get('quantity',0) > 0 for l in virtual.get(stock_name, []))
+            stock_key is not None and
+            any(l.get('quantity',0) > 0 for l in virtual.get(stock_key, []))
         )
 
         if not has_vstock:
-            # Smart matching
-            avail_with_stock = {
-                n: lots for n, lots in virtual.items()
-                if any(l.get('quantity',0) > 0 for l in lots)
-            }
-            matched, note = smart_match(art_name, avail_with_stock, unit)
-            if matched is None:
+            # Smart matching — gradi flat {name: lots} za smart_match
+            avail_with_stock = {}
+            for k, lots in virtual.items():
+                if any(l.get('quantity',0) > 0 for l in lots):
+                    sname = stock[k].get('article_name', k)
+                    avail_with_stock[sname] = lots
+            matched_name, note = smart_match(art_name, avail_with_stock, unit)
+            if matched_name is None:
                 output.append({**line,
                     'lot': None, 'quantity_assigned': qty_needed,
                     'opis': f"{base_opis} [brez lota: {note}]".strip(),
                     'status': 'no_match'})
                 continue
-            stock_name   = matched
+            # Poišči stock_key za matched_name
+            stock_key    = by_name.get(matched_name) or matched_name
             matched_note = note
 
         # FIFO filtriranje
-        name_for_check = art_name if not matched_note else stock_name
-        eligible = get_eligible_lots(virtual.get(stock_name, []), name_for_check, today)
+        name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
+        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
 
         if not eligible:
             output.append({**line,
@@ -303,7 +311,7 @@ def assign_lots(
             assignments.append((lot['code'], use))
             remaining = round(remaining - use, 4)
             # Odbitek iz virtualne zaloge
-            for vl in virtual[stock_name]:
+            for vl in virtual[stock_key]:
                 if vl['code'] == lot['code']:
                     vl['quantity'] = round(vl['quantity'] - use, 4)
                     break
@@ -313,13 +321,13 @@ def assign_lots(
             opis = (opis + ' ' + matched_note).strip() if opis else matched_note
 
         # Ena vrstica na lot
-        stock_data = stock.get(stock_name, {})
+        stock_data = stock.get(stock_key, {})
         for lot_code, qty in assignments:
             output.append({
                 **line,
                 'article_id':   stock_data.get('article_id', line['article_id']),
                 'article_code': stock_data.get('article_code', art_code),
-                'article_name': stock_name,
+                'article_name': stock_data.get('article_name', art_name),
                 'lot':          lot_code,
                 'quantity_assigned': qty,
                 'opis':         opis,
@@ -329,9 +337,9 @@ def assign_lots(
         # Preostala količina brez lota
         if remaining > 0:
             output.append({**line,
-                'article_id':   stock_data.get('article_id', line['article_id']),
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
                 'article_code': stock_data.get('article_code', art_code),
-                'article_name': stock_name,
+                'article_name': stock_data.get('article_name', art_name),
                 'lot':  None,
                 'quantity_assigned': remaining,
                 'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
