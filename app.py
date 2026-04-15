@@ -274,11 +274,15 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                     
                     # Debug info
                     entry_keys = list(entry_data.keys()) if isinstance(entry_data, dict) else str(type(entry_data))
+                    rows = entry_data.get("StockEntryRows") or []
+                    first_row = str(rows[0])[:800] if rows else "Ni vrstic v StockEntryRows"
                     st.session_state[f"debug_{loc_key}_{selected_id}"] = {
                         "entry_keys": entry_keys,
                         "doc_lines_count": len(doc_lines),
                         "stock_count": len(stock),
-                        "raw_sample": str(entry_data)[:500] if isinstance(entry_data, dict) else str(entry_data)[:500],
+                        "rows_count": len(rows),
+                        "first_row": first_row,
+                        "raw_sample": str(entry_data)[:300],
                     }
 
                     st.session_state[f"result_{loc_key}_{selected_id}"] = {
@@ -307,8 +311,10 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                 with st.expander("🔧 Debug info (za razvijalca)"):
                     st.write(f"Ključi dokumenta: {dbg['entry_keys']}")
                     st.write(f"Vrstic v dokumentu: {dbg['doc_lines_count']}")
+                    st.write(f"Vrstic (StockEntryRows): {dbg.get('rows_count', '?')}")
                     st.write(f"Artiklov v zalogi: {dbg['stock_count']}")
-                    st.code(dbg['raw_sample'])
+                    st.write("Prva vrstica:")
+                    st.code(dbg.get('first_row', ''))
 
             # Statistika
             ok_lines      = [l for l in lines if l['status'] == 'ok']
