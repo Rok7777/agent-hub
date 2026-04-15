@@ -268,6 +268,13 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                     entry_data   = cli.get_entry_detail(selected_id)
                     stock_raw    = cli.get_stock_by_lots(wh_id)
                     doc_lines    = parse_entry_to_lines(entry_data)
+
+                    # Če splošni klic ni vrnil lotov, poiščemo po posameznih artiklih
+                    has_lots = any(r.get("BatchNumber") for r in stock_raw)
+                    if not has_lots and doc_lines:
+                        item_ids = list({l["article_id"] for l in doc_lines if l.get("article_id")})
+                        stock_raw = cli.get_stock_for_items(wh_id, item_ids)
+
                     stock        = parse_stock_to_engine_format(stock_raw)
                     today        = datetime.now()
                     result_lines = assign_lots(doc_lines, stock, today)
@@ -276,12 +283,15 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                     entry_keys = list(entry_data.keys()) if isinstance(entry_data, dict) else str(type(entry_data))
                     rows = entry_data.get("StockEntryRows") or []
                     first_row = str(rows[0]) if rows else "Ni vrstic v StockEntryRows"
+                    lots_sample = [r for r in stock_raw if r.get("BatchNumber")][:3]
                     st.session_state[f"debug_{loc_key}_{selected_id}"] = {
                         "entry_keys": entry_keys,
                         "doc_lines_count": len(doc_lines),
                         "stock_count": len(stock),
                         "rows_count": len(rows),
                         "first_row": first_row,
+                        "has_lots": has_lots,
+                        "lots_sample": str(lots_sample),
                         "raw_sample": str(entry_data)[:300],
                     }
 
@@ -313,6 +323,9 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                     st.write(f"Vrstic v dokumentu: {dbg['doc_lines_count']}")
                     st.write(f"Vrstic (StockEntryRows): {dbg.get('rows_count', '?')}")
                     st.write(f"Artiklov v zalogi: {dbg['stock_count']}")
+                    st.write(f"Loti najdeni: {dbg.get('has_lots', '?')}")
+                    st.write("Vzorec lotov:")
+                    st.code(dbg.get('lots_sample', ''))
                     st.write("Prva vrstica:")
                     st.code(dbg.get('first_row', ''))
 
