@@ -315,9 +315,10 @@ class MinimaxClient:
             }
             if r.get("lot"):
                 row["BatchNumber"] = r["lot"]
-            # Ohrani ceno iz originalnega dokumenta
             if r.get("selling_price") is not None:
                 row["Price"] = r["selling_price"]
+            if r.get("unit"):
+                row["UnitOfMeasurement"] = r["unit"]
             api_rows.append(row)
 
         body = {**entry_data, "StockEntryItems": api_rows}
@@ -340,7 +341,7 @@ def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
         aid   = row.get("Item", {}).get("ID")
         batch = row.get("BatchNumber", "")
         qty   = float(row.get("Quantity") or 0)
-        unit  = row.get("UnitOfMeasurement", "kg")
+        unit  = row.get("UnitOfMeasurement") or row.get("Unit") or ""
 
         if not aid or qty <= 0:
             continue
@@ -378,7 +379,7 @@ def parse_entry_to_lines(entry_detail: dict) -> list[dict]:
             "article_code":      item.get("ItemCode", "") or item_fk.get("Code", "") or str(item_fk.get("ID", "")),
             "article_name":      item.get("ItemName", "") or item_fk.get("Name", ""),
             "quantity":          float(item.get("Quantity") or 0),
-            "unit":              item.get("UnitOfMeasurement", "kg") or "kg",
+            "unit":              item.get("UnitOfMeasurement") or item.get("Unit") or "",
             "selling_price":     item.get("SellingPrice") or item.get("Price"),
             "lot":               item.get("BatchNumber", "") or "",
             "opis":              item.get("SerialNumber", "") or "",
