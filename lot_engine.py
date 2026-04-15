@@ -29,14 +29,29 @@ _FRESH_RE = re.compile(
     re.IGNORECASE
 )
 _DELI_RE  = re.compile(r'^\(deli', re.IGNORECASE)
-_FROZEN_RE = re.compile(
-    r'\bzamrznjen[aoe]?\b|\bodtaljen[aoe]?\b',
-    re.IGNORECASE
-)
+_FROZEN_RE = re.compile(r'zamrznjen|odtaljen', re.IGNORECASE)
+
+_FAO_RE = re.compile('FAO', re.IGNORECASE)
+
+# Morski artikli — besede ki označujejo ribe in morsko hrano
+_SEAFOOD_RE = re.compile('brancin|orada|losos|postrv|sard|oslič|oslic|tun|lignji|kozice|skampi|škampi|klapavice|ostriga|hobotnica|sipa|lubin|kovac|kovač|šur|platesa|trska|polenovka|zobatec|špar|kirnja|arbun|FAO|morsk', re.IGNORECASE)
+
+def is_seafood(name: str) -> bool:
+    """Vrne True če je artikel riba ali morska hrana."""
+    return bool(_FAO_RE.search(name) or _SEAFOOD_RE.search(name))
 
 def is_fresh_or_deli(name: str) -> bool:
-    """Vrne True če artikel zahteva mejo 14 dni za lote."""
-    return bool(_DELI_RE.search(name) or _FRESH_RE.search(name))
+    """
+    Vrne True če artikel zahteva mejo 14 dni za lote.
+    - Eksplicitno sveže (svež/sveža/sveže...) ali (deli
+    - ALI: vsebuje FAO brez zamrznjen/odtaljen → sveže po definiciji
+    """
+    if _DELI_RE.search(name) or _FRESH_RE.search(name):
+        return True
+    # FAO brez zamrznjen/odtaljen → sveže
+    if _FAO_RE.search(name) and not _FROZEN_RE.search(name):
+        return True
+    return False
 
 
 # ─── Kalo faktor ─────────────────────────────────────────────────────────────
@@ -68,6 +83,9 @@ def check_old_lots(stock: dict, today: datetime) -> list[dict]:
     warnings = []
     for key, data in stock.items():
         art_name  = data.get('article_name', key)
+        # Opozorila samo za morske artikle
+        if not is_seafood(art_name):
+            continue
         is_frozen = bool(_FROZEN_RE.search(art_name))
         # Sveže: opozori pri 10+ dneh, zamrznjeno: opozori pri 270+ dneh (9 mesecev)
         threshold = 270 if is_frozen else 10
@@ -115,9 +133,10 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
             result.append({**lot, '_date': datetime(2099, 1, 1), '_aged': False})
             continue
         # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
-        if aged_cutoff and d < aged_cutoff:
+        if needs_14d and (today - d).days > 30:
             continue
-        result.append({**lot, '_date': d, '_aged': bool(cutoff and d < cutoff)})
+        days = (today - d).days
+        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 14 <= days <= 30)})
 
     result.sort(key=lambda x: x['_date'])
     return result
@@ -351,7 +370,10 @@ def assign_lots(
 
         # FIFO filtriranje
         name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
-        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
+        # Ne-morski artikli dobijo vse lote brez starostnih omejitev
+        _is_seafood  = is_seafood(name_for_check)
+        check_name = name_for_check if _is_seafood else ""
+        eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
         if not eligible:
             output.append({**line,
@@ -363,7 +385,7 @@ def assign_lots(
         # Dodelitev po FIFO
         remaining   = qty_needed
         assignments = []
-        fresh_art   = is_fresh_or_deli(name_for_check)
+        fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood
 
         for lot in eligible:
             if remaining <= 0 and not lot.get("_aged"):
@@ -372,7 +394,6 @@ def assign_lots(
             if avail <= 0:
                 continue
 
-            # Pravilo za stare sveže lote (14-30 dni): razknjiži cel lot
             lot_date = parse_lot_date(lot['code'])
             days_old = (today - lot_date).days if lot_date else 0
             force_full = fresh_art and lot.get("_aged", False)
@@ -494,7 +515,9 @@ def assign_lots_with_virtual(
             matched_note = note
 
         name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
-        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
+        # Ne-morski artikli dobijo vse lote brez starostnih omejitev
+        check_name = name_for_check if _is_seafood2 else ""
+        eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
         if not eligible:
             output.append({**line,
