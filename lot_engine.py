@@ -39,6 +39,59 @@ def is_fresh_or_deli(name: str) -> bool:
     return bool(_DELI_RE.search(name) or _FRESH_RE.search(name))
 
 
+# ─── Kalo faktor ─────────────────────────────────────────────────────────────
+
+_SARDELA_RE = re.compile('sard', re.IGNORECASE)
+_LOSOS_RE   = re.compile('losos', re.IGNORECASE)
+_TRIM_RE    = re.compile('trim', re.IGNORECASE)
+
+KALO_FACTOR = 1.10  # 10% kalo za sardele in losos (brez trim)
+
+def get_kalo_factor(article_name: str) -> float:
+    """Vrne kalo faktor za artikel. 1.10 za sardele in losos (brez trim)."""
+    if _SARDELA_RE.search(article_name):
+        return KALO_FACTOR
+    if _LOSOS_RE.search(article_name) and not _TRIM_RE.search(article_name):
+        return KALO_FACTOR
+    return 1.0
+
+
+# ─── Opozorilo starih lotov ───────────────────────────────────────────────────
+
+def check_old_lots(stock: dict, today: datetime) -> list[dict]:
+    """
+    Preveri zalogo za stare lote ki se niso razknjižili.
+    Sveže: opozori če lot > 10 dni
+    Zamrznjeno/odtaljeno: opozori če lot > 350 dni
+    Vrne seznam {'article': str, 'lot': str, 'days_old': int, 'qty': float, 'warning': str}
+    """
+    warnings = []
+    for key, data in stock.items():
+        art_name = data.get('article_name', key)
+        is_frozen = bool(_FROZEN_RE.search(art_name))
+        threshold = 350 if is_frozen else 10
+
+        for lot in data.get('lots', []):
+            if lot.get('quantity', 0) <= 0:
+                continue
+            lot_date = parse_lot_date(lot['code'])
+            if lot_date is None:
+                continue
+            days_old = (today - lot_date).days
+            if days_old >= threshold:
+                tip = "zamrznjeno" if is_frozen else "sveže"
+                warnings.append({
+                    'article':  art_name,
+                    'lot':      lot['code'],
+                    'days_old': days_old,
+                    'qty':      round(lot['quantity'], 3),
+                    'unit':     lot.get('unit', 'kg'),
+                    'warning':  f"Lot star {days_old} dni ({tip}, meja {threshold} dni)",
+                })
+    warnings.sort(key=lambda x: x['days_old'], reverse=True)
+    return warnings
+
+
 # ─── Filtriranje lotov (FIFO) ─────────────────────────────────────────────────
 
 def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> list[dict]:
@@ -259,6 +312,11 @@ def assign_lots(
 
         matched_note = ''
 
+        # Kalo faktor — sardele in losos (brez trim) razknižimo 10% več
+        kalo = get_kalo_factor(art_name)
+        if kalo != 1.0:
+            qty_needed = round(qty_needed * kalo, 4)
+
         # Iskanje v zalogi: najprej po ID, nato po kodi, nato po imenu
         stock_key = by_id.get(art_id) or by_code.get(art_code) or by_name.get(art_name)
 
@@ -363,3 +421,116 @@ def _merge_lot_lines(lines: list[dict]) -> list[dict]:
                 seen[key]['quantity_assigned'] + line['quantity_assigned'], 4
             )
     return [seen[k] for k in order]
+
+
+def assign_lots_with_virtual(
+    document_lines: list[dict],
+    stock: dict[str, dict],
+    virtual: dict[str, list[dict]],
+    today: datetime
+) -> list[dict]:
+    """
+    Kot assign_lots ampak sprejme zunanjo virtual zalogo.
+    Omogoča skupno obdelavo več dokumentov z deljeno virtualno zalogo.
+    Virtual se posodablja in spremembe so vidne pri naslednjem dokumentu.
+    """
+    by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
+    by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
+    by_name = {v.get('article_name',''): k for k, v in stock.items()}
+
+    output = []
+
+    for line in document_lines:
+        art_id     = str(line.get('article_id') or '')
+        art_code   = line.get('article_code', '')
+        art_name   = line.get('article_name', '')
+        qty_needed = round(float(line['quantity']), 4)
+        unit       = line['unit']
+        base_opis  = (line.get('opis') or '').strip()
+
+        matched_note = ''
+
+        # Kalo faktor
+        kalo = get_kalo_factor(art_name)
+        if kalo != 1.0:
+            qty_needed = round(qty_needed * kalo, 4)
+
+        stock_key = by_id.get(art_id) or by_code.get(art_code) or by_name.get(art_name)
+
+        has_vstock = (
+            stock_key is not None and
+            any(l.get('quantity',0) > 0 for l in virtual.get(stock_key, []))
+        )
+
+        if not has_vstock:
+            avail_with_stock = {}
+            for k, lots in virtual.items():
+                if any(l.get('quantity',0) > 0 for l in lots):
+                    sname = stock[k].get('article_name', k)
+                    avail_with_stock[sname] = lots
+            matched_name, note = smart_match(art_name, avail_with_stock, unit)
+            if matched_name is None:
+                output.append({**line,
+                    'lot': None, 'quantity_assigned': qty_needed,
+                    'opis': f"{base_opis} [brez lota: {note}]".strip(),
+                    'status': 'no_match'})
+                continue
+            stock_key    = by_name.get(matched_name) or matched_name
+            matched_note = note
+
+        name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
+        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
+
+        if not eligible:
+            output.append({**line,
+                'lot': None, 'quantity_assigned': qty_needed,
+                'opis': f"{base_opis} [brez lota: ni ustreznih lotov]".strip(),
+                'status': 'no_lots'})
+            continue
+
+        remaining   = qty_needed
+        assignments = []
+
+        for lot in eligible:
+            if remaining <= 0:
+                break
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+            use = round(min(avail, remaining), 4)
+            assignments.append((lot['code'], use))
+            remaining = round(remaining - use, 4)
+            for vl in virtual[stock_key]:
+                if vl['code'] == lot['code']:
+                    vl['quantity'] = round(vl['quantity'] - use, 4)
+                    break
+
+        opis = base_opis
+        if matched_note:
+            opis = (opis + ' ' + matched_note).strip() if opis else matched_note
+
+        stock_data = stock.get(stock_key, {})
+        for lot_code, qty in assignments:
+            output.append({
+                **line,
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
+                'article_code': stock_data.get('article_code', art_code),
+                'article_name': stock_data.get('article_name', art_name),
+                'lot':          lot_code,
+                'quantity_assigned': qty,
+                'opis':         opis,
+                'status':       'matched' if matched_note else 'ok'
+            })
+
+        if remaining > 0:
+            output.append({**line,
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
+                'article_code': stock_data.get('article_code', art_code),
+                'article_name': stock_data.get('article_name', art_name),
+                'lot':  None,
+                'quantity_assigned': remaining,
+                'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
+                'status': 'partial'
+            })
+
+    return _merge_lot_lines(output)
