@@ -11,7 +11,7 @@ from minimax_client import (
     MinimaxClient, LOCATIONS,
     parse_stock_to_engine_format, parse_entry_to_lines,
 )
-from lot_engine import assign_lots
+from lot_engine import assign_lots, assign_lots_with_virtual, check_old_lots
 
 # ── Nastavitve strani ─────────────────────────────────────────────────────────
 
@@ -259,181 +259,197 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
 
         st.write(f"Najdenih **{len(drafts)}** osnutkov:")
 
-        # Prikaz seznama osnutkov
-        df_drafts = pd.DataFrame([{
-            "Številka":  f"IS-{d.get('Number','?')}",
-            "Datum":     str(d.get('Date',''))[:10],
-            "Stranka":   d.get('Customer', {}).get('Name', 'Končni kupec'),
-            "ID":        d.get('StockEntryId'),
-        } for d in drafts])
+        # ── Checkboxi za izbiro dokumentov ───────────────────────────────────
+        st.caption("Izberite dokumente za obdelavo (kronološki vrstni red):")
+        select_all = st.checkbox("☑ Izberi vse", key=f"sel_all_{loc_key}", value=True)
 
-        st.dataframe(df_drafts.drop(columns=["ID"]), use_container_width=True, hide_index=True)
+        selected_ids = []
+        for d in sorted(drafts, key=lambda x: str(x.get("Date",""))):
+            label = f"IS-{d.get('Number','?')} — {str(d.get('Date',''))[:10]}"
+            cb_key = f"cb_{loc_key}_{d.get('StockEntryId')}"
+            checked = st.checkbox(label, key=cb_key, value=select_all)
+            if checked:
+                selected_ids.append(d.get("StockEntryId"))
 
-        # Izbira dokumenta
-        doc_options = {
-            f"IS-{d.get('Number','?')} ({str(d.get('Date',''))[:10]})": d.get('StockEntryId')
-            for d in drafts
-        }
-        selected_label = st.selectbox(
-            "Izberite dokument za obdelavo:",
-            options=list(doc_options.keys()),
-            key=f"sel_{loc_key}",
-        )
-        selected_id = doc_options[selected_label]
+        st.divider()
 
         run_btn = st.button(
-            f"⚡ Zaženi agenta za {selected_label}",
+            f"⚡ Obdelaj vse označene osnutke ({len(selected_ids)})",
             key=f"run_{loc_key}",
             type="primary",
             use_container_width=True,
+            disabled=len(selected_ids) == 0,
         )
 
-        if run_btn:
+        if run_btn and selected_ids:
             if wh_id == 0:
-                st.error("Vnesite Warehouse ID za to lokacijo v nastavitvah.")
+                st.error("Vnesite Warehouse kodo za to lokacijo v nastavitvah.")
                 st.stop()
 
-            with st.spinner("Berem dokument in zalogo ... ⏳"):
+            with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ⏳"):
                 try:
-                    cli          = _make_client()
-                    entry_data   = cli.get_entry_detail(selected_id)
-                    stock_raw    = cli.get_stock_by_lots(wh_id)
-                    doc_lines    = parse_entry_to_lines(entry_data)
+                    cli = _make_client()
 
-                    # Če splošni klic ni vrnil lotov, poiščemo po posameznih artiklih
-                    has_lots = any(r.get("BatchNumber") for r in stock_raw)
-                    if not has_lots and doc_lines:
-                        item_ids = list({l["article_id"] for l in doc_lines if l.get("article_id")})
-                        stock_raw = cli.get_stock_for_items(wh_id, item_ids)
+                    # Razvrsti po datumu kronološko
+                    sorted_ids = sorted(
+                        selected_ids,
+                        key=lambda eid: str(next(
+                            (d.get("Date","") for d in drafts if d.get("StockEntryId") == eid), ""
+                        ))
+                    )
 
-                    stock        = parse_stock_to_engine_format(stock_raw)
-                    today        = datetime.now()
-                    result_lines = assign_lots(doc_lines, stock, today)
-                    
-                    # Debug info
-                    entry_keys = list(entry_data.keys()) if isinstance(entry_data, dict) else str(type(entry_data))
-                    rows = entry_data.get("StockEntryRows") or []
-                    first_row = str(rows[0]) if rows else "Ni vrstic v StockEntryRows"
-                    lots_sample = [r for r in stock_raw if r.get("BatchNumber")][:3]
-                    st.session_state[f"debug_{loc_key}_{selected_id}"] = {
-                        "entry_keys": entry_keys,
-                        "doc_lines_count": len(doc_lines),
-                        "stock_count": len(stock),
-                        "rows_count": len(rows),
-                        "first_row": first_row,
-                        "has_lots": has_lots,
-                        "lots_sample": str(lots_sample),
-                        "raw_sample": str(entry_data)[:300],
+                    # Preberi vse dokumente in zberi article IDs
+                    all_entry_data = {}
+                    all_doc_lines  = {}
+                    all_item_ids   = set()
+                    for eid in sorted_ids:
+                        ed = cli.get_entry_detail(eid)
+                        dl = parse_entry_to_lines(ed)
+                        all_entry_data[eid] = ed
+                        all_doc_lines[eid]  = dl
+                        for l in dl:
+                            if l.get("article_id"):
+                                all_item_ids.add(l["article_id"])
+
+                    # Preberi zalogo enkrat za vse
+                    stock_raw = cli.get_stock_by_lots(wh_id)
+                    has_lots  = any(r.get("BatchNumber") for r in stock_raw)
+                    if not has_lots and all_item_ids:
+                        stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
+
+                    stock = parse_stock_to_engine_format(stock_raw)
+                    today = datetime.now()
+
+                    # Skupna virtualna zaloga — deli se med vsemi dokumenti
+                    shared_virtual = {
+                        key: [lot.copy() for lot in data["lots"]]
+                        for key, data in stock.items()
                     }
 
-                    st.session_state[f"result_{loc_key}_{selected_id}"] = {
-                        "lines":      result_lines,
-                        "entry_data": entry_data,
-                        "entry_id":   selected_id,
-                        "label":      selected_label,
+                    # Obdelaj kronološko z deljeno zalogo
+                    all_results = {}
+                    for eid in sorted_ids:
+                        all_results[eid] = assign_lots_with_virtual(
+                            all_doc_lines[eid], stock, shared_virtual, today
+                        )
+
+                    old_lot_warnings = check_old_lots(stock, today)
+
+                    st.session_state[f"multi_result_{loc_key}"] = {
+                        "sorted_ids":       sorted_ids,
+                        "all_results":      all_results,
+                        "all_entry_data":   all_entry_data,
+                        "old_lot_warnings": old_lot_warnings,
+                        "drafts":           drafts,
                     }
                 except Exception as e:
                     st.error(f"Napaka pri obdelavi: {e}")
                     st.error(traceback.format_exc())
 
-        # Prikaz rezultatov
-        res_key = f"result_{loc_key}_{selected_id}"
-        result  = st.session_state.get(res_key)
+        # ── Prikaz rezultatov skupne obdelave ────────────────────────────────
+        multi_res = st.session_state.get(f"multi_result_{loc_key}")
 
-        if result:
+        if multi_res:
             st.divider()
-            lines = result["lines"]
-            label = result["label"]
+            sorted_ids     = multi_res["sorted_ids"]
+            all_results    = multi_res["all_results"]
+            all_entry_data = multi_res["all_entry_data"]
+            drafts_map     = {d.get("StockEntryId"): d for d in multi_res["drafts"]}
 
-            # Debug prikaz
-            debug_key = f"debug_{loc_key}_{selected_id}"
-            if debug_key in st.session_state:
-                dbg = st.session_state[debug_key]
-                with st.expander("🔧 Debug info (za razvijalca)"):
-                    st.write(f"Ključi dokumenta: {dbg['entry_keys']}")
-                    st.write(f"Vrstic v dokumentu: {dbg['doc_lines_count']}")
-                    st.write(f"Vrstic (StockEntryRows): {dbg.get('rows_count', '?')}")
-                    st.write(f"Artiklov v zalogi: {dbg['stock_count']}")
-                    st.write(f"Loti najdeni: {dbg.get('has_lots', '?')}")
-                    st.write("Vzorec lotov:")
-                    st.code(dbg.get('lots_sample', ''))
-                    st.write("Prva vrstica:")
-                    st.code(dbg.get('first_row', ''))
+            # Skupna statistika
+            def row_color(s):
+                return {"ok":"🟢","matched":"🟡","partial":"🟠","no_match":"🔴","no_lots":"🔴"}.get(s,"⚪")
 
-            # Statistika
-            ok_lines      = [l for l in lines if l['status'] == 'ok']
-            matched_lines = [l for l in lines if l['status'] == 'matched']
-            partial_lines = [l for l in lines if l['status'] == 'partial']
-            no_match      = [l for l in lines if l['status'] in ('no_match','no_lots')]
+            total_ok      = sum(len([l for l in r if l["status"]=="ok"])           for r in all_results.values())
+            total_matched = sum(len([l for l in r if l["status"]=="matched"])       for r in all_results.values())
+            total_partial = sum(len([l for l in r if l["status"]=="partial"])       for r in all_results.values())
+            total_none    = sum(len([l for l in r if l["status"] in ("no_match","no_lots")]) for r in all_results.values())
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("✅ Točno ujemanje",    len(ok_lines))
-            c2.metric("🔄 Pametna zamenjava", len(matched_lines))
-            c3.metric("⚠️ Delno pokrito",     len(partial_lines))
-            c4.metric("❌ Brez lota",          len(no_match))
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("✅ Točno ujemanje",    total_ok)
+            c2.metric("🔄 Pametna zamenjava", total_matched)
+            c3.metric("⚠️ Delno pokrito",     total_partial)
+            c4.metric("❌ Brez lota",          total_none)
 
-            # Barvna tabela rezultatov
-            def row_color(status):
-                return {"ok": "🟢", "matched": "🟡", "partial": "🟠", "no_match": "🔴", "no_lots": "🔴"}.get(status, "⚪")
+            # Prikaz po dokumentih
+            for eid in sorted_ids:
+                lines = all_results[eid]
+                d     = drafts_map.get(eid, {})
+                label = f"IS-{d.get('Number','?')} — {str(d.get('Date',''))[:10]}"
+                no_lot_count = len([l for l in lines if l["status"] in ("no_match","no_lots","partial")])
+                icon = "✅" if no_lot_count == 0 else "⚠️"
+                with st.expander(f"{icon} {label}  ({len(lines)} vrstic)", expanded=(no_lot_count > 0)):
+                    df_r = pd.DataFrame([{
+                        "":      row_color(l["status"]),
+                        "Artikel": l["article_name"],
+                        "Kol.":  l["quantity_assigned"],
+                        "ME":    l["unit"],
+                        "Lot":   l.get("lot") or "—",
+                        "Opis":  l.get("opis") or "",
+                    } for l in lines])
+                    st.dataframe(df_r, use_container_width=True, hide_index=True)
 
-            df_res = pd.DataFrame([{
-                "":         row_color(l['status']),
-                "Artikel":  l['article_name'],
-                "Kol.":     l['quantity_assigned'],
-                "ME":       l['unit'],
-                "Lot":      l.get('lot') or "—",
-                "Opis":     l.get('opis') or "",
-            } for l in lines])
+            # Opozorilo starih lotov
+            old_lots = multi_res.get("old_lot_warnings", [])
+            if old_lots:
+                with st.expander(f"⏰ Stari loti na zalogi ({len(old_lots)} opozoril)"):
+                    df_old = pd.DataFrame([{
+                        "Artikel":   w["article"],
+                        "Lot":       w["lot"],
+                        "Dni star":  w["days_old"],
+                        "Qty":       f"{w['qty']} {w['unit']}",
+                        "Opozorilo": w["warning"],
+                    } for w in old_lots])
+                    st.dataframe(df_old, use_container_width=True, hide_index=True)
+                    st.caption("Ti loti so na zalogi dlje kot pričakovano. Preverite kalo faktor.")
 
-            st.dataframe(df_res, use_container_width=True, hide_index=True)
+            if total_partial + total_none > 0:
+                st.warning(f"⚠️ {total_partial + total_none} vrstic(a) brez lota. Preverite ročno pred potrditvijo.")
 
-            if no_match or partial_lines:
-                st.warning(
-                    f"⚠️ {len(no_match)+len(partial_lines)} vrstic(a) ostane brez lota. "
-                    "Preverite ročno pred potrditvijo v Minimaxu."
-                )
-
-            # Potrditev
             st.divider()
-            col_conf, col_cancel = st.columns(2)
-
-            with col_conf:
-                confirm_btn = st.button(
-                    f"💾 Shrani in pošlji v Minimax",
-                    key=f"confirm_{loc_key}_{selected_id}",
+            col_save, col_cancel = st.columns(2)
+            with col_save:
+                save_all_btn = st.button(
+                    f"💾 Shrani vse v Minimax ({len(sorted_ids)} dokumentov)",
+                    key=f"save_all_{loc_key}",
                     type="primary",
                     use_container_width=True,
                 )
-
             with col_cancel:
-                cancel_btn = st.button(
-                    "✖ Zavrzi rezultate",
-                    key=f"cancel_{loc_key}_{selected_id}",
-                    use_container_width=True,
-                )
+                cancel_btn = st.button("✖ Zavrzi rezultate", key=f"cancel_multi_{loc_key}", use_container_width=True)
 
             if cancel_btn:
-                del st.session_state[res_key]
+                del st.session_state[f"multi_result_{loc_key}"]
                 st.rerun()
 
-            if confirm_btn:
-                with st.spinner("Shranjujem v Minimax ..."):
+            if save_all_btn:
+                with st.spinner(f"Shranjujem {len(sorted_ids)} dokumentov v Minimax ..."):
+                    errors = []
+                    saved  = 0
                     try:
                         cli = _make_client()
-                        cli.update_entry_with_lots(
-                            entry_id   = result["entry_id"],
-                            entry_data = result["entry_data"],
-                            new_rows   = lines,
-                        )
-                        st.success(f"✅ Dokument {label} uspešno posodobljen v Minimaxu!")
-                        del st.session_state[res_key]
-                        # Posodobi seznam osnutkov
-                        if f"drafts_{loc_key}" in st.session_state:
-                            del st.session_state[f"drafts_{loc_key}"]
-                        st.rerun()
+                        for eid in sorted_ids:
+                            try:
+                                cli.update_entry_with_lots(
+                                    entry_id   = eid,
+                                    entry_data = all_entry_data[eid],
+                                    new_rows   = all_results[eid],
+                                )
+                                saved += 1
+                            except Exception as e:
+                                errors.append(f"IS-{drafts_map.get(eid,{}).get('Number','?')}: {e}")
                     except Exception as e:
-                        st.error(f"Napaka pri shranjevanju: {e}")
-                        st.error(traceback.format_exc())
+                        st.error(f"Napaka pri povezavi: {e}")
+
+                    if saved > 0:
+                        st.success(f"✅ {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
+                    for err in errors:
+                        st.error(err)
+
+                    del st.session_state[f"multi_result_{loc_key}"]
+                    if f"drafts_{loc_key}" in st.session_state:
+                        del st.session_state[f"drafts_{loc_key}"]
+                    st.rerun()
 
 # ── Noga ─────────────────────────────────────────────────────────────────────
 
