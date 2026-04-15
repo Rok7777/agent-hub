@@ -160,24 +160,96 @@ class MinimaxClient:
 
     def get_stock_for_items(self, warehouse_id: int, item_ids: list[int]) -> list[dict]:
         """
-        Za seznam article ID-jev vrne zalogo po lotih.
-        Kliče /stocks?ItemID=X&ResultsByBatchNumber=Y za vsak artikel posebej.
-        Uporabi kadar skladišče ne vrne lotov pri splošnem klicu.
+        Izgradi lot zalogo iz prenosnih dokumentov (IL/IS) za dano skladišče.
+        Sešteje prejete lote (IL prejemi) in odšteje prodane (IS potrjeni).
         """
+        from collections import defaultdict
+        from datetime import datetime, timedelta
+
+        # Baza za artikel info (ime, enota)
+        item_info = {}
+        try:
+            base = self.get_stock_by_lots(warehouse_id)
+            for r in base:
+                aid = (r.get("Item") or {}).get("ID")
+                if aid:
+                    item_info[aid] = {
+                        "ItemName": r.get("ItemName", ""),
+                        "UnitOfMeasurement": r.get("UnitOfMeasurement", "kg"),
+                    }
+        except Exception:
+            pass
+
+        lot_qty = defaultdict(lambda: defaultdict(float))  # {item_id: {batch: qty}}
+
+        # 1. IL dokumenti — prenosi V to skladišče (subtype L = Storage)
+        date_from = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%dT00:00:00")
+        for entry_type, subtype, sign in [
+            ("P", "L", 1.0),   # Prejem iz skladišča = prenos v maloprodajo
+            ("I", "S", -1.0),  # Potrjene prodaje (IS) = odbitek
+        ]:
+            page = 1
+            while True:
+                try:
+                    params = {
+                        "StockEntryType":    entry_type,
+                        "StockEntrySubtype": subtype,
+                        "Status":            "P",
+                        "DateFrom":          date_from,
+                        "CurrentPage":       page,
+                        "PageSize":          50,
+                    }
+                    data = self._get("/stockentry", params=params)
+                    rows = data.get("Rows", [])
+                    for entry in rows:
+                        eid = entry.get("StockEntryId")
+                        if not eid:
+                            continue
+                        try:
+                            detail = self.get_entry_detail(eid)
+                            for row in (detail.get("StockEntryRows") or []):
+                                wh_from = (row.get("WarehouseFrom") or {}).get("ID")
+                                wh_to   = (row.get("WarehouseTo") or {}).get("ID")
+                                # Samo vrstice ki se nanašajo na naše skladišče
+                                if entry_type == "P" and wh_to != warehouse_id:
+                                    continue
+                                if entry_type == "I" and wh_from != warehouse_id:
+                                    continue
+                                item_id = (row.get("Item") or {}).get("ID")
+                                batch   = row.get("BatchNumber", "") or ""
+                                qty     = float(row.get("Quantity") or 0)
+                                if item_id and batch and qty > 0:
+                                    lot_qty[item_id][batch] += sign * qty
+                                    # Shrani info o artiklu
+                                    if item_id not in item_info:
+                                        item_info[item_id] = {
+                                            "ItemName": row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
+                                            "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
+                                        }
+                        except Exception:
+                            continue
+                    total   = data.get("TotalRows", 0)
+                    fetched = (page - 1) * 50 + len(rows)
+                    if fetched >= total:
+                        break
+                    page += 1
+                except Exception:
+                    break
+
+        # Sestavi rezultat
         result = []
-        for item_id in item_ids:
-            try:
-                data = self._get("/stocks", params={
-                    "WarehouseId":          warehouse_id,
-                    "ItemID":               item_id,
-                    "ResultsByBatchNumber": "Y",
-                    "CurrentPage":          1,
-                    "PageSize":             100,
-                })
-                rows = data.get("Rows", [])
-                result.extend(rows)
-            except Exception:
-                continue
+        for item_id, batches in lot_qty.items():
+            info = item_info.get(item_id, {})
+            for batch, qty in batches.items():
+                if qty > 0.001:
+                    result.append({
+                        "Item":              {"ID": item_id},
+                        "ItemName":          info.get("ItemName", ""),
+                        "ItemCode":          "",
+                        "BatchNumber":       batch,
+                        "Quantity":          round(qty, 4),
+                        "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
+                    })
         return result
 
     def get_warehouses(self) -> list[dict]:
