@@ -252,6 +252,42 @@ class MinimaxClient:
                     })
         return result
 
+    def diagnose_lots(self, warehouse_id: int) -> dict:
+        """Diagnostika - poišče katere vrste dokumentov imajo lote za to skladišče."""
+        from datetime import datetime, timedelta
+        date_from = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%dT00:00:00")
+        found = []
+        for etype in ["P", "I"]:
+            for subtype in ["S", "L", "P", "R"]:
+                try:
+                    data = self._get("/stockentry", params={
+                        "StockEntryType": etype, "StockEntrySubtype": subtype,
+                        "Status": "P", "DateFrom": date_from,
+                        "CurrentPage": 1, "PageSize": 5,
+                    })
+                    rows = data.get("Rows", [])
+                    if rows:
+                        # Preberi prvi dokument in preveri lote
+                        eid = rows[0].get("StockEntryId")
+                        if eid:
+                            detail = self.get_entry_detail(eid)
+                            erows = detail.get("StockEntryRows") or []
+                            for r in erows:
+                                batch = r.get("BatchNumber", "")
+                                wh_from = (r.get("WarehouseFrom") or {}).get("ID")
+                                wh_to = (r.get("WarehouseTo") or {}).get("ID")
+                                if batch:
+                                    found.append({
+                                        "type": f"{etype}/{subtype}",
+                                        "batch": batch,
+                                        "wh_from": wh_from,
+                                        "wh_to": wh_to,
+                                        "our_wh": warehouse_id,
+                                    })
+                except Exception:
+                    pass
+        return {"found": found, "warehouse_id": warehouse_id}
+
     def get_warehouses(self) -> list[dict]:
         """Vrne seznam skladišč za iskanje WarehouseId."""
         data = self._get("/warehouses", params={"CurrentPage": 1, "PageSize": 100})
