@@ -226,15 +226,15 @@ def parse_entry_to_lines(entry_detail: dict) -> list[dict]:
     Pretvori /stockentry/{id} odgovor v seznam vrstic za assign_lots().
     """
     lines = []
-    for i, item in enumerate(entry_detail.get("StockEntryItems", [])):
+    for i, item in enumerate(entry_detail.get("StockEntryRows", entry_detail.get("StockEntryItems", []))):
         lines.append({
             "row_id":        i,
-            "article_id":    item.get("Item", {}).get("ID"),
-            "article_code":  item.get("ItemCode", ""),
-            "article_name":  item.get("ItemName", ""),
-            "quantity":      float(item.get("Quantity") or 0),
-            "unit":          item.get("UnitOfMeasurement", "kg"),
-            "selling_price": item.get("Price"),
-            "opis":          item.get("Note", "") or "",
+            "article_id":    (item.get("Item") or {}).get("ID") or (item.get("ItemId")),
+            "article_code":  item.get("ItemCode", "") or (item.get("Item") or {}).get("Code", ""),
+            "article_name":  item.get("ItemName", "") or (item.get("Item") or {}).get("Name", ""),
+            "quantity":      float(item.get("Quantity") or item.get("QuantityInvoiced") or 0),
+            "unit":          item.get("UnitOfMeasurement", "") or item.get("Unit", "kg"),
+            "selling_price": item.get("Price") or item.get("SellingPrice"),
+            "opis":          item.get("Note", "") or item.get("Description", "") or "",
         })
     return lines
