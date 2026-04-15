@@ -79,7 +79,7 @@ class MinimaxClient:
         result = []
         page   = 1
         while True:
-            data = self._get("/analytic", params={"CurrentPage": page, "PageSize": 100})
+            data = self._get("/analytics", params={"CurrentPage": page, "PageSize": 100})
             rows = data.get("Rows", [])
             result.extend(rows)
             if len(result) >= data.get("TotalRows", 0):
@@ -109,7 +109,7 @@ class MinimaxClient:
         result = []
         page   = 1
         while True:
-            data = self._get("/stockentry", params={
+            data = self._get("/stockentries", params={
                 "StockEntryType":    "I",
                 "StockEntrySubtype": "S",
                 "Status":            "O",
@@ -132,7 +132,7 @@ class MinimaxClient:
 
     def get_entry_detail(self, entry_id: int) -> dict:
         """Vrne podrobnosti posameznega dokumenta (vrstice)."""
-        return self._get(f"/stockentry/{entry_id}")
+        return self._get(f"/stockentries/{entry_id}")
 
     # ── Zaloga po lotih ───────────────────────────────────────────────────────
 
@@ -159,7 +159,7 @@ class MinimaxClient:
 
     def get_warehouses(self) -> list[dict]:
         """Vrne seznam skladišč za iskanje WarehouseId."""
-        data = self._get("/warehouse", params={"CurrentPage": 1, "PageSize": 100})
+        data = self._get("/warehouses", params={"CurrentPage": 1, "PageSize": 100})
         return data.get("Rows", [])
 
     # ── Shranjevanje dokumenta z loti ─────────────────────────────────────────
@@ -190,7 +190,7 @@ class MinimaxClient:
             api_rows.append(row)
 
         body = {**entry_data, "StockEntryItems": api_rows}
-        return self._put(f"/stockentry/{entry_id}", body)
+        return self._put(f"/stockentries/{entry_id}", body)
 
 
 # ── Pretvorba API odgovora v format za lot_engine ─────────────────────────────
