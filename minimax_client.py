@@ -224,17 +224,24 @@ def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
 def parse_entry_to_lines(entry_detail: dict) -> list[dict]:
     """
     Pretvori /stockentry/{id} odgovor v seznam vrstic za assign_lots().
+    Polja po API dokumentaciji StockEntryRow:
+    Item (FK), ItemName, Quantity, Price, SellingPrice, BatchNumber, SerialNumber, Mass
     """
+    rows = entry_detail.get("StockEntryRows") or []
     lines = []
-    for i, item in enumerate(entry_detail.get("StockEntryRows", entry_detail.get("StockEntryItems", []))):
+    for i, item in enumerate(rows):
+        item_fk   = item.get("Item") or {}
         lines.append({
-            "row_id":        i,
-            "article_id":    (item.get("Item") or {}).get("ID") or (item.get("ItemId")),
-            "article_code":  item.get("ItemCode", "") or (item.get("Item") or {}).get("Code", ""),
-            "article_name":  item.get("ItemName", "") or (item.get("Item") or {}).get("Name", ""),
-            "quantity":      float(item.get("Quantity") or item.get("QuantityInvoiced") or 0),
-            "unit":          item.get("UnitOfMeasurement", "") or item.get("Unit", "kg"),
-            "selling_price": item.get("Price") or item.get("SellingPrice"),
-            "opis":          item.get("Note", "") or item.get("Description", "") or "",
+            "row_id":            i,
+            "stock_entry_row_id": item.get("StockEntryRowId"),
+            "article_id":        item_fk.get("ID"),
+            "article_code":      item_fk.get("Code", "") or "",
+            "article_name":      item.get("ItemName", "") or item_fk.get("Name", ""),
+            "quantity":          float(item.get("Quantity") or 0),
+            "unit":              item.get("UnitOfMeasurement", "kg") or "kg",
+            "selling_price":     item.get("SellingPrice") or item.get("Price"),
+            "lot":               item.get("BatchNumber", "") or "",
+            "opis":              item.get("SerialNumber", "") or "",
+            "row_version":       item.get("RowVersion", ""),
         })
     return lines
