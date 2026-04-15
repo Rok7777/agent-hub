@@ -275,7 +275,7 @@ for tab, loc_key in zip(tabs, LOC_KEYS):
                     # Debug info
                     entry_keys = list(entry_data.keys()) if isinstance(entry_data, dict) else str(type(entry_data))
                     rows = entry_data.get("StockEntryRows") or []
-                    first_row = str(rows[0])[:800] if rows else "Ni vrstic v StockEntryRows"
+                    first_row = str(rows[0]) if rows else "Ni vrstic v StockEntryRows"
                     st.session_state[f"debug_{loc_key}_{selected_id}"] = {
                         "entry_keys": entry_keys,
                         "doc_lines_count": len(doc_lines),
