@@ -516,6 +516,7 @@ def assign_lots_with_virtual(
 
         name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
         # Ne-morski artikli dobijo vse lote brez starostnih omejitev
+        _is_seafood2 = is_seafood(name_for_check)
         check_name = name_for_check if _is_seafood2 else ""
         eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
