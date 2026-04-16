@@ -383,29 +383,70 @@ def assign_lots(
             continue
 
         # Dodelitev po FIFO
+        # Aged loti (14-30 dni sveži) se razknižijo POLEG prodane količine
         remaining   = qty_needed
         assignments = []
         fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood
 
+        # Faza 1: normalna FIFO prodaja iz svežih lotov
         for lot in eligible:
-            if remaining <= 0 and not lot.get("_aged"):
+            if remaining <= 0:
                 break
+            if lot.get("_aged"):
+                continue  # aged lote obravnavamo v fazi 2
             avail = round(lot['quantity'], 4)
             if avail <= 0:
                 continue
-
-            lot_date = parse_lot_date(lot['code'])
-            days_old = (today - lot_date).days if lot_date else 0
-            force_full = fresh_art and lot.get("_aged", False)
-
-            use = round(avail if force_full else min(avail, remaining), 4)
-            assignments.append((lot['code'], use, days_old if force_full else 0))
-            remaining = round(remaining - min(use, remaining), 4)
-            # Odbitek iz virtualne zaloge
+            use = round(min(avail, remaining), 4)
+            assignments.append((lot['code'], use, 0))
+            remaining = round(remaining - use, 4)
             for vl in virtual[stock_key]:
                 if vl['code'] == lot['code']:
                     vl['quantity'] = round(vl['quantity'] - use, 4)
                     break
+
+        # Faza 2: aged loti — razknjiži cel lot (dodatno k prodaji)
+        for lot in eligible:
+            if not lot.get("_aged"):
+                continue
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+            lot_date = parse_lot_date(lot['code'])
+            days_old = (today - lot_date).days if lot_date else 0
+            if fresh_art:
+                # Razknjiži cel aged lot
+                assignments.append((lot['code'], avail, days_old))
+                remaining = round(remaining - min(avail, remaining), 4)
+            else:
+                # Ne-sveži (odtaljeni/zamrznjeni) — normalna FIFO
+                if remaining <= 0:
+                    break
+                use = round(min(avail, remaining), 4)
+                assignments.append((lot['code'], use, 0))
+                remaining = round(remaining - use, 4)
+            for vl in virtual[stock_key]:
+                if vl['code'] == lot['code']:
+                    vl['quantity'] = round(vl['quantity'] - (avail if fresh_art and lot.get("_aged") else min(avail, qty_needed)), 4)
+                    break
+
+        # Faza 3: če svežih lotov ni bilo dovolj, vzemi iz aged (fallback)
+        if remaining > 0:
+            for lot in eligible:
+                if not lot.get("_aged") or remaining <= 0:
+                    continue
+                avail = round(lot['quantity'], 4)
+                if avail <= 0:
+                    continue
+                # Preverimo ali je ta lot že v assignments
+                already = sum(q for c,q,_ in assignments if c == lot['code'])
+                leftover = round(avail - already, 4)
+                if leftover <= 0:
+                    continue
+                use = round(min(leftover, remaining), 4)
+                if use > 0:
+                    assignments.append((lot['code'], use, 0))
+                    remaining = round(remaining - use, 4)
 
         opis = base_opis
         if matched_note:
@@ -529,24 +570,64 @@ def assign_lots_with_virtual(
 
         remaining   = qty_needed
         assignments = []
-        fresh_art   = is_fresh_or_deli(name_for_check)
+        fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood2
 
+        # Faza 1: normalna FIFO prodaja iz svežih lotov
         for lot in eligible:
-            if remaining <= 0 and not lot.get("_aged"):
+            if remaining <= 0:
                 break
+            if lot.get("_aged"):
+                continue
             avail = round(lot['quantity'], 4)
             if avail <= 0:
                 continue
-            lot_date  = parse_lot_date(lot['code'])
-            days_old  = (today - lot_date).days if lot_date else 0
-            force_full = fresh_art and lot.get("_aged", False)
-            use = round(avail if force_full else min(avail, remaining), 4)
-            assignments.append((lot['code'], use, days_old if force_full else 0))
-            remaining = round(remaining - min(use, remaining), 4)
+            use = round(min(avail, remaining), 4)
+            assignments.append((lot['code'], use, 0))
+            remaining = round(remaining - use, 4)
             for vl in virtual[stock_key]:
                 if vl['code'] == lot['code']:
                     vl['quantity'] = round(vl['quantity'] - use, 4)
                     break
+
+        # Faza 2: aged loti — razknjiži cel lot (dodatno k prodaji)
+        for lot in eligible:
+            if not lot.get("_aged"):
+                continue
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+            lot_date = parse_lot_date(lot['code'])
+            days_old = (today - lot_date).days if lot_date else 0
+            if fresh_art:
+                assignments.append((lot['code'], avail, days_old))
+                remaining = round(remaining - min(avail, remaining), 4)
+            else:
+                if remaining <= 0:
+                    break
+                use = round(min(avail, remaining), 4)
+                assignments.append((lot['code'], use, 0))
+                remaining = round(remaining - use, 4)
+            for vl in virtual[stock_key]:
+                if vl['code'] == lot['code']:
+                    vl['quantity'] = round(vl['quantity'] - avail, 4)
+                    break
+
+        # Faza 3: fallback če svežih ni bilo dovolj
+        if remaining > 0:
+            for lot in eligible:
+                if not lot.get("_aged") or remaining <= 0:
+                    continue
+                avail = round(lot['quantity'], 4)
+                if avail <= 0:
+                    continue
+                already = sum(q for c,q,_ in assignments if c == lot['code'])
+                leftover = round(avail - already, 4)
+                if leftover <= 0:
+                    continue
+                use = round(min(leftover, remaining), 4)
+                if use > 0:
+                    assignments.append((lot['code'], use, 0))
+                    remaining = round(remaining - use, 4)
 
         opis = base_opis
         if matched_note:
