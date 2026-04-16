@@ -290,18 +290,40 @@ class MinimaxClient:
 
     def get_item_units(self, item_ids: list[int]) -> dict[int, str]:
         """
-        Vrne enote meritve za seznam artikel ID-jev.
+        Vrne enote meritve za seznam artikel ID-jev z GetItemsData (en klic).
         {item_id: 'kg'/'kos'/...}
         """
         result = {}
-        for item_id in item_ids:
-            try:
-                data = self._get(f"/item/{item_id}")
-                unit = data.get("UnitOfMeasurement") or data.get("Unit") or ""
-                if unit:
-                    result[item_id] = unit
-            except Exception:
-                continue
+        try:
+            # GetItemsData vrne title, code, price, unit za vse artikle naenkrat
+            page = 1
+            while True:
+                data = self._get("/items/itemsdata", params={
+                    "CurrentPage": page, "PageSize": 500
+                })
+                rows = data.get("Rows") or data if isinstance(data, list) else []
+                if not rows and isinstance(data, dict):
+                    rows = data.get("Rows", [])
+                for row in rows:
+                    aid  = row.get("ItemId") or (row.get("Item") or {}).get("ID")
+                    unit = row.get("UnitOfMeasurement") or row.get("Unit") or ""
+                    if aid and unit:
+                        result[int(aid)] = unit
+                total   = data.get("TotalRows", 0) if isinstance(data, dict) else 0
+                fetched = (page - 1) * 500 + len(rows)
+                if fetched >= total or not rows:
+                    break
+                page += 1
+        except Exception:
+            # Fallback: posamezni klici
+            for item_id in item_ids:
+                try:
+                    d    = self._get(f"/items/{item_id}")
+                    unit = d.get("UnitOfMeasurement") or d.get("Unit") or ""
+                    if unit:
+                        result[item_id] = unit
+                except Exception:
+                    continue
         return result
 
     def get_warehouses(self) -> list[dict]:
