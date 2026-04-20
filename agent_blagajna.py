@@ -2,12 +2,11 @@
 AGENT: Blagajna + Temeljnice (Minimax)
 =======================================
 Nacini:
-  python agent_blagajna.py --scan       --user U --pass P
-  python agent_blagajna.py --process 123,456 --user U --pass P
-  python agent_blagajna.py --process all    --user U --pass P
+  python agent_blagajna.py --scan       --user EMAIL --pass GESLO
+  python agent_blagajna.py --process 123,456 --user EMAIL --pass GESLO
+  python agent_blagajna.py --process all    --user EMAIL --pass GESLO
 
-Login: avtomatski z username + password
-NI potreben remote debugging port!
+Login: login.minimax.si z email + geslo
 """
 
 import asyncio
@@ -18,7 +17,7 @@ import logging
 from playwright.async_api import async_playwright
 
 BASE_URL  = "https://moj.minimax.si"
-LOGIN_URL = "https://moj.minimax.si/SI/AUT/Account/Login"
+LOGIN_URL = "https://login.minimax.si"
 
 BLAGAJNE = {
     "MPK1": 17589,
@@ -82,43 +81,41 @@ async def dropdown(page, sel: str, vrednost: str, timeout=8000):
 # ─────────────────────────────────────────
 
 async def login(page, username: str, password: str):
-    """Prijavi se v Minimax z username in password."""
-    log.info("Prijava v Minimax ...")
-    await page.goto(LOGIN_URL)
+    """Prijavi se v Minimax prek login.minimax.si"""
+    log.info("Odpiranje login strani ...")
+    await page.goto(f"{BASE_URL}/SI/VA/")
     await page.wait_for_load_state("networkidle")
 
-    # Vnesi username
-    await page.fill(
-        'input[name="UserName"], input[id*="UserName"], input[id*="username"]',
-        username
-    )
-    await page.wait_for_timeout(200)
+    # Pocakaj da se preusmeri na login.minimax.si
+    await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
+    log.info(f"Login stran: {page.url}")
 
-    # Vnesi password
-    await page.fill(
-        'input[name="Password"], input[id*="Password"], input[type="password"]',
-        password
-    )
-    await page.wait_for_timeout(200)
+    # Vnesi email
+    await page.wait_for_selector('input[type="email"], input[name="Email"], input[id*="email"]', timeout=8000)
+    await page.fill('input[type="email"], input[name="Email"], input[id*="email"]', username)
+    await page.wait_for_timeout(300)
 
-    # Klikni Login
-    await page.click('input[type="submit"], button[type="submit"], input[value="Prijava"]')
+    # Vnesi geslo
+    await page.fill('input[type="password"], input[name="Password"], input[id*="password"]', password)
+    await page.wait_for_timeout(300)
+
+    # Klikni Prijava
+    await page.click('button:has-text("Prijava"), input[value="Prijava"], button[type="submit"]')
     await page.wait_for_load_state("networkidle")
 
-    # Preveri ali smo prijavljeni
-    current_url = page.url.lower()
-    if "login" in current_url or "aut" in current_url:
-        raise Exception("Prijava neuspesna! Preverite username in password v nastavitvah.")
+    # Preveri ali smo prijavljeni — mora nas vrniti na moj.minimax.si
+    if "login.minimax.si" in page.url:
+        raise Exception("Prijava neuspesna! Preverite email in geslo v nastavitvah.")
 
     log.info(f"Prijavljeni! URL: {page.url}")
 
-    # Izberi organizacijo ce je potrebno
+    # Izberi organizacijo ce je seznam
     try:
-        org_link = await page.query_selector(
+        org = await page.query_selector(
             'a:has-text("Oltre"), a:has-text("OltreCon"), td:has-text("OltreCon")'
         )
-        if org_link:
-            await org_link.click()
+        if org:
+            await org.click()
             await page.wait_for_load_state("networkidle")
             log.info("Organizacija izbrana.")
     except Exception:
@@ -274,21 +271,14 @@ async def kreiraj_prejemek(page, bdn_id: str, an_polno: str, skupaj: float):
     await klikni(page, 'a:has-text("Nov prejemek"), button:has-text("Nov prejemek")')
     await page.wait_for_load_state("networkidle")
 
-    await dropdown(
-        page,
-        'input[id*="Stranka"], [id*="Stranka"] input',
-        "Koncni kupec - maloprodaja"
-    )
+    await dropdown(page, 'input[id*="Stranka"], [id*="Stranka"] input',
+                   "Koncni kupec - maloprodaja")
 
     an_in = await page.query_selector('[id*="Analitika"] input')
     if an_in and not (await an_in.input_value()).strip():
         await dropdown(page, '[id*="Analitika"] input', an_polno.split(" ")[0])
 
-    await dropdown(
-        page,
-        '[id*="Prejemek"] input, [id*="TipPrejemka"] input',
-        "Dnevni iztrZek"
-    )
+    await dropdown(page, '[id*="Prejemek"] input, [id*="TipPrejemka"] input', "Dnevni iztrZek")
 
     zf = await page.wait_for_selector(
         'input[id*="Znesek"], input[name*="Znesek"]', timeout=5000
