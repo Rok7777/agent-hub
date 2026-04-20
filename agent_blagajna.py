@@ -92,24 +92,40 @@ async def login(page, username: str, password: str, client_id: str = "", client_
     await page.wait_for_load_state("networkidle")
     await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
     log.info(f"Login stran: {page.url}")
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(1500)
 
-    # Z JavaScript prikazemo email form in vnesemo email
+    # Poiskaj link "Uporabi drug uporabniski racun" in klikni na <li>
+    # Forcamo klik z JavaScript
     await page.evaluate("""() => {
-        // Prikazi email form
-        document.querySelector('div.realm-form').classList.remove('hidden');
-        document.querySelector('#realm-chooser').classList.add('hidden');
-        var cert = document.querySelector('#realm-chooser-cert');
-        if (cert) cert.classList.add('hidden');
+        // Poiscemo li ki vsebuje "drug" link
+        var items = document.querySelectorAll('#realm-chooser li');
+        for (var li of items) {
+            var a = li.querySelector('a[data-realm="another"]');
+            if (a) {
+                // Simuliramo klik na li element
+                var event = new MouseEvent('click', {bubbles: true, cancelable: true});
+                li.dispatchEvent(event);
+                return;
+            }
+        }
+        // Fallback: direktno prikazi form
+        var form = document.querySelector('.realm-form');
+        if (form) {
+            form.classList.remove('hidden');
+            form.style.display = 'block';
+        }
+        var chooser = document.querySelector('#realm-chooser');
+        if (chooser) chooser.classList.add('hidden');
     }""")
-    await page.wait_for_timeout(300)
+    await page.wait_for_timeout(800)
 
     # Vnesi email
-    await page.fill('input[name="Email"], #Email', username)
+    await page.wait_for_selector('#Email, input[name="Email"]', timeout=5000)
+    await page.fill('#Email, input[name="Email"]', username)
     await page.wait_for_timeout(200)
 
     # Submit form
-    await page.click('div.realm-form button[type="submit"]')
+    await page.evaluate("document.querySelector('.realm-form form').submit()")
     await page.wait_for_load_state("networkidle")
     log.info("Email poslan ...")
 
@@ -493,7 +509,7 @@ async def main():
         sys.exit(1)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=False, args=['--window-position=-32000,-32000'])
         context = await browser.new_context()
         page    = await context.new_page()
 
