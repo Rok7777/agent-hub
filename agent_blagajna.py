@@ -96,21 +96,24 @@ async def login(page, username: str, password: str):
     await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
     log.info(f"Chooser stran: {page.url}")
 
-    # KORAK 1: Klikni na email v Chooser seznamu (JavaScript)
-    await page.wait_for_timeout(1000)
-    clicked = await page.evaluate(
-        """(email) => {
-            const all = document.querySelectorAll('a, button, li, div, span');
-            for (const el of all) {
-                if (el.textContent.trim().includes(email) && el.offsetParent !== null) {
-                    el.click();
-                    return true;
-                }
+    # KORAK 1: Klikni na <li> v Chooser seznamu ki vsebuje email
+    # Chooser deluje tako: klik na <li> -> JavaScript -> navigira na href od <a>
+    await page.wait_for_selector('#realm-chooser', timeout=8000)
+    await page.wait_for_timeout(500)
+    # Poiscemo <li> ki vsebuje nas email in kliknemo nanj
+    clicked = await page.evaluate("""(email) => {
+        const items = document.querySelectorAll('#realm-chooser li');
+        for (const li of items) {
+            const a = li.querySelector('a:not(.mm-list-remove-item)');
+            if (a && a.textContent.trim().includes(email)) {
+                li.click();
+                return true;
             }
-            return false;
-        }""", username)
+        }
+        return false;
+    }""", username)
     if not clicked:
-        raise Exception('Ni najden element z emailom!')
+        raise Exception(f'Email {username} ni najden v Chooser seznamu!')
     await page.wait_for_load_state('networkidle')
     log.info(f'Kliknil na {username}')
 
