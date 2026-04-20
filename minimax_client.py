@@ -80,17 +80,19 @@ class MinimaxClient:
     # ── Journal (Temeljnice) ──────────────────────────────────────────────────
 
     def get_journal_drafts(self) -> list[dict]:
-        """Vrne vse osnutke temeljnic (Status=O) tipa DI (dnevni iztržek)."""
+        """Vrne vse osnutke temeljnic - filtrira lokalno po statusu."""
         result = []
         page   = 1
         while True:
             data = self._get("/journals", params={
-                "Status":      "O",
                 "CurrentPage": page,
                 "PageSize":    50,
             })
             rows = data.get("Rows", [])
-            result.extend(rows)
+            for row in rows:
+                status = str(row.get("Status", "")).upper()
+                if status in ("O", "DRAFT", "0", "OSNUTEK"):
+                    result.append(row)
             total   = data.get("TotalRows", 0)
             fetched = (page - 1) * 50 + len(rows)
             if fetched >= total or not rows:
