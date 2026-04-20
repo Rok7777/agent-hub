@@ -318,7 +318,8 @@ with main_tab2:
                 try:
                     result = subprocess.run(
                         [sys.executable, "agent_blagajna.py", "--scan",
-                         "--user", username, "--pass", password],
+                         "--user", username, "--pass", password,
+                         "--client-id", client_id, "--client-secret", client_secret],
                         capture_output=True, text=True, timeout=120
                     )
                     output = result.stdout
@@ -407,7 +408,8 @@ with main_tab2:
             try:
                 proc = subprocess.Popen(
                     [sys.executable, "agent_blagajna.py", "--process", tm_ids_str,
-                     "--user", username, "--pass", password],
+                     "--user", username, "--pass", password,
+                     "--client-id", client_id, "--client-secret", client_secret],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1,
                 )
