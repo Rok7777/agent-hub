@@ -80,45 +80,52 @@ async def dropdown(page, sel: str, vrednost: str, timeout=8000):
 # LOGIN
 # ─────────────────────────────────────────
 
-async def login(page, username: str, password: str, client_id: str, client_secret: str):
+async def login(page, username: str, password: str, client_id: str = "", client_secret: str = ""):
     """
-    Prijavi se v Minimax z OAuth2 tokenom (enako kot API za lote).
-    Token nastavimo kot cookie v brskalniku.
+    Prijavi se v Minimax prek spletnega obrazca.
+    1. Odpri Minimax -> preusmeri na Chooser
+    2. Z JS prikazemo email form in ga submitamo
+    3. Vnesemo geslo
     """
-    import requests as req
-    log.info("Pridobivam OAuth2 token ...")
-    r = req.post("https://moj.minimax.si/SI/AUT/OAuth20/Token", data={
-        "grant_type":    "password",
-        "username":      username,
-        "password":      password,
-        "client_id":     client_id,
-        "client_secret": client_secret,
-    }, timeout=15)
-    if not r.ok:
-        raise Exception(f"OAuth2 prijava neuspesna ({r.status_code}): {r.text[:200]}")
-    token = r.json()["access_token"]
-    log.info("Token pridobljen!")
-
-    # Nastavi token kot cookie in Authorization header
-    await page.set_extra_http_headers({"Authorization": f"Bearer {token}"})
-
-    # Odpri Minimax direktno
+    log.info("Odpiranje Minimax ...")
     await page.goto(f"{BASE_URL}/SI/VA/")
     await page.wait_for_load_state("networkidle")
+    await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
+    log.info(f"Login stran: {page.url}")
+    await page.wait_for_timeout(1000)
 
-    # Ce nas preusmeri na login, poskusimo z direktnim URL
+    # Z JavaScript prikazemo email form in vnesemo email
+    await page.evaluate("""() => {
+        // Prikazi email form
+        document.querySelector('div.realm-form').classList.remove('hidden');
+        document.querySelector('#realm-chooser').classList.add('hidden');
+        var cert = document.querySelector('#realm-chooser-cert');
+        if (cert) cert.classList.add('hidden');
+    }""")
+    await page.wait_for_timeout(300)
+
+    # Vnesi email
+    await page.fill('input[name="Email"], #Email', username)
+    await page.wait_for_timeout(200)
+
+    # Submit form
+    await page.click('div.realm-form button[type="submit"]')
+    await page.wait_for_load_state("networkidle")
+    log.info("Email poslan ...")
+
+    # Vnesi geslo
+    await page.wait_for_selector('input[type="password"]', timeout=10000)
+    await page.fill('input[type="password"]', password)
+    await page.wait_for_timeout(300)
+
+    # Klikni Prijava
+    await page.click('button[type="submit"]')
+    await page.wait_for_load_state("networkidle")
+
     if "login.minimax.si" in page.url:
-        # Dodaj token kot cookie
-        await page.context.add_cookies([{
-            "name": "access_token",
-            "value": token,
-            "domain": "moj.minimax.si",
-            "path": "/",
-        }])
-        await page.goto(f"{BASE_URL}/SI/VA/")
-        await page.wait_for_load_state("networkidle")
+        raise Exception("Prijava neuspesna! Preverite email in geslo.")
 
-    log.info(f"URL po prijavi: {page.url}")
+    log.info(f"Prijavljeni! URL: {page.url}")
 
     # Izberi organizacijo ce je potrebno
     try:
@@ -131,8 +138,6 @@ async def login(page, username: str, password: str, client_id: str, client_secre
             log.info("Organizacija izbrana.")
     except Exception:
         pass
-
-    log.info(f"Prijavljeni! URL: {page.url}")
 
 
 # ─────────────────────────────────────────
