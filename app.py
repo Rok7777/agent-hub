@@ -333,72 +333,76 @@ with main_tab2:
 
     else:
         st.divider()
-
-        # ── Pregled po blagajnah ───────────────────────────────────────────
         st.subheader(f"Najdenih {len(osnutki)} osnutkov")
 
-        # Tabela za prikaz
-        df_prikaz = pd.DataFrame([{
-            "Datum":        o["datum"],
-            "Blagajna":     f"{o['analitika_sifra']} — {o['blagajna_naziv']}",
-            "Gotovina":     f"{o['znesek_gotovina']:.2f} €",
-            "Kartica":      f"{o['znesek_kartica']:.2f} €",
-            "Skupaj":       f"{o['skupaj']:.2f} €",
-            "Tip":          o["rezim"],
-        } for o in sorted(osnutki, key=lambda x: (x["datum"], x["analitika_sifra"]))])
-
-        st.dataframe(df_prikaz, use_container_width=True, hide_index=True)
-
-        # ── Navodila za blagajno ───────────────────────────────────────────
-        st.divider()
-        st.subheader("📋 Navodila za ročni vnos v blagajno")
-        st.caption("Za vsak zapis spodaj ročno vnesi v Minimax → Poslovanje → Blagajne")
-
-        for o in sorted(osnutki, key=lambda x: (x["datum"], x["analitika_sifra"])):
-            with st.expander(f"📅 {o['datum']} | {o['analitika_sifra']} — {o['blagajna_naziv']} | {o['skupaj']:.2f} €"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**Blagajniški PREJEMEK:**")
-                    st.markdown(f"- Stranka: `Končni kupec - maloprodaja`")
-                    st.markdown(f"- Analitika: `{o['analitika_polno']}`")
-                    st.markdown(f"- Tip: `Dnevni iztržek`")
-                    st.markdown(f"- Znesek: **{o['skupaj']:.2f} €**")
-                with col2:
-                    st.markdown("**Blagajniški IZDATEK:**")
-                    st.markdown(f"- Analitika: `{o['analitika_polno']}`")
-                    if o["rezim"] in ("oba", "samo_gotovina"):
-                        st.markdown(f"- Polog gotovine - domača DE: **{o['znesek_gotovina']:.2f} €**")
-                    if o["rezim"] in ("oba", "samo_kartica"):
-                        st.markdown(f"- Terjatev za plačila z kartico: **{o['znesek_kartica']:.2f} €**")
-
-        # ── Izbor in obdelava ─────────────────────────────────────────────
-        st.divider()
-        st.subheader("⚙️ Popravi in potrdi temeljnice")
-        st.info("Ko si ročno vnesel blagajniške dokumente, klikni spodaj da agent popravi knjižbe in potrdi temeljnice.")
-
+        # Izberi vse checkbox
         sel_all_j = st.checkbox("☑ Izberi vse", value=True, key="j_sel_all")
         izbrani = []
 
-        hc1, hc2, hc3, hc4, hc5 = st.columns([0.5, 1.5, 2, 1, 1])
-        hc1.markdown("**✓**")
-        hc2.markdown("**Datum**")
-        hc3.markdown("**Blagajna**")
-        hc4.markdown("**Gotovina**")
-        hc5.markdown("**Kartica**")
-        st.divider()
+        # Grupiranje po blagajnah
+        from collections import defaultdict
+        po_blagajnah = defaultdict(list)
+        for o in osnutki:
+            po_blagajnah[o["analitika_sifra"]].append(o)
 
-        for o in sorted(osnutki, key=lambda x: (x["datum"], x["analitika_sifra"])):
-            c1, c2, c3, c4, c5 = st.columns([0.5, 1.5, 2, 1, 1])
-            checked = c1.checkbox("", value=sel_all_j, key=f"jcb_{o['journal_id']}", label_visibility="collapsed")
-            c2.write(o["datum"])
-            c3.write(f"**{o['analitika_sifra']}** — {o['blagajna_naziv']}")
-            c4.write(f"{o['znesek_gotovina']:.2f} €")
-            c5.write(f"{o['znesek_kartica']:.2f} €")
-            if checked:
-                izbrani.append(o)
+        # Prikaz po blagajnah
+        for sifra in sorted(po_blagajnah.keys()):
+            skupina = sorted(po_blagajnah[sifra], key=lambda x: x["datum"])
+            naziv   = skupina[0]["blagajna_naziv"]
+            skupaj_blagajna = sum(o["skupaj"] for o in skupina)
 
-        st.divider()
+            st.markdown(f"### 🏪 {sifra} — {naziv}")
+            st.caption(f"Skupaj: **{skupaj_blagajna:.2f} €** | {len(skupina)} osnutek/ov")
 
+            # Glava tabele
+            hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([0.5, 1.5, 1.5, 1, 1, 1])
+            hc1.markdown("**✓**")
+            hc2.markdown("**Datum**")
+            hc3.markdown("**Vrsta plačila**")
+            hc4.markdown("**Gotovina**")
+            hc5.markdown("**Kartica**")
+            hc6.markdown("**Skupaj**")
+
+            for o in skupina:
+                if o["rezim"] == "oba":
+                    vrsta = "Gotovina + Kartica"
+                elif o["rezim"] == "samo_kartica":
+                    vrsta = "Samo kartica"
+                else:
+                    vrsta = "Samo gotovina"
+
+                c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.5, 1.5, 1, 1, 1])
+                checked = c1.checkbox("", value=sel_all_j,
+                                      key=f"jcb_{o['journal_id']}",
+                                      label_visibility="collapsed")
+                c2.write(o["datum"])
+                c3.write(vrsta)
+                c4.write(f"{o['znesek_gotovina']:.2f} €" if o["znesek_gotovina"] else "—")
+                c5.write(f"{o['znesek_kartica']:.2f} €" if o["znesek_kartica"] else "—")
+                c6.write(f"**{o['skupaj']:.2f} €**")
+                if checked:
+                    izbrani.append(o)
+
+                # Navodila za blagajno
+                with st.expander("📋 Navodila za vnos v blagajno"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown("**Blagajniški PREJEMEK:**")
+                        st.markdown(f"- Stranka: `Končni kupec - maloprodaja`")
+                        st.markdown(f"- Analitika: `{o['analitika_polno']}`")
+                        st.markdown(f"- Tip: `Dnevni iztržek`")
+                        st.markdown(f"- Znesek: **{o['skupaj']:.2f} €**")
+                    with col2:
+                        st.markdown("**Blagajniški IZDATEK:**")
+                        st.markdown(f"- Analitika: `{o['analitika_polno']}`")
+                        if o["rezim"] in ("oba", "samo_gotovina"):
+                            st.markdown(f"- Polog gotovine - domača DE: **{o['znesek_gotovina']:.2f} €**")
+                        if o["rezim"] in ("oba", "samo_kartica"):
+                            st.markdown(f"- Terjatev za plačila z kartico: **{o['znesek_kartica']:.2f} €**")
+
+            st.divider()
+
+        # Povzetek izbora
         if izbrani:
             skupaj_vsota = sum(o["skupaj"] for o in izbrani)
             m1, m2, m3 = st.columns(3)
@@ -438,7 +442,6 @@ with main_tab2:
                     for n in napake:
                         st.error(f"{n['datum']} | {n['blagajna']}: {n['napaka']}")
 
-                # Počisti osnutke
                 st.session_state.pop("journal_osnutki", None)
                 if not napake:
                     st.rerun()
