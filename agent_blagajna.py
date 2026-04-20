@@ -95,7 +95,13 @@ async def login(page, username: str, password: str):
     log.info(f"Chooser stran: {page.url}")
 
     # Pocakaj da se stran nalozi
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(3000)
+    # Debug screenshot
+    await page.screenshot(path="C:/Users/Rok/Desktop/AI robot/login_debug.png")
+    html = await page.content()
+    log.info(f"HTML vsebuje realm-chooser: {'realm-chooser' in html}")
+    log.info(f"HTML vsebuje hotmail: {'hotmail' in html}")
+    log.info(f"Prvih 500 znakov HTML: {html[:500]}")
 
     # Poiscemo href za nas email direktno iz HTML
     href = await page.evaluate("""(email) => {
