@@ -26,11 +26,6 @@ def _secret(key, default=""):
     except Exception:
         return default
 
-# Zazna ali tečemo na Streamlit Cloud ali lokalno
-IS_CLOUD = os.environ.get("STREAMLIT_SHARING_MODE") == "1" or \
-           "streamlit.app" in os.environ.get("HOSTNAME", "") or \
-           "/mount/src/" in os.path.abspath(__file__)
-
 # ══════════════════════════════════════════════════════════════════════════════
 # GLAVNA NAVIGACIJA
 # ══════════════════════════════════════════════════════════════════════════════
@@ -302,33 +297,6 @@ with main_tab1:
 with main_tab2:
     st.caption("Avtomatska kreacija blagajniških prejemkov/izdatkov in popravek temeljnic")
 
-    # ── Detekcija: Cloud vs Lokalno ───────────────────────────────────────────
-    if IS_CLOUD:
-        st.warning(
-            "⚠️ **Ta funkcija zahteva lokalni zagon.**\n\n"
-            "Blagajniški agent se poveže na tvoj Chrome brskalnik (`localhost:9222`) "
-            "in to ne deluje na Streamlit Cloud.\n\n"
-            "**Kako zagnat lokalno:**"
-        )
-        st.code(
-            "# 1. Prenesi repozitorij lokalno\n"
-            "git clone https://github.com/Rok7777/agent-hub\n"
-            "cd agent-hub\n\n"
-            "# 2. Namesti odvisnosti\n"
-            "pip install -r requirements.txt\n"
-            "playwright install chromium\n\n"
-            "# 3. Ali samo dvaklikni:\n"
-            "start_local.bat",
-            language="bash"
-        )
-        st.info(
-            "💡 Loti tab deluje normalno na cloudu — samo blagajniški agent "
-            "potrebuje lokalni dostop do brskalnika."
-        )
-        st.stop()
-
-    # ── Lokalni zagon — normalna UI ───────────────────────────────────────────
-
     BLAGAJNE_INFO = {
         "MPK1": {"naziv": "Maloprodaja kombi 1", "bg_id": 17589},
         "MPK2": {"naziv": "Maloprodaja kombi 2", "bg_id": 17590},
@@ -339,33 +307,33 @@ with main_tab2:
     # ── Korak 1: Scan ─────────────────────────────────────────────────────────
     st.subheader("1️⃣ Poišči osnutke")
 
-    col_scan, col_info = st.columns([1, 2])
-    with col_scan:
-        scan_btn = st.button("🔍 Poišči osnutke v temeljnicah", type="primary",
-                             use_container_width=True, key="scan_blagajna")
-    with col_info:
-        st.info("Chrome mora biti odprt z `--remote-debugging-port=9222` in prijavljen v Minimax.")
+    scan_btn = st.button("🔍 Poišči osnutke v temeljnicah", type="primary",
+                         use_container_width=True, key="scan_blagajna")
 
     if scan_btn:
-        with st.spinner("Berem osnutke iz Minimax temeljnic …"):
-            try:
-                result = subprocess.run(
-                    [sys.executable, "agent_blagajna.py", "--scan"],
-                    capture_output=True, text=True, timeout=120
-                )
-                output = result.stdout
-                if "SCAN_JSON_START" in output and "SCAN_JSON_END" in output:
-                    json_str = output.split("SCAN_JSON_START")[1].split("SCAN_JSON_END")[0].strip()
-                    osnutki = json.loads(json_str)
-                    st.session_state["blagajna_osnutki"] = osnutki
-                    st.session_state.pop("blagajna_log", None)
-                else:
-                    st.error("Agent ni vrnil veljavnih podatkov.")
-                    st.code(output or result.stderr, language="text")
-            except subprocess.TimeoutExpired:
-                st.error("Timeout — agent ni odgovoril v 120 sekundah.")
-            except Exception as e:
-                st.error(f"Napaka: {e}")
+        if not all([username, password]):
+            st.error("Manjkata Uporabniško ime ali Geslo v nastavitvah API (leva vrstica).")
+        else:
+            with st.spinner("Prijavljam se in berem osnutke iz Minimax …"):
+                try:
+                    result = subprocess.run(
+                        [sys.executable, "agent_blagajna.py", "--scan",
+                         "--user", username, "--pass", password],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    output = result.stdout
+                    if "SCAN_JSON_START" in output and "SCAN_JSON_END" in output:
+                        json_str = output.split("SCAN_JSON_START")[1].split("SCAN_JSON_END")[0].strip()
+                        osnutki = json.loads(json_str)
+                        st.session_state["blagajna_osnutki"] = osnutki
+                        st.session_state.pop("blagajna_log", None)
+                    else:
+                        st.error("Agent ni vrnil veljavnih podatkov.")
+                        st.code(output or result.stderr, language="text")
+                except subprocess.TimeoutExpired:
+                    st.error("Timeout — agent ni odgovoril v 120 sekundah.")
+                except Exception as e:
+                    st.error(f"Napaka: {e}")
 
     # ── Korak 2: Izbor ────────────────────────────────────────────────────────
     osnutki: list[dict] = st.session_state.get("blagajna_osnutki", [])
@@ -374,7 +342,6 @@ with main_tab2:
         st.divider()
         st.subheader("2️⃣ Izberi osnutke za obdelavo")
 
-        # Filter po blagajni
         vse_blagajne = sorted(set(o["analitika_sifra"] for o in osnutki))
         col_f1, col_f2 = st.columns([1, 3])
         with col_f1:
@@ -388,7 +355,6 @@ with main_tab2:
         filtrirani = [o for o in osnutki if o["analitika_sifra"] in filter_blagajne]
         st.caption(f"Prikazano {len(filtrirani)} od {len(osnutki)} osnutkov:")
 
-        # Tabela z checkboxi
         sel_all = st.checkbox("☑ Izberi vse", value=True, key="bl_sel_all")
         izbrani_ids = []
 
@@ -440,7 +406,8 @@ with main_tab2:
             log_lines = []
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "agent_blagajna.py", "--process", tm_ids_str],
+                    [sys.executable, "agent_blagajna.py", "--process", tm_ids_str,
+                     "--user", username, "--pass", password],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1,
                 )
@@ -465,7 +432,7 @@ with main_tab2:
         log_lines = st.session_state["blagajna_log"]
         st.code("\n".join(log_lines), language="text")
 
-        obdelani = [l for l in log_lines if "✓" in l and "EUR" in l]
+        obdelani = [l for l in log_lines if "OK" in l and "EUR" in l]
         napake   = [l for l in log_lines if "NAPAKA" in l or "ERROR" in l]
         col_ok, col_err = st.columns(2)
         col_ok.metric("✅ Obdelano", len(obdelani))
@@ -485,4 +452,4 @@ with main_tab2:
 
 # ── Noga ──────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption(f"Agent Hub v1.2 · {'☁️ Cloud' if IS_CLOUD else '💻 Lokalno'} · Loti (API) + Blagajna (Playwright)")
+st.caption("Agent Hub v1.3 · Loti (API) + Blagajna (Playwright avtologin)")
