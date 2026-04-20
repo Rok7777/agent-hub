@@ -96,11 +96,23 @@ async def login(page, username: str, password: str):
     await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
     log.info(f"Chooser stran: {page.url}")
 
-    # KORAK 1: Klikni na email v Chooser seznamu
-    await page.wait_for_selector(f'a:has-text("{username}")', timeout=8000)
-    await page.click(f'a:has-text("{username}")')
-    await page.wait_for_load_state("networkidle")
-    log.info(f"Kliknil na {username}")
+    # KORAK 1: Klikni na email v Chooser seznamu (JavaScript)
+    await page.wait_for_timeout(1000)
+    clicked = await page.evaluate(
+        """(email) => {
+            const all = document.querySelectorAll('a, button, li, div, span');
+            for (const el of all) {
+                if (el.textContent.trim().includes(email) && el.offsetParent !== null) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+        }""", username)
+    if not clicked:
+        raise Exception('Ni najden element z emailom!')
+    await page.wait_for_load_state('networkidle')
+    log.info(f'Kliknil na {username}')
 
     # KORAK 2: Vnesi geslo
     await page.wait_for_selector('input[type="password"]', timeout=8000)
