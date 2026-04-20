@@ -7,6 +7,7 @@ import pandas as pd
 import subprocess
 import sys
 import json
+import os
 from datetime import datetime
 import traceback
 
@@ -24,6 +25,11 @@ def _secret(key, default=""):
         return st.secrets[key]
     except Exception:
         return default
+
+# Zazna ali tečemo na Streamlit Cloud ali lokalno
+IS_CLOUD = os.environ.get("STREAMLIT_SHARING_MODE") == "1" or \
+           "streamlit.app" in os.environ.get("HOSTNAME", "") or \
+           "/mount/src/" in os.path.abspath(__file__)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # GLAVNA NAVIGACIJA
@@ -94,18 +100,14 @@ with main_tab1:
             for row in cli.get_warehouses():
                 code = (row.get("Code") or "").strip().upper()
                 wid  = row.get("WarehouseId") or row.get("ID")
-                if code and wid:
-                    wh_map[code] = int(wid)
-        except Exception:
-            pass
+                if code and wid: wh_map[code] = int(wid)
+        except Exception: pass
         try:
             for row in cli.get_analytics():
                 code = (row.get("Code") or "").strip().upper()
                 aid  = row.get("AnalyticId")
-                if code and aid:
-                    an_map[code] = int(aid)
-        except Exception:
-            pass
+                if code and aid: an_map[code] = int(aid)
+        except Exception: pass
         return wh_map, an_map
 
     def _get_wh_id(loc_key):
@@ -128,11 +130,9 @@ with main_tab1:
         st.session_state.pop("auto_find_analytics")
         with st.spinner("Iščem analitike ..."):
             try:
-                cli  = _make_client()
-                rows = cli.get_analytics()
-                df   = pd.DataFrame([{"Koda": r.get("Code",""), "Naziv": r.get("Name",""), "Analytic ID": r.get("AnalyticId","")} for r in rows])
+                rows = _make_client().get_analytics()
                 st.sidebar.success("✅ Analitike najdene!")
-                st.sidebar.dataframe(df, use_container_width=True)
+                st.sidebar.dataframe(pd.DataFrame([{"Koda": r.get("Code",""), "Naziv": r.get("Name",""), "ID": r.get("AnalyticId","")} for r in rows]), use_container_width=True)
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
@@ -140,13 +140,9 @@ with main_tab1:
         st.session_state.pop("diagnose_lots")
         with st.spinner("Diagnostika ..."):
             try:
-                cli  = _make_client()
-                wh   = _get_wh_id("MPK2")
-                diag = cli.diagnose_lots(wh)
-                st.sidebar.success("✅ Diagnostika:")
-                st.sidebar.write(f"Warehouse ID: {diag['warehouse_id']}")
-                for f in diag.get('found', []):
-                    st.sidebar.write(f"Tip {f['type']}: lot={f['batch']}")
+                diag = _make_client().diagnose_lots(_get_wh_id("MPK2"))
+                st.sidebar.success(f"✅ WH ID: {diag['warehouse_id']}")
+                for f in diag.get('found', []): st.sidebar.write(f"lot={f['batch']}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
@@ -154,11 +150,9 @@ with main_tab1:
         st.session_state.pop("auto_find_warehouses")
         with st.spinner("Iščem skladišča ..."):
             try:
-                cli  = _make_client()
-                rows = cli.get_warehouses()
-                df   = pd.DataFrame([{"Naziv": r.get("Name",""), "Koda": r.get("Code",""), "Warehouse ID": r.get("WarehouseId") or r.get("ID","")} for r in rows])
+                rows = _make_client().get_warehouses()
                 st.sidebar.success("✅ Skladišča najdena!")
-                st.sidebar.dataframe(df, use_container_width=True)
+                st.sidebar.dataframe(pd.DataFrame([{"Naziv": r.get("Name",""), "Koda": r.get("Code",""), "ID": r.get("WarehouseId") or r.get("ID","")} for r in rows]), use_container_width=True)
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
@@ -172,8 +166,7 @@ with main_tab1:
             an_id    = _get_an_id(loc_key)
 
             col1, col2 = st.columns([2, 1])
-            with col1:
-                st.subheader(loc_name)
+            with col1: st.subheader(loc_name)
             with col2:
                 find_btn = st.button("🔍 Poišči osnutke", key=f"find_{loc_key}", use_container_width=True)
 
@@ -184,15 +177,13 @@ with main_tab1:
                         try:
                             _resolve_ids.clear()
                             an_id = _get_an_id(loc_key)
-                        except Exception:
-                            pass
+                        except Exception: pass
                 if an_id == 0:
-                    st.error("Ne najdem analitike. Preverite kodo analitike v nastavitvah.")
+                    st.error("Ne najdem analitike. Preverite kodo v nastavitvah.")
                     st.stop()
                 with st.spinner("Iščem osnutke ..."):
                     try:
-                        cli    = _make_client()
-                        drafts = cli.get_draft_entries(an_id)
+                        drafts = _make_client().get_draft_entries(an_id)
                         st.session_state[f"drafts_{loc_key}"] = drafts
                     except Exception as e:
                         st.error(f"Napaka: {e}")
@@ -207,17 +198,16 @@ with main_tab1:
                 continue
 
             st.write(f"Najdenih **{len(drafts)}** osnutkov:")
-            select_all = st.checkbox("☑ Izberi vse", key=f"sel_all_{loc_key}", value=True)
+            sel_all = st.checkbox("☑ Izberi vse", key=f"sel_all_{loc_key}", value=True)
             selected_ids = []
             for d in sorted(drafts, key=lambda x: str(x.get("Date",""))):
                 label = f"IS-{d.get('Number','?')} — {str(d.get('Date',''))[:10]}"
-                if st.checkbox(label, key=f"cb_{loc_key}_{d.get('StockEntryId')}", value=select_all):
+                if st.checkbox(label, key=f"cb_{loc_key}_{d.get('StockEntryId')}", value=sel_all):
                     selected_ids.append(d.get("StockEntryId"))
 
             st.divider()
-            run_btn = st.button(f"⚡ Obdelaj vse označene osnutke ({len(selected_ids)})",
-                                key=f"run_{loc_key}", type="primary", use_container_width=True,
-                                disabled=len(selected_ids) == 0)
+            run_btn = st.button(f"⚡ Obdelaj vse označene ({len(selected_ids)})", key=f"run_{loc_key}",
+                                type="primary", use_container_width=True, disabled=len(selected_ids)==0)
 
             if run_btn and selected_ids:
                 if wh_id == 0:
@@ -226,7 +216,7 @@ with main_tab1:
                 with st.spinner(f"Obdelujem {len(selected_ids)} dokumentov ... ⏳"):
                     try:
                         cli = _make_client()
-                        sorted_ids = sorted(selected_ids, key=lambda eid: str(next((d.get("Date","") for d in drafts if d.get("StockEntryId") == eid), "")))
+                        sorted_ids = sorted(selected_ids, key=lambda eid: str(next((d.get("Date","") for d in drafts if d.get("StockEntryId")==eid), "")))
                         all_entry_data, all_doc_lines, all_item_ids = {}, {}, set()
                         for eid in sorted_ids:
                             ed = cli.get_entry_detail(eid)
@@ -312,6 +302,33 @@ with main_tab1:
 with main_tab2:
     st.caption("Avtomatska kreacija blagajniških prejemkov/izdatkov in popravek temeljnic")
 
+    # ── Detekcija: Cloud vs Lokalno ───────────────────────────────────────────
+    if IS_CLOUD:
+        st.warning(
+            "⚠️ **Ta funkcija zahteva lokalni zagon.**\n\n"
+            "Blagajniški agent se poveže na tvoj Chrome brskalnik (`localhost:9222`) "
+            "in to ne deluje na Streamlit Cloud.\n\n"
+            "**Kako zagnat lokalno:**"
+        )
+        st.code(
+            "# 1. Prenesi repozitorij lokalno\n"
+            "git clone https://github.com/Rok7777/agent-hub\n"
+            "cd agent-hub\n\n"
+            "# 2. Namesti odvisnosti\n"
+            "pip install -r requirements.txt\n"
+            "playwright install chromium\n\n"
+            "# 3. Ali samo dvaklikni:\n"
+            "start_local.bat",
+            language="bash"
+        )
+        st.info(
+            "💡 Loti tab deluje normalno na cloudu — samo blagajniški agent "
+            "potrebuje lokalni dostop do brskalnika."
+        )
+        st.stop()
+
+    # ── Lokalni zagon — normalna UI ───────────────────────────────────────────
+
     BLAGAJNE_INFO = {
         "MPK1": {"naziv": "Maloprodaja kombi 1", "bg_id": 17589},
         "MPK2": {"naziv": "Maloprodaja kombi 2", "bg_id": 17590},
@@ -319,7 +336,7 @@ with main_tab2:
         "MPOC": {"naziv": "Maloprodaja Orehovlje", "bg_id": 18186},
     }
 
-    # ── Korak 1: Poišči osnutke ───────────────────────────────────────────────
+    # ── Korak 1: Scan ─────────────────────────────────────────────────────────
     st.subheader("1️⃣ Poišči osnutke")
 
     col_scan, col_info = st.columns([1, 2])
@@ -337,13 +354,11 @@ with main_tab2:
                     capture_output=True, text=True, timeout=120
                 )
                 output = result.stdout
-
-                # Izvleči JSON med markerji
                 if "SCAN_JSON_START" in output and "SCAN_JSON_END" in output:
                     json_str = output.split("SCAN_JSON_START")[1].split("SCAN_JSON_END")[0].strip()
                     osnutki = json.loads(json_str)
                     st.session_state["blagajna_osnutki"] = osnutki
-                    st.session_state.pop("blagajna_rezultat", None)
+                    st.session_state.pop("blagajna_log", None)
                 else:
                     st.error("Agent ni vrnil veljavnih podatkov.")
                     st.code(output or result.stderr, language="text")
@@ -352,7 +367,7 @@ with main_tab2:
             except Exception as e:
                 st.error(f"Napaka: {e}")
 
-    # ── Korak 2: Izbor osnutkov ───────────────────────────────────────────────
+    # ── Korak 2: Izbor ────────────────────────────────────────────────────────
     osnutki: list[dict] = st.session_state.get("blagajna_osnutki", [])
 
     if osnutki:
@@ -366,23 +381,18 @@ with main_tab2:
             st.caption("Filter po blagajni:")
             filter_vse = st.checkbox("Vse blagajne", value=True, key="bl_filter_vse")
         with col_f2:
-            if not filter_vse:
-                filter_blagajne = st.multiselect(
-                    "Izberi blagajne:", options=vse_blagajne, default=vse_blagajne, key="bl_filter_multi"
-                )
-            else:
-                filter_blagajne = vse_blagajne
+            filter_blagajne = vse_blagajne if filter_vse else st.multiselect(
+                "Izberi blagajne:", options=vse_blagajne, default=vse_blagajne, key="bl_filter_multi"
+            )
 
         filtrirani = [o for o in osnutki if o["analitika_sifra"] in filter_blagajne]
-
         st.caption(f"Prikazano {len(filtrirani)} od {len(osnutki)} osnutkov:")
 
         # Tabela z checkboxi
         sel_all = st.checkbox("☑ Izberi vse", value=True, key="bl_sel_all")
         izbrani_ids = []
 
-        # Glava tabele
-        hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([0.5, 1.5, 1, 1.2, 1.2, 1.2])
+        hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([0.5, 1.5, 1.5, 1, 1, 1])
         hc1.markdown("**✓**")
         hc2.markdown("**Datum**")
         hc3.markdown("**Blagajna**")
@@ -392,11 +402,11 @@ with main_tab2:
         st.divider()
 
         for o in sorted(filtrirani, key=lambda x: x["datum"]):
-            c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.5, 1, 1.2, 1.2, 1.2])
+            c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.5, 1.5, 1, 1, 1])
             naziv = BLAGAJNE_INFO.get(o["analitika_sifra"], {}).get("naziv", o["analitika_sifra"])
             checked = c1.checkbox("", value=sel_all, key=f"bl_cb_{o['tm_id']}", label_visibility="collapsed")
             c2.write(o["datum"])
-            c3.write(f"**{o['analitika_sifra']}** {naziv}")
+            c3.write(f"**{o['analitika_sifra']}** — {naziv}")
             c4.write(f"{o['znesek_gotovina']:.2f} €")
             c5.write(f"{o['znesek_kartica']:.2f} €")
             c6.write(f"**{o['skupaj']:.2f} €**")
@@ -405,32 +415,28 @@ with main_tab2:
 
         st.divider()
 
-        # Povzetek izbora
         if izbrani_ids:
             skupaj_vsota = sum(o["skupaj"] for o in filtrirani if o["tm_id"] in izbrani_ids)
             ci1, ci2, ci3 = st.columns(3)
             ci1.metric("Izbranih osnutkov", len(izbrani_ids))
             ci2.metric("Blagajn", len(set(o["analitika_sifra"] for o in filtrirani if o["tm_id"] in izbrani_ids)))
-            ci3.metric("Skupaj znesek", f"{skupaj_vsota:.2f} €")
+            ci3.metric("Skupaj", f"{skupaj_vsota:.2f} €")
 
         # ── Korak 3: Zaženi ──────────────────────────────────────────────────
         st.subheader("3️⃣ Zaženi obdelavo")
 
         run_btn = st.button(
             f"▶️ Obdelaj {len(izbrani_ids)} izbranih osnutkov",
-            type="primary",
-            use_container_width=True,
-            key="run_blagajna",
-            disabled=len(izbrani_ids) == 0,
+            type="primary", use_container_width=True,
+            key="run_blagajna", disabled=len(izbrani_ids) == 0,
         )
 
         if run_btn and izbrani_ids:
             tm_ids_str = ",".join(izbrani_ids)
             st.subheader("📋 Log izvajanja")
-            log_box = st.empty()
+            log_box    = st.empty()
             status_box = st.empty()
             status_box.info("⏳ Agent se izvaja …")
-
             log_lines = []
             try:
                 proc = subprocess.Popen(
@@ -446,29 +452,24 @@ with main_tab2:
                 proc.wait()
                 st.session_state["blagajna_log"] = log_lines
                 st.session_state.pop("blagajna_osnutki", None)
-
                 if proc.returncode == 0:
                     status_box.success("✅ Agent uspešno zaključil!")
                 else:
-                    status_box.error(f"❌ Agent se je končal z napako (koda {proc.returncode})")
-
+                    status_box.error(f"❌ Napaka (koda {proc.returncode})")
             except Exception as e:
-                status_box.error(f"❌ Napaka: {e}")
+                status_box.error(f"❌ {e}")
 
     elif st.session_state.get("blagajna_log"):
-        # ── Prikaz loga po zaključku ──────────────────────────────────────────
         st.divider()
         st.subheader("📋 Log zadnjega zagona")
         log_lines = st.session_state["blagajna_log"]
         st.code("\n".join(log_lines), language="text")
 
-        obdelani = [l for l in log_lines if "✓" in l and ("EUR" in l or "eur" in l)]
+        obdelani = [l for l in log_lines if "✓" in l and "EUR" in l]
         napake   = [l for l in log_lines if "NAPAKA" in l or "ERROR" in l]
-
-        if obdelani or napake:
-            col_ok, col_err = st.columns(2)
-            col_ok.metric("✅ Obdelano", len(obdelani))
-            col_err.metric("❌ Napake", len(napake))
+        col_ok, col_err = st.columns(2)
+        col_ok.metric("✅ Obdelano", len(obdelani))
+        col_err.metric("❌ Napake", len(napake))
 
         col_r1, col_r2 = st.columns(2)
         with col_r1:
@@ -479,10 +480,9 @@ with main_tab2:
             if st.button("🗑 Počisti log", key="clear_log", use_container_width=True):
                 st.session_state.pop("blagajna_log", None)
                 st.rerun()
-
     else:
         st.info("👆 Kliknite 'Poišči osnutke' za začetek.")
 
 # ── Noga ──────────────────────────────────────────────────────────────────────
 st.divider()
-st.caption("Agent Hub v1.2 · Loti (Minimax API) + Blagajna (Playwright)")
+st.caption(f"Agent Hub v1.2 · {'☁️ Cloud' if IS_CLOUD else '💻 Lokalno'} · Loti (API) + Blagajna (Playwright)")
