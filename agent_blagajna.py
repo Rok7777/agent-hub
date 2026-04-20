@@ -81,31 +81,39 @@ async def dropdown(page, sel: str, vrednost: str, timeout=8000):
 # ─────────────────────────────────────────
 
 async def login(page, username: str, password: str):
-    """Prijavi se v Minimax prek login.minimax.si"""
+    """
+    Prijavi se v Minimax prek login.minimax.si
+    Koraki:
+      1. Odpri moj.minimax.si → preusmeri na Chooser stran
+      2. Klikni na email (username)
+      3. Vnesi geslo → klikni Prijava
+    """
     log.info("Odpiranje login strani ...")
     await page.goto(f"{BASE_URL}/SI/VA/")
     await page.wait_for_load_state("networkidle")
 
     # Pocakaj da se preusmeri na login.minimax.si
     await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
-    log.info(f"Login stran: {page.url}")
+    log.info(f"Chooser stran: {page.url}")
 
-    # Vnesi email
-    await page.wait_for_selector('input[type="email"], input[name="Email"], input[id*="email"]', timeout=8000)
-    await page.fill('input[type="email"], input[name="Email"], input[id*="email"]', username)
+    # KORAK 1: Klikni na email v Chooser seznamu
+    await page.wait_for_selector(f'a:has-text("{username}")', timeout=8000)
+    await page.click(f'a:has-text("{username}")')
+    await page.wait_for_load_state("networkidle")
+    log.info(f"Kliknil na {username}")
+
+    # KORAK 2: Vnesi geslo
+    await page.wait_for_selector('input[type="password"]', timeout=8000)
+    await page.fill('input[type="password"]', password)
     await page.wait_for_timeout(300)
 
-    # Vnesi geslo
-    await page.fill('input[type="password"], input[name="Password"], input[id*="password"]', password)
-    await page.wait_for_timeout(300)
-
-    # Klikni Prijava
-    await page.click('button:has-text("Prijava"), input[value="Prijava"], button[type="submit"]')
+    # KORAK 3: Klikni Prijava
+    await page.click('button:has-text("Prijava"), button[type="submit"]')
     await page.wait_for_load_state("networkidle")
 
-    # Preveri ali smo prijavljeni — mora nas vrniti na moj.minimax.si
+    # Preveri ali smo prijavljeni
     if "login.minimax.si" in page.url:
-        raise Exception("Prijava neuspesna! Preverite email in geslo v nastavitvah.")
+        raise Exception("Prijava neuspesna! Preverite geslo v nastavitvah.")
 
     log.info(f"Prijavljeni! URL: {page.url}")
 
