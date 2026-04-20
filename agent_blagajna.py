@@ -2,14 +2,12 @@
 AGENT: Blagajna + Temeljnice (Minimax)
 =======================================
 Nacini:
-  python agent_blagajna.py --scan
-  python agent_blagajna.py --process 123,456
-  python agent_blagajna.py --process all
+  python agent_blagajna.py --scan       --user U --pass P
+  python agent_blagajna.py --process 123,456 --user U --pass P
+  python agent_blagajna.py --process all    --user U --pass P
 
-Logika placil:
-  - Mozna sta konta 1652 (kartica) in 1000 (gotovina)
-  - Ce sta oba: uredi 1652 -> 120000 z vsoto, izbrise 1000
-  - Ce je samo eden: uredi tega -> 120000, nic ne brise
+Login: avtomatski z username + password
+NI potreben remote debugging port!
 """
 
 import asyncio
@@ -19,7 +17,8 @@ import sys
 import logging
 from playwright.async_api import async_playwright
 
-BASE_URL = "https://moj.minimax.si"
+BASE_URL  = "https://moj.minimax.si"
+LOGIN_URL = "https://moj.minimax.si/SI/AUT/Account/Login"
 
 BLAGAJNE = {
     "MPK1": 17589,
@@ -39,12 +38,6 @@ log = logging.getLogger("blagajna-agent")
 # ─────────────────────────────────────────
 # POMOZNE FUNKCIJE
 # ─────────────────────────────────────────
-
-async def connect(playwright):
-    browser = await playwright.chromium.connect_over_cdp("http://localhost:9222")
-    context = browser.contexts[0]
-    return context.pages[0]
-
 
 def parse_znesek(text: str) -> float:
     clean = (text.strip()
@@ -85,29 +78,67 @@ async def dropdown(page, sel: str, vrednost: str, timeout=8000):
 
 
 # ─────────────────────────────────────────
+# LOGIN
+# ─────────────────────────────────────────
+
+async def login(page, username: str, password: str):
+    """Prijavi se v Minimax z username in password."""
+    log.info("Prijava v Minimax ...")
+    await page.goto(LOGIN_URL)
+    await page.wait_for_load_state("networkidle")
+
+    # Vnesi username
+    await page.fill(
+        'input[name="UserName"], input[id*="UserName"], input[id*="username"]',
+        username
+    )
+    await page.wait_for_timeout(200)
+
+    # Vnesi password
+    await page.fill(
+        'input[name="Password"], input[id*="Password"], input[type="password"]',
+        password
+    )
+    await page.wait_for_timeout(200)
+
+    # Klikni Login
+    await page.click('input[type="submit"], button[type="submit"], input[value="Prijava"]')
+    await page.wait_for_load_state("networkidle")
+
+    # Preveri ali smo prijavljeni
+    current_url = page.url.lower()
+    if "login" in current_url or "aut" in current_url:
+        raise Exception("Prijava neuspesna! Preverite username in password v nastavitvah.")
+
+    log.info(f"Prijavljeni! URL: {page.url}")
+
+    # Izberi organizacijo ce je potrebno
+    try:
+        org_link = await page.query_selector(
+            'a:has-text("Oltre"), a:has-text("OltreCon"), td:has-text("OltreCon")'
+        )
+        if org_link:
+            await org_link.click()
+            await page.wait_for_load_state("networkidle")
+            log.info("Organizacija izbrana.")
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────
 # PREBERI KNJIZBE
 # ─────────────────────────────────────────
 
 async def preberi_knjizbe(page, tm_id: str) -> dict | None:
-    """
-    Prebere knjizbe osnutka. Vrne slovar z podatki.
-    Podpira:
-      - oba konta (1652 + 1000)
-      - samo 1652
-      - samo 1000
-    Ce ni nobenega -> vrne None.
-    """
     await page.goto(
         f"{BASE_URL}/SI/VA/WebUI/Temeljnica/TemeljnicaEdit.aspx"
         f"?tm_id={tm_id}&pgat=pgate"
     )
     await page.wait_for_load_state("networkidle")
 
-    # Preberi datum
     df = await page.query_selector('input[id*="Datum"], input[name*="Datum"]')
     datum = await df.input_value() if df else ""
 
-    # Odpri Knjizbe tab ce obstaja
     kb = await page.query_selector('a:has-text("Knjizbe"), button:has-text("Knjizbe")')
     if kb:
         await kb.click()
@@ -132,19 +163,17 @@ async def preberi_knjizbe(page, tm_id: str) -> dict | None:
                 d1000 = {"analitika": an, "znesek": zn}
 
     if not d1652 and not d1000:
-        log.warning(f"tm_id={tm_id}: ni najden noben placilni konto (1652/1000) — preskacem")
+        log.warning(f"tm_id={tm_id}: ni placilnih kontov — preskacem")
         return None
 
-    # Analitika — vzamemo od tistega ki obstaja
     an_polno = (d1652 or d1000)["analitika"]
     m = re.match(r"^(MPK\d+|MPOC)", an_polno)
     sifra = m.group(1) if m else an_polno.split(" ")[0]
 
-    znesek_kartica = d1652["znesek"] if d1652 else 0.0
+    znesek_kartica  = d1652["znesek"] if d1652 else 0.0
     znesek_gotovina = d1000["znesek"] if d1000 else 0.0
     skupaj = round(znesek_kartica + znesek_gotovina, 2)
 
-    # Rezim: koliko kontov imamo
     if d1652 and d1000:
         rezim = "oba"
     elif d1652:
@@ -153,20 +182,20 @@ async def preberi_knjizbe(page, tm_id: str) -> dict | None:
         rezim = "samo_gotovina"
 
     log.info(
-        f"  tm_id={tm_id} | {datum} | {sifra} | "
+        f"  {datum} | {sifra} | "
         f"kartica={znesek_kartica} | gotovina={znesek_gotovina} | "
         f"skupaj={skupaj} | rezim={rezim}"
     )
 
     return {
-        "tm_id": tm_id,
-        "datum": datum,
-        "analitika_sifra": sifra,
-        "analitika_polno": an_polno,
-        "znesek_kartica": znesek_kartica,
-        "znesek_gotovina": znesek_gotovina,
-        "skupaj": skupaj,
-        "rezim": rezim,  # "oba" | "samo_kartica" | "samo_gotovina"
+        "tm_id":            tm_id,
+        "datum":            datum,
+        "analitika_sifra":  sifra,
+        "analitika_polno":  an_polno,
+        "znesek_kartica":   znesek_kartica,
+        "znesek_gotovina":  znesek_gotovina,
+        "skupaj":           skupaj,
+        "rezim":            rezim,
     }
 
 
@@ -213,7 +242,9 @@ async def kreiraj_datum_blagajne(page, bg_id: int, datum: str) -> str | None:
     )
     await page.wait_for_load_state("networkidle")
 
-    df = await page.wait_for_selector('input[id*="Datum"], input[name*="Datum"]', timeout=5000)
+    df = await page.wait_for_selector(
+        'input[id*="Datum"], input[name*="Datum"]', timeout=5000
+    )
     await df.triple_click()
     await df.type(datum)
     await page.wait_for_timeout(300)
@@ -243,15 +274,25 @@ async def kreiraj_prejemek(page, bdn_id: str, an_polno: str, skupaj: float):
     await klikni(page, 'a:has-text("Nov prejemek"), button:has-text("Nov prejemek")')
     await page.wait_for_load_state("networkidle")
 
-    await dropdown(page, 'input[id*="Stranka"], [id*="Stranka"] input', "Koncni kupec - maloprodaja")
+    await dropdown(
+        page,
+        'input[id*="Stranka"], [id*="Stranka"] input',
+        "Koncni kupec - maloprodaja"
+    )
 
     an_in = await page.query_selector('[id*="Analitika"] input')
     if an_in and not (await an_in.input_value()).strip():
         await dropdown(page, '[id*="Analitika"] input', an_polno.split(" ")[0])
 
-    await dropdown(page, '[id*="Prejemek"] input, [id*="TipPrejemka"] input', "Dnevni iztrZek")
+    await dropdown(
+        page,
+        '[id*="Prejemek"] input, [id*="TipPrejemka"] input',
+        "Dnevni iztrZek"
+    )
 
-    zf = await page.wait_for_selector('input[id*="Znesek"], input[name*="Znesek"]', timeout=5000)
+    zf = await page.wait_for_selector(
+        'input[id*="Znesek"], input[name*="Znesek"]', timeout=5000
+    )
     await zf.triple_click()
     await zf.type(format_znesek(skupaj))
 
@@ -266,15 +307,8 @@ async def kreiraj_prejemek(page, bdn_id: str, an_polno: str, skupaj: float):
 
 async def kreiraj_izdatek(
     page, bdn_id: str, an_polno: str,
-    znesek_gotovina: float, znesek_kartica: float,
-    rezim: str
+    znesek_gotovina: float, znesek_kartica: float, rezim: str
 ):
-    """
-    Kreira izdatek.
-    - rezim="oba":           2 vrstici (gotovina + kartica)
-    - rezim="samo_kartica":  1 vrstica (samo kartica)
-    - rezim="samo_gotovina": 1 vrstica (samo gotovina)
-    """
     log.info(f"  Izdatek rezim={rezim} ...")
     await page.goto(
         f"{BASE_URL}/SI/VA/WebUI/BlagajniDnevnik/BlagajniDnevnikView.aspx"
@@ -290,7 +324,9 @@ async def kreiraj_izdatek(
 
     async def dodaj_vrstico(tip: str, znesek: float):
         await dropdown(page, '[id*="Izdatek"] input, [id*="TipIzdatka"] input', tip)
-        zf = await page.wait_for_selector('input[id*="Znesek"], input[name*="Znesek"]', timeout=5000)
+        zf = await page.wait_for_selector(
+            'input[id*="Znesek"], input[name*="Znesek"]', timeout=5000
+        )
         await zf.triple_click()
         await zf.type(format_znesek(znesek))
         await klikni(page, 'button:has-text("Shrani")')
@@ -298,7 +334,6 @@ async def kreiraj_izdatek(
 
     if rezim in ("oba", "samo_gotovina"):
         await dodaj_vrstico("Polog gotovine - domaca DE", znesek_gotovina)
-
     if rezim in ("oba", "samo_kartica"):
         await dodaj_vrstico("Terjatev za placila z kartico", znesek_kartica)
 
@@ -310,16 +345,10 @@ async def kreiraj_izdatek(
 
 
 # ─────────────────────────────────────────
-# TEMELJNICA: POPRAVI KNJIZBE
+# TEMELJNICA: POPRAVI
 # ─────────────────────────────────────────
 
 async def popravi_temeljnico(page, podatki: dict):
-    """
-    Popravi temeljnico glede na rezim:
-    - "oba":           uredi 1652 -> 120000 z vsoto, izbrisi 1000
-    - "samo_kartica":  uredi 1652 -> 120000 (znesek ostane)
-    - "samo_gotovina": uredi 1000 -> 120000 (znesek ostane)
-    """
     rezim = podatki["rezim"]
     log.info(f"  Temeljnica tm_id={podatki['tm_id']} rezim={rezim} ...")
 
@@ -334,9 +363,7 @@ async def popravi_temeljnico(page, podatki: dict):
         await kb.click()
         await page.wait_for_timeout(600)
 
-    edit_1652 = None
-    edit_1000 = None
-    del_1000  = None
+    edit_1652 = edit_1000 = del_1000 = None
 
     for v in await page.query_selector_all("table tr"):
         for c in await v.query_selector_all("td"):
@@ -353,36 +380,29 @@ async def popravi_temeljnico(page, podatki: dict):
                     'a[href*="Delete"], button[title*="Brisi"], .delete-btn'
                 )
 
-    async def uredi_na_120000(gumb_edit, nov_znesek: float):
-        """Uredi vrstico: zamenja konto na 120000, doda stranko, popravi znesek."""
-        await gumb_edit.click()
+    async def uredi_na_120000(gumb, nov_znesek: float):
+        await gumb.click()
         await page.wait_for_timeout(500)
-
-        ki = await page.wait_for_selector('[id*="Konto"] input, input[id*="konto"]', timeout=5000)
+        ki = await page.wait_for_selector(
+            '[id*="Konto"] input, input[id*="konto"]', timeout=5000
+        )
         await ki.triple_click()
         await ki.type("120000")
         await page.wait_for_timeout(600)
         opt = await page.wait_for_selector('li:has-text("120000")', timeout=5000)
         await opt.click()
         await page.wait_for_timeout(300)
-
         await dropdown(page, '[id*="Stranka"] input', "Koncni kupec - maloprodaja")
-
         bi = await page.query_selector('input[id*="Breme"], input[name*="Breme"]')
         if bi:
             await bi.triple_click()
             await bi.type(format_znesek(nov_znesek))
-
         await klikni(page, 'button:has-text("Shrani knjizbo")')
         await page.wait_for_timeout(500)
 
     if rezim == "oba":
-        # Uredi 1652 z vsoto, izbrisi 1000
         if edit_1652:
             await uredi_na_120000(edit_1652, podatki["skupaj"])
-        else:
-            log.warning("  Edit gumb 1652 ni najden!")
-
         if del_1000:
             await del_1000.click()
             await page.wait_for_timeout(400)
@@ -390,24 +410,13 @@ async def popravi_temeljnico(page, podatki: dict):
                 await page.click('button:has-text("Da"), button:has-text("OK")', timeout=2000)
             except Exception:
                 pass
-        else:
-            log.warning("  Delete gumb 1000 ni najden!")
-
     elif rezim == "samo_kartica":
-        # Samo uredi 1652, nic ne brisemo
         if edit_1652:
             await uredi_na_120000(edit_1652, podatki["znesek_kartica"])
-        else:
-            log.warning("  Edit gumb 1652 ni najden!")
-
     elif rezim == "samo_gotovina":
-        # Samo uredi 1000, nic ne brisemo
         if edit_1000:
             await uredi_na_120000(edit_1000, podatki["znesek_gotovina"])
-        else:
-            log.warning("  Edit gumb 1000 ni najden!")
 
-    # Shrani temeljnico
     await klikni(page, 'button:has-text("Shrani"), input[value="Shrani"]')
     await page.wait_for_load_state("networkidle")
     log.info("  Temeljnica OK")
@@ -418,28 +427,22 @@ async def popravi_temeljnico(page, podatki: dict):
 # ─────────────────────────────────────────
 
 async def obdelaj_izbrane(page, tm_ids: list[str]):
-    obdelani = 0
-    napake = 0
-
+    obdelani = napake = 0
     for tm_id in tm_ids:
-        log.info(f"\n{'─'*40}")
-        log.info(f"Obdelujem tm_id={tm_id}")
+        log.info(f"\n{'─'*40}\nObdelujem tm_id={tm_id}")
         try:
             podatki = await preberi_knjizbe(page, tm_id)
             if not podatki:
                 napake += 1
                 continue
-
             sifra = podatki["analitika_sifra"]
             if sifra not in BLAGAJNE:
-                log.warning(f"  Analitika '{sifra}' ni v BLAGAJNE — preskacem")
+                log.warning(f"  '{sifra}' ni v BLAGAJNE — preskacem")
                 continue
-
             bdn_id = await kreiraj_datum_blagajne(page, BLAGAJNE[sifra], podatki["datum"])
             if not bdn_id:
                 napake += 1
                 continue
-
             await kreiraj_prejemek(
                 page, bdn_id, podatki["analitika_polno"], podatki["skupaj"]
             )
@@ -449,13 +452,8 @@ async def obdelaj_izbrane(page, tm_ids: list[str]):
                 podatki["rezim"]
             )
             await popravi_temeljnico(page, podatki)
-
             obdelani += 1
-            log.info(
-                f"  OK {podatki['datum']} | {sifra} | "
-                f"{podatki['skupaj']} EUR | rezim={podatki['rezim']}"
-            )
-
+            log.info(f"  OK {podatki['datum']} | {sifra} | {podatki['skupaj']} EUR")
         except Exception as exc:
             log.exception(f"  NAPAKA tm_id={tm_id}: {exc}")
             napake += 1
@@ -468,10 +466,30 @@ async def obdelaj_izbrane(page, tm_ids: list[str]):
 # MAIN
 # ─────────────────────────────────────────
 
+def get_arg(args, flag):
+    try:
+        idx = args.index(flag)
+        return args[idx + 1] if idx + 1 < len(args) else ""
+    except ValueError:
+        return ""
+
+
 async def main():
     args = sys.argv[1:]
+
+    username = get_arg(args, "--user")
+    password = get_arg(args, "--pass")
+
+    if not username or not password:
+        print("NAPAKA: Manjkata --user in --pass argumenta!")
+        sys.exit(1)
+
     async with async_playwright() as p:
-        page = await connect(p)
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page    = await context.new_page()
+
+        await login(page, username, password)
 
         if "--scan" in args:
             rezultati = await scan_osnutke(page)
@@ -482,23 +500,17 @@ async def main():
         elif "--process" in args:
             idx = args.index("--process")
             tm_ids_arg = args[idx + 1] if idx + 1 < len(args) else ""
-
             if tm_ids_arg == "all":
-                rez = await scan_osnutke(page)
+                rez    = await scan_osnutke(page)
                 tm_ids = [r["tm_id"] for r in rez]
             else:
                 tm_ids = [t.strip() for t in tm_ids_arg.split(",") if t.strip()]
-
             if tm_ids:
                 await obdelaj_izbrane(page, tm_ids)
             else:
                 log.info("Ni tm_id-jev za obdelavo.")
 
-        else:
-            print("Uporaba:")
-            print("  python agent_blagajna.py --scan")
-            print("  python agent_blagajna.py --process 123,456")
-            print("  python agent_blagajna.py --process all")
+        await browser.close()
 
 
 if __name__ == "__main__":
