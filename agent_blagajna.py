@@ -80,51 +80,47 @@ async def dropdown(page, sel: str, vrednost: str, timeout=8000):
 # LOGIN
 # ─────────────────────────────────────────
 
-async def login(page, username: str, password: str):
+async def login(page, username: str, password: str, client_id: str, client_secret: str):
     """
-    Prijavi se v Minimax.
-    V headless nacinu ni shranjenih racunov, zato:
-      1. Kliknemo "Uporabi drug uporabniski racun"
-      2. Vnesemo email
-      3. Vnesemo geslo -> Prijava
+    Prijavi se v Minimax z OAuth2 tokenom (enako kot API za lote).
+    Token nastavimo kot cookie v brskalniku.
     """
-    log.info("Odpiranje login strani ...")
+    import requests as req
+    log.info("Pridobivam OAuth2 token ...")
+    r = req.post("https://moj.minimax.si/SI/AUT/OAuth20/Token", data={
+        "grant_type":    "password",
+        "username":      username,
+        "password":      password,
+        "client_id":     client_id,
+        "client_secret": client_secret,
+    }, timeout=15)
+    if not r.ok:
+        raise Exception(f"OAuth2 prijava neuspesna ({r.status_code}): {r.text[:200]}")
+    token = r.json()["access_token"]
+    log.info("Token pridobljen!")
+
+    # Nastavi token kot cookie in Authorization header
+    await page.set_extra_http_headers({"Authorization": f"Bearer {token}"})
+
+    # Odpri Minimax direktno
     await page.goto(f"{BASE_URL}/SI/VA/")
     await page.wait_for_load_state("networkidle")
-    await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
-    log.info(f"Chooser stran: {page.url}")
-    await page.wait_for_timeout(1500)
 
-    # Klikni "Uporabi drug uporabniski racun"
-    await page.click('a[data-realm="another"]')
-    await page.wait_for_timeout(800)
-    log.info("Kliknil drug uporabniski racun")
-
-    # Vnesi email v form
-    await page.wait_for_selector('input[name="Email"], input[id="Email"]', timeout=5000)
-    await page.fill('input[name="Email"], input[id="Email"]', username)
-    await page.wait_for_timeout(200)
-
-    # Klikni Prijava (submit form z emailom)
-    await page.click('button[type="submit"], button:has-text("Prijava")')
-    await page.wait_for_load_state("networkidle")
-    log.info("Email poslan, cakam na geslo ...")
-
-    # Vnesi geslo
-    await page.wait_for_selector('input[type="password"]', timeout=8000)
-    await page.fill('input[type="password"]', password)
-    await page.wait_for_timeout(300)
-
-    # Klikni Prijava
-    await page.click('button:has-text("Prijava"), button[type="submit"]')
-    await page.wait_for_load_state("networkidle")
-
+    # Ce nas preusmeri na login, poskusimo z direktnim URL
     if "login.minimax.si" in page.url:
-        raise Exception("Prijava neuspesna! Preverite email in geslo.")
+        # Dodaj token kot cookie
+        await page.context.add_cookies([{
+            "name": "access_token",
+            "value": token,
+            "domain": "moj.minimax.si",
+            "path": "/",
+        }])
+        await page.goto(f"{BASE_URL}/SI/VA/")
+        await page.wait_for_load_state("networkidle")
 
-    log.info(f"Prijavljeni! URL: {page.url}")
+    log.info(f"URL po prijavi: {page.url}")
 
-    # Izberi organizacijo ce je seznam
+    # Izberi organizacijo ce je potrebno
     try:
         org = await page.query_selector(
             'a:has-text("Oltre"), a:has-text("OltreCon"), td:has-text("OltreCon")'
@@ -135,6 +131,8 @@ async def login(page, username: str, password: str):
             log.info("Organizacija izbrana.")
     except Exception:
         pass
+
+    log.info(f"Prijavljeni! URL: {page.url}")
 
 
 # ─────────────────────────────────────────
@@ -494,7 +492,9 @@ async def main():
         context = await browser.new_context()
         page    = await context.new_page()
 
-        await login(page, username, password)
+        client_id     = get_arg(args, "--client-id")
+        client_secret = get_arg(args, "--client-secret")
+        await login(page, username, password, client_id, client_secret)
 
         if "--scan" in args:
             rezultati = await scan_osnutke(page)
