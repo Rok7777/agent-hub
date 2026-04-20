@@ -83,9 +83,9 @@ async def dropdown(page, sel: str, vrednost: str, timeout=8000):
 async def login(page, username: str, password: str):
     """
     Prijavi se v Minimax.
-    Koraki:
-      1. Odpri moj.minimax.si -> preusmeri na Chooser
-      2. Poiscemo href linka za nas email in direktno navigiramo nanj
+    V headless nacinu ni shranjenih racunov, zato:
+      1. Kliknemo "Uporabi drug uporabniski racun"
+      2. Vnesemo email
       3. Vnesemo geslo -> Prijava
     """
     log.info("Odpiranje login strani ...")
@@ -93,44 +93,22 @@ async def login(page, username: str, password: str):
     await page.wait_for_load_state("networkidle")
     await page.wait_for_url("**/login.minimax.si/**", timeout=10000)
     log.info(f"Chooser stran: {page.url}")
+    await page.wait_for_timeout(1500)
 
-    # Pocakaj da se stran nalozi
-    await page.wait_for_timeout(3000)
-    # Debug screenshot
-    await page.screenshot(path="C:/Users/Rok/Desktop/AI robot/login_debug.png")
-    html = await page.content()
-    log.info(f"HTML vsebuje realm-chooser: {'realm-chooser' in html}")
-    log.info(f"HTML vsebuje hotmail: {'hotmail' in html}")
-    log.info(f"Prvih 500 znakov HTML: {html[:500]}")
+    # Klikni "Uporabi drug uporabniski racun"
+    await page.click('a[data-realm="another"]')
+    await page.wait_for_timeout(800)
+    log.info("Kliknil drug uporabniski racun")
 
-    # Poiscemo href za nas email direktno iz HTML
-    href = await page.evaluate("""(email) => {
-        const links = document.querySelectorAll('#realm-chooser a');
-        for (const a of links) {
-            if (a.textContent.trim() === email && !a.classList.contains('mm-list-remove-item')) {
-                return a.getAttribute('href');
-            }
-        }
-        // Fallback: poiscemo katerikoli link ki vsebuje email v href
-        const allLinks = document.querySelectorAll('a');
-        for (const a of allLinks) {
-            const href = a.getAttribute('href') || '';
-            const encodedEmail = email.replace('@', '%40');
-            if (href.includes(encodedEmail) && !href.includes('ForgetMe')) {
-                return href;
-            }
-        }
-        return null;
-    }""", username)
+    # Vnesi email v form
+    await page.wait_for_selector('input[name="Email"], input[id="Email"]', timeout=5000)
+    await page.fill('input[name="Email"], input[id="Email"]', username)
+    await page.wait_for_timeout(200)
 
-    if not href:
-        raise Exception(f"Email {username} ni najden na Chooser strani!")
-
-    # Navigiraj direktno na ta URL
-    login_url = f"https://login.minimax.si{href}" if href.startswith('/') else href
-    log.info(f"Navigiram na: {login_url[:80]}...")
-    await page.goto(login_url)
+    # Klikni Prijava (submit form z emailom)
+    await page.click('button[type="submit"], button:has-text("Prijava")')
     await page.wait_for_load_state("networkidle")
+    log.info("Email poslan, cakam na geslo ...")
 
     # Vnesi geslo
     await page.wait_for_selector('input[type="password"]', timeout=8000)
@@ -142,7 +120,7 @@ async def login(page, username: str, password: str):
     await page.wait_for_load_state("networkidle")
 
     if "login.minimax.si" in page.url:
-        raise Exception("Prijava neuspesna! Preverite geslo.")
+        raise Exception("Prijava neuspesna! Preverite email in geslo.")
 
     log.info(f"Prijavljeni! URL: {page.url}")
 
