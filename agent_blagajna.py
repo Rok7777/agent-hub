@@ -509,13 +509,10 @@ async def main():
         sys.exit(1)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, args=['--window-position=-32000,-32000'])
-        context = await browser.new_context()
-        page    = await context.new_page()
-
-        client_id     = get_arg(args, "--client-id")
-        client_secret = get_arg(args, "--client-secret")
-        await login(page, username, password, client_id, client_secret)
+        browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+        context = browser.contexts[0]
+        page    = context.pages[0]
+        log.info("Povezan na Chrome!")
 
         if "--scan" in args:
             rezultati = await scan_osnutke(page)
