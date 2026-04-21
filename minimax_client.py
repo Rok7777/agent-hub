@@ -91,6 +91,12 @@ class MinimaxClient:
             rows = data.get("Rows", [])
             for row in rows:
                 status = str(row.get("Status", "")).upper()
+                # Shrani vse statuse za debug v prvi iteraciji
+                if page == 1 and not result:
+                    import logging
+                    logging.getLogger("minimax").info(
+                        f"Journal API - prvi zapis: {row}"
+                    )
                 if status in ("O", "DRAFT", "0", "OSNUTEK"):
                     result.append(row)
             total   = data.get("TotalRows", 0)
@@ -99,6 +105,11 @@ class MinimaxClient:
                 break
             page += 1
         return result
+
+    def get_journal_drafts_debug(self) -> dict:
+        """Debug: vrne surove podatke iz API za prvi journal."""
+        data = self._get("/journals", params={"CurrentPage": 1, "PageSize": 5})
+        return data
 
     def get_journal(self, journal_id: int) -> dict:
         """Vrne posamezno temeljnico z vsemi knjižbami."""
