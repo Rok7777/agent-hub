@@ -410,10 +410,22 @@ with main_tab1:
 with main_tab2:
     st.caption("Pregled osnutkov temeljnic, popravek knjižb in navodila za vnos v blagajno")
 
-    col_btn, col_space = st.columns([1, 2])
+    col_btn, col_debug, col_space = st.columns([1, 1, 1])
     with col_btn:
         scan_btn = st.button("🔍 Poišči osnutke temeljnic", type="primary",
                              use_container_width=True, key="scan_journals")
+    with col_debug:
+        debug_btn = st.button("🔧 Debug API", use_container_width=True, key="debug_journals")
+
+    if debug_btn:
+        if not _check_config(): st.stop()
+        with st.spinner("Kličem API ..."):
+            try:
+                cli  = _make_client()
+                data = cli.get_journal_drafts_debug()
+                st.json(data)
+            except Exception as e:
+                st.error(f"Napaka: {e}")
 
     if scan_btn:
         if not _check_config(): st.stop()
