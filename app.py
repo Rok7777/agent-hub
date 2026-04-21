@@ -1,8 +1,9 @@
 """
 Agent Hub — Glavna navigacija.
 Vsak tab je v svojem modulu:
-  tab_loti.py        — dodelitev lotov
-  tab_temeljnice.py  — dnevni izkupiček / blagajne
+  tab_loti.py        — dodelitev lotov (ureja chat "Zapiranje LOT")
+  tab_temeljnice.py  — dnevni izkupiček (ureja chat "Ločeni procesi")
+  minimax_client.py  — API klient (ureja chat "Ločeni procesi")
 """
 
 import streamlit as st
