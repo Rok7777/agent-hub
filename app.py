@@ -8,7 +8,7 @@ from datetime import datetime
 import traceback
 
 from minimax_client import (
-    MinimaxClient, LOCATIONS, BLAGAJNE,
+    MinimaxClient, LOCATIONS,
     parse_stock_to_engine_format, parse_entry_to_lines,
 )
 from lot_engine import assign_lots, assign_lots_with_virtual, check_old_lots
