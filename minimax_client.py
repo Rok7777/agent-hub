@@ -80,8 +80,13 @@ class MinimaxClient:
     # ── Journal (Temeljnice) ──────────────────────────────────────────────────
 
     def get_journal_drafts(self) -> list[dict]:
-        """Vrne vse osnutke temeljnic - filtrira lokalno po statusu."""
-        result = []
+        """
+        Vrne osnutke temeljnic tipa DI.
+        Seznam ne vsebuje statusa — za vsak DI journal
+        posebej pokličemo GetJournal da preverimo Status=O.
+        """
+        # Najprej poberemo vse DI journale (seznam je manjši)
+        di_ids = []
         page   = 1
         while True:
             data = self._get("/journals", params={
@@ -90,20 +95,25 @@ class MinimaxClient:
             })
             rows = data.get("Rows", [])
             for row in rows:
-                status = str(row.get("Status", "")).upper()
-                # Shrani vse statuse za debug v prvi iteraciji
-                if page == 1 and not result:
-                    import logging
-                    logging.getLogger("minimax").info(
-                        f"Journal API - prvi zapis: {row}"
-                    )
-                if status in ("O", "DRAFT", "0", "OSNUTEK"):
-                    result.append(row)
+                jtype = (row.get("JournalType") or {}).get("Name", "")
+                if jtype.upper() == "DI":
+                    di_ids.append(row.get("JournalId"))
             total   = data.get("TotalRows", 0)
             fetched = (page - 1) * 50 + len(rows)
             if fetched >= total or not rows:
                 break
             page += 1
+
+        # Za vsak DI journal pokliči GetJournal in filtriraj osnutke
+        result = []
+        for jid in di_ids:
+            try:
+                j = self.get_journal(jid)
+                status = str(j.get("Status", "")).upper()
+                if status in ("O", "DRAFT", "0", "OSNUTEK"):
+                    result.append(j)
+            except Exception:
+                continue
         return result
 
     def get_journal_drafts_debug(self) -> dict:
