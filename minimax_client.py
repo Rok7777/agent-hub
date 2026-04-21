@@ -81,11 +81,10 @@ class MinimaxClient:
 
     def get_journal_drafts(self) -> list[dict]:
         """
-        Vrne osnutke temeljnic tipa DI.
-        Seznam ne vsebuje statusa — za vsak DI journal
-        posebej pokličemo GetJournal da preverimo Status=O.
+        Vrne osnutke temeljnic tipa DI (dnevni iztržek iz Shopsy).
+        Filtrira po opisu ki se začne z "DI:" — hitro in zanesljivo.
+        Za vsak najden journal pokliče GetJournal da dobi Status in knjižbe.
         """
-        # Najprej poberemo vse DI journale (seznam je manjši)
         di_ids = []
         page   = 1
         while True:
@@ -95,8 +94,8 @@ class MinimaxClient:
             })
             rows = data.get("Rows", [])
             for row in rows:
-                jtype = (row.get("JournalType") or {}).get("Name", "")
-                if jtype.upper() == "DI":
+                opis = str(row.get("Description", "") or "")
+                if opis.startswith("DI:"):
                     di_ids.append(row.get("JournalId"))
             total   = data.get("TotalRows", 0)
             fetched = (page - 1) * 50 + len(rows)
@@ -104,11 +103,11 @@ class MinimaxClient:
                 break
             page += 1
 
-        # Za vsak DI journal pokliči GetJournal in filtriraj osnutke
+        # Za vsak DI journal pokliči GetJournal in filtriraj osnutke (Status=O)
         result = []
         for jid in di_ids:
             try:
-                j = self.get_journal(jid)
+                j      = self.get_journal(jid)
                 status = str(j.get("Status", "")).upper()
                 if status in ("O", "DRAFT", "0", "OSNUTEK"):
                     result.append(j)
