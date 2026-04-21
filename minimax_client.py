@@ -11,7 +11,6 @@ from typing import Optional
 BASE     = "https://moj.minimax.si/SI/API"
 AUTH_URL = "https://moj.minimax.si/SI/AUT/OAuth20/Token"
 
-# Analitike → WarehouseCode mapping
 LOCATIONS = {
     "MPK1": {"name": "Potujoča 1",        "analytic_name": "MPK1"},
     "MPK2": {"name": "Potujoča 2",        "analytic_name": "MPK2"},
@@ -19,7 +18,6 @@ LOCATIONS = {
     "MPOC": {"name": "Ribarnica Domžale", "analytic_name": "MPOC"},
 }
 
-# Mapping analitika šifra → naziv blagajne
 BLAGAJNE = {
     "MPK1": "Maloprodaja kombi 1",
     "MPK2": "Maloprodaja kombi 2",
@@ -82,60 +80,56 @@ class MinimaxClient:
     def get_journal_drafts(self) -> list[dict]:
         """
         Vrne osnutke temeljnic tipa DI (dnevni iztržek iz Shopsy).
-        Filtrira po opisu ki se začne z "DI:" — hitro in zanesljivo.
-        Za vsak najden journal pokliče GetJournal da dobi Status in knjižbe.
+        Korak 1: Pokliče GetJournal za vsak osnutek (Status=O) — hitro
+        Korak 2: Filtrira samo tiste z opisom "DI:" — Shopsy iztržki
+        Ostali osnutki (npr. IR) se ignorirajo — urejajo se ročno.
         """
-        di_ids = []
-        page   = 1
+        # Korak 1: Poberi vse osnutke z API filtrom Status=O
+        osnutki_raw = []
+        page = 1
         while True:
             data = self._get("/journals", params={
+                "Status":      "O",
                 "CurrentPage": page,
                 "PageSize":    50,
             })
             rows = data.get("Rows", [])
-            for row in rows:
-                opis = str(row.get("Description", "") or "")
-                if opis.startswith("DI:"):
-                    di_ids.append(row.get("JournalId"))
+            osnutki_raw.extend(rows)
             total   = data.get("TotalRows", 0)
             fetched = (page - 1) * 50 + len(rows)
             if fetched >= total or not rows:
                 break
             page += 1
 
-        # Za vsak DI journal pokliči GetJournal in filtriraj osnutke (Status=O)
+        # Korak 2: Filtriraj samo DI: osnutke in pokliči GetJournal za knjižbe
         result = []
-        for jid in di_ids:
+        for row in osnutki_raw:
+            opis = str(row.get("Description", "") or "")
+            if not opis.startswith("DI:"):
+                continue
             try:
-                j      = self.get_journal(jid)
-                status = str(j.get("Status", "")).upper()
-                if status in ("O", "DRAFT", "0", "OSNUTEK"):
-                    result.append(j)
+                j = self.get_journal(row.get("JournalId"))
+                result.append(j)
             except Exception:
                 continue
         return result
 
     def get_journal_drafts_debug(self) -> dict:
-        """Debug: vrne surove podatke iz API za prvi journal."""
-        data = self._get("/journals", params={"CurrentPage": 1, "PageSize": 5})
-        return data
+        """Debug: vrne surove podatke iz API za prvih 5 journalov."""
+        return self._get("/journals", params={"CurrentPage": 1, "PageSize": 5})
 
     def get_journal(self, journal_id: int) -> dict:
-        """Vrne posamezno temeljnico z vsemi knjižbami."""
         return self._get(f"/journals/{journal_id}")
 
     def update_journal(self, journal_id: int, journal_data: dict) -> dict:
-        """Posodobi temeljnico (PUT)."""
         return self._put(f"/journals/{journal_id}", journal_data)
 
     def parse_journal_placila(self, journal: dict) -> dict | None:
         """
-        Iz temeljnice izvleče podatke za blagajno:
-        - datum, analitika, znesek gotovine (1000), znesek kartice (1652)
-        - vrne None če ni ustreznih knjižb
+        Iz temeljnice izvleče podatke za blagajno.
+        Vrne None če ni kontov 1652/1000.
         """
-        entries = journal.get("JournalEntries", [])
-
+        entries      = journal.get("JournalEntries", [])
         datum        = journal.get("JournalDate", "")[:10]
         journal_id   = journal.get("JournalId")
         row_version  = journal.get("RowVersion", "")
@@ -144,13 +138,12 @@ class MinimaxClient:
         data_1000 = None
 
         for entry in entries:
-            account = str(entry.get("Account", {}).get("ID", ""))
+            account      = str(entry.get("Account", {}).get("ID", ""))
             analytic_obj = entry.get("Analytic") or {}
             analytic_code = analytic_obj.get("Code", "") or ""
 
-            # Izvleči šifro blagajne (MPK1/MPK2/MPK3/MPOC)
             import re
-            m = re.match(r"^(MPK\d+|MPOC)", analytic_code)
+            m     = re.match(r"^(MPK\d+|MPOC)", analytic_code)
             sifra = m.group(1) if m else analytic_code.split(" ")[0] if analytic_code else ""
 
             debit  = float(entry.get("Debit", 0) or 0)
@@ -158,31 +151,18 @@ class MinimaxClient:
             znesek = debit if debit > 0 else credit
 
             if account == "1652" and not data_1652:
-                data_1652 = {
-                    "entry_id":    entry.get("JournalEntryId"),
-                    "analitika":   analytic_code,
-                    "sifra":       sifra,
-                    "znesek":      znesek,
-                    "row_version": entry.get("RowVersion", ""),
-                }
+                data_1652 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
             elif account == "1000" and not data_1000:
-                data_1000 = {
-                    "entry_id":    entry.get("JournalEntryId"),
-                    "analitika":   analytic_code,
-                    "sifra":       sifra,
-                    "znesek":      znesek,
-                    "row_version": entry.get("RowVersion", ""),
-                }
+                data_1000 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
 
         if not data_1652 and not data_1000:
             return None
 
-        an_polno = (data_1652 or data_1000)["analitika"]
-        sifra    = (data_1652 or data_1000)["sifra"]
-
+        an_polno        = (data_1652 or data_1000)["analitika"]
+        sifra           = (data_1652 or data_1000)["sifra"]
         znesek_kartica  = data_1652["znesek"] if data_1652 else 0.0
         znesek_gotovina = data_1000["znesek"] if data_1000 else 0.0
-        skupaj = round(znesek_kartica + znesek_gotovina, 2)
+        skupaj          = round(znesek_kartica + znesek_gotovina, 2)
 
         if data_1652 and data_1000:
             rezim = "oba"
@@ -192,30 +172,25 @@ class MinimaxClient:
             rezim = "samo_gotovina"
 
         return {
-            "journal_id":       journal_id,
-            "datum":            datum,
-            "analitika_sifra":  sifra,
-            "analitika_polno":  an_polno,
-            "blagajna_naziv":   BLAGAJNE.get(sifra, sifra),
-            "znesek_kartica":   znesek_kartica,
-            "znesek_gotovina":  znesek_gotovina,
-            "skupaj":           skupaj,
-            "rezim":            rezim,
-            "row_version":      row_version,
-            "entries":          entries,
-            "journal_raw":      journal,
+            "journal_id":      journal_id,
+            "datum":           datum,
+            "analitika_sifra": sifra,
+            "analitika_polno": an_polno,
+            "blagajna_naziv":  BLAGAJNE.get(sifra, sifra),
+            "znesek_kartica":  znesek_kartica,
+            "znesek_gotovina": znesek_gotovina,
+            "skupaj":          skupaj,
+            "rezim":           rezim,
+            "row_version":     row_version,
+            "entries":         entries,
+            "journal_raw":     journal,
         }
 
     def popravi_in_potrdi_journal(self, podatki: dict) -> bool:
-        """
-        Popravi knjižbe 1652/1000 → 120000 in potrdi temeljnico.
-        Vrne True če uspešno.
-        """
+        """Popravi knjižbe 1652/1000 → 120000 in potrdi temeljnico."""
         journal = podatki["journal_raw"]
         entries = journal.get("JournalEntries", [])
 
-        # Poišči stranko "Končni kupec - maloprodaja"
-        # Stranka mora biti objekt z ID-jem — poiščemo iz obstoječih vnosov
         stranka_obj = None
         for e in entries:
             s = e.get("Customer") or e.get("Supplier")
@@ -223,7 +198,6 @@ class MinimaxClient:
                 stranka_obj = s
                 break
 
-        # Če stranke ni v obstoječih vnosih, jo poiščemo
         if not stranka_obj:
             try:
                 stranke = self._get("/customers", params={"Search": "Končni kupec", "PageSize": 10})
@@ -235,8 +209,8 @@ class MinimaxClient:
                 pass
 
         nove_entries = []
-        entry_1652 = None
-        entry_1000 = None
+        entry_1652   = None
+        entry_1000   = None
 
         for entry in entries:
             account = str(entry.get("Account", {}).get("ID", ""))
@@ -245,41 +219,29 @@ class MinimaxClient:
             elif account == "1000":
                 entry_1000 = entry
             else:
-                # Ostale knjižbe pustimo kot so
                 nove_entries.append(entry)
 
-        # Ustvari eno novo knjižbo 120000 z vsoto
-        skupaj = podatki["skupaj"]
-        analitika_id = None
-
-        # Izvleci analitika ID iz obstoječe knjižbe
-        ref_entry = entry_1652 or entry_1000
-        if ref_entry:
-            an = ref_entry.get("Analytic") or {}
-            analitika_id = an.get("ID")
+        ref_entry    = entry_1652 or entry_1000
+        analitika_id = (ref_entry.get("Analytic") or {}).get("ID") if ref_entry else None
 
         nova_knjizba = {
             "Account":  {"ID": 120000},
             "Analytic": {"ID": analitika_id} if analitika_id else None,
             "Customer": stranka_obj,
-            "Debit":    skupaj,
+            "Debit":    podatki["skupaj"],
             "Credit":   0,
         }
         if ref_entry:
-            # Ohrani datum in opis
             nova_knjizba["EntryDate"]   = ref_entry.get("EntryDate")
             nova_knjizba["Description"] = ref_entry.get("Description")
 
         nove_entries.append(nova_knjizba)
 
-        # Posodobi journal objekt
-        journal_update = {
+        self.update_journal(podatki["journal_id"], {
             **journal,
-            "Status":        "P",  # Potrdi
+            "Status":         "P",
             "JournalEntries": nove_entries,
-        }
-
-        self.update_journal(podatki["journal_id"], journal_update)
+        })
         return True
 
     # ── Analitike ─────────────────────────────────────────────────────────────
@@ -297,8 +259,7 @@ class MinimaxClient:
         return result
 
     def get_analytic_id(self, analytic_code: str) -> Optional[int]:
-        rows = self.get_analytics()
-        for row in rows:
+        for row in self.get_analytics():
             if row.get("Code", "").upper() == analytic_code.upper():
                 return row.get("AnalyticId")
         return None
@@ -359,43 +320,35 @@ class MinimaxClient:
 
         item_info = {}
         try:
-            base = self.get_stock_by_lots(warehouse_id)
-            for r in base:
+            for r in self.get_stock_by_lots(warehouse_id):
                 aid = (r.get("Item") or {}).get("ID")
                 if aid:
-                    item_info[aid] = {
-                        "ItemName": r.get("ItemName", ""),
-                        "UnitOfMeasurement": r.get("UnitOfMeasurement", "kg"),
-                    }
+                    item_info[aid] = {"ItemName": r.get("ItemName", ""), "UnitOfMeasurement": r.get("UnitOfMeasurement", "kg")}
         except Exception:
             pass
 
-        lot_qty = defaultdict(lambda: defaultdict(float))
+        lot_qty   = defaultdict(lambda: defaultdict(float))
         date_from = (datetime.now() - timedelta(days=14)).strftime("%Y-%m-%dT00:00:00")
+
         for entry_type, subtype, sign in [("P", "L", 1.0), ("I", "S", -1.0)]:
             page = 1
             while True:
                 try:
-                    params = {
+                    data = self._get("/stockentry", params={
                         "StockEntryType": entry_type, "StockEntrySubtype": subtype,
                         "Status": "P", "DateFrom": date_from,
                         "CurrentPage": page, "PageSize": 50,
-                    }
-                    data = self._get("/stockentry", params=params)
+                    })
                     rows = data.get("Rows", [])
                     for entry in rows:
                         eid = entry.get("StockEntryId")
-                        if not eid:
-                            continue
+                        if not eid: continue
                         try:
-                            detail = self.get_entry_detail(eid)
-                            for row in (detail.get("StockEntryRows") or []):
+                            for row in (self.get_entry_detail(eid).get("StockEntryRows") or []):
                                 wh_from = (row.get("WarehouseFrom") or {}).get("ID")
                                 wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                                if entry_type == "P" and wh_to != warehouse_id:
-                                    continue
-                                if entry_type == "I" and wh_from != warehouse_id:
-                                    continue
+                                if entry_type == "P" and wh_to != warehouse_id: continue
+                                if entry_type == "I" and wh_from != warehouse_id: continue
                                 item_id = (row.get("Item") or {}).get("ID")
                                 batch   = row.get("BatchNumber", "") or ""
                                 qty     = float(row.get("Quantity") or 0)
@@ -406,15 +359,12 @@ class MinimaxClient:
                                             "ItemName": row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
                                             "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
                                         }
-                        except Exception:
-                            continue
+                        except Exception: continue
                     total   = data.get("TotalRows", 0)
                     fetched = (page - 1) * 50 + len(rows)
-                    if fetched >= total:
-                        break
+                    if fetched >= total: break
                     page += 1
-                except Exception:
-                    break
+                except Exception: break
 
         result = []
         for item_id, batches in lot_qty.items():
@@ -422,12 +372,9 @@ class MinimaxClient:
             for batch, qty in batches.items():
                 if qty > 0.001:
                     result.append({
-                        "Item":              {"ID": item_id},
-                        "ItemName":          info.get("ItemName", ""),
-                        "ItemCode":          "",
-                        "BatchNumber":       batch,
-                        "Quantity":          round(qty, 4),
-                        "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
+                        "Item": {"ID": item_id}, "ItemName": info.get("ItemName", ""),
+                        "ItemCode": "", "BatchNumber": batch,
+                        "Quantity": round(qty, 4), "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
                     })
         return result
 
@@ -447,19 +394,15 @@ class MinimaxClient:
                     if rows:
                         eid = rows[0].get("StockEntryId")
                         if eid:
-                            detail = self.get_entry_detail(eid)
-                            for r in (detail.get("StockEntryRows") or []):
-                                batch = r.get("BatchNumber", "")
-                                if batch:
+                            for r in (self.get_entry_detail(eid).get("StockEntryRows") or []):
+                                if r.get("BatchNumber"):
                                     found.append({
-                                        "type":    f"{etype}/{subtype}",
-                                        "batch":   batch,
+                                        "type": f"{etype}/{subtype}", "batch": r.get("BatchNumber"),
                                         "wh_from": (r.get("WarehouseFrom") or {}).get("ID"),
-                                        "wh_to":   (r.get("WarehouseTo") or {}).get("ID"),
-                                        "our_wh":  warehouse_id,
+                                        "wh_to": (r.get("WarehouseTo") or {}).get("ID"),
+                                        "our_wh": warehouse_id,
                                     })
-                except Exception:
-                    pass
+                except Exception: pass
         return {"found": found, "warehouse_id": warehouse_id}
 
     def get_item_units(self, item_ids: list[int]) -> dict[int, str]:
@@ -467,52 +410,37 @@ class MinimaxClient:
         try:
             page = 1
             while True:
-                data = self._get("/items/itemsdata", params={"CurrentPage": page, "PageSize": 500})
-                rows = data.get("Rows") or data if isinstance(data, list) else []
-                if not rows and isinstance(data, dict):
-                    rows = data.get("Rows", [])
+                data    = self._get("/items/itemsdata", params={"CurrentPage": page, "PageSize": 500})
+                rows    = data.get("Rows", []) if isinstance(data, dict) else data
                 for row in rows:
                     aid  = row.get("ItemId") or (row.get("Item") or {}).get("ID")
                     unit = row.get("UnitOfMeasurement") or row.get("Unit") or ""
-                    if aid and unit:
-                        result[int(aid)] = unit
+                    if aid and unit: result[int(aid)] = unit
                 total   = data.get("TotalRows", 0) if isinstance(data, dict) else 0
                 fetched = (page - 1) * 500 + len(rows)
-                if fetched >= total or not rows:
-                    break
+                if fetched >= total or not rows: break
                 page += 1
         except Exception:
             for item_id in item_ids:
                 try:
                     d    = self._get(f"/items/{item_id}")
                     unit = d.get("UnitOfMeasurement") or d.get("Unit") or ""
-                    if unit:
-                        result[item_id] = unit
-                except Exception:
-                    continue
+                    if unit: result[item_id] = unit
+                except Exception: continue
         return result
 
     def get_warehouses(self) -> list[dict]:
-        data = self._get("/warehouses", params={"CurrentPage": 1, "PageSize": 100})
-        return data.get("Rows", [])
+        return self._get("/warehouses", params={"CurrentPage": 1, "PageSize": 100}).get("Rows", [])
 
     def update_entry_with_lots(self, entry_id: int, entry_data: dict, new_rows: list[dict]) -> dict:
         api_rows = []
         for r in new_rows:
-            row = {
-                "Item":     {"ID": r["article_id"]},
-                "Quantity": r["quantity_assigned"],
-                "Note":     r.get("opis", "") or "",
-            }
-            if r.get("lot"):
-                row["BatchNumber"] = r["lot"]
-            if r.get("selling_price") is not None:
-                row["Price"] = r["selling_price"]
-            if r.get("unit"):
-                row["UnitOfMeasurement"] = r["unit"]
+            row = {"Item": {"ID": r["article_id"]}, "Quantity": r["quantity_assigned"], "Note": r.get("opis", "") or ""}
+            if r.get("lot"):            row["BatchNumber"]       = r["lot"]
+            if r.get("selling_price") is not None: row["Price"] = r["selling_price"]
+            if r.get("unit"):           row["UnitOfMeasurement"] = r["unit"]
             api_rows.append(row)
-        body = {**entry_data, "StockEntryItems": api_rows}
-        return self._put(f"/stockentry/{entry_id}", body)
+        return self._put(f"/stockentry/{entry_id}", {**entry_data, "StockEntryItems": api_rows})
 
 
 # ── Pretvorba ─────────────────────────────────────────────────────────────────
@@ -520,30 +448,31 @@ class MinimaxClient:
 def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for row in stock_rows:
-        name  = row.get("ItemName", "")
-        code  = row.get("ItemCode", "") or ""
         aid   = row.get("Item", {}).get("ID")
         batch = row.get("BatchNumber", "")
         qty   = float(row.get("Quantity") or 0)
-        unit  = row.get("UnitOfMeasurement") or row.get("Unit") or ""
-        if not aid or qty <= 0:
-            continue
+        if not aid or qty <= 0: continue
         key = str(aid)
         if key not in result:
-            result[key] = {"article_id": aid, "article_code": code, "article_name": name, "lots": []}
+            result[key] = {
+                "article_id": aid, "article_code": row.get("ItemCode", "") or "",
+                "article_name": row.get("ItemName", ""), "lots": [],
+            }
         if batch:
-            result[key]["lots"].append({"code": batch, "quantity": qty, "unit": unit})
+            result[key]["lots"].append({
+                "code": batch, "quantity": qty,
+                "unit": row.get("UnitOfMeasurement") or row.get("Unit") or "",
+            })
     return result
 
 
 def parse_entry_to_lines(entry_detail: dict, item_units: dict = None) -> list[dict]:
-    rows  = entry_detail.get("StockEntryRows") or []
     lines = []
-    for i, item in enumerate(rows):
-        item_fk  = item.get("Item") or {}
-        item_id  = item_fk.get("ID")
-        unit = (item.get("UnitOfMeasurement") or item.get("Unit") or
-                (item_units.get(item_id) if item_units and item_id else None) or "")
+    for i, item in enumerate(entry_detail.get("StockEntryRows") or []):
+        item_fk = item.get("Item") or {}
+        item_id = item_fk.get("ID")
+        unit    = (item.get("UnitOfMeasurement") or item.get("Unit") or
+                   (item_units.get(item_id) if item_units and item_id else None) or "")
         lines.append({
             "row_id":             i,
             "stock_entry_row_id": item.get("StockEntryRowId"),
