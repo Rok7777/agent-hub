@@ -121,29 +121,40 @@ class MinimaxClient:
         return result
 
     def get_journal_drafts_debug(self) -> dict:
-        """Debug: test JournalType=DI filter + GetJournal za Status."""
-        # Test 1: filter po vrsti DI
-        data = self._get("/journals", params={
-            "JournalType": "DI",
-            "CurrentPage": 1,
-            "PageSize":    5,
-        })
-        rows = data.get("Rows", [])
-
-        # Test 2: GetJournal za prvega da vidimo Status
-        sample = None
-        if rows:
+        """Debug: pokaži Status za znana osnutka + vse možne statuse DI journalov."""
+        # Direktno pokliči GetJournal za znana osnutka
+        statusi = {}
+        for jid in [225001987, 225001984]:
             try:
-                sample = self.get_journal(rows[0].get("JournalId"))
-            except Exception:
-                pass
+                j = self.get_journal(jid)
+                statusi[jid] = {
+                    "Status":      j.get("Status"),
+                    "Description": j.get("Description"),
+                    "JournalDate": j.get("JournalDate", "")[:10],
+                }
+            except Exception as e:
+                statusi[jid] = {"error": str(e)}
+
+        # Pokaži vse unikatne statuse med DI journali (prve 3 strani)
+        vse_statuse = set()
+        for page in range(1, 4):
+            data = self._get("/journals", params={
+                "JournalType": "DI",
+                "CurrentPage": page,
+                "PageSize":    50,
+            })
+            for row in data.get("Rows", []):
+                try:
+                    j = self.get_journal(row.get("JournalId"))
+                    vse_statuse.add(j.get("Status"))
+                except Exception:
+                    pass
+            if not data.get("Rows"):
+                break
 
         return {
-            "test_JournalType_DI": {
-                "TotalRows": data.get("TotalRows"),
-                "Rows":      rows,
-            },
-            "primer_GetJournal_Status": sample.get("Status") if sample else None,
+            "znana_osnutka":     statusi,
+            "vsi_statusi_v_DI":  list(vse_statuse),
         }
 
     def get_journal(self, journal_id: int) -> dict:
