@@ -105,7 +105,7 @@ def render():
                 st.sidebar.error(f"Napaka: {e}")
 
     # ── Tabs za lokacije ──────────────────────────────────────────────────────
-    tabs    = st.tabs(["🚐 MPK1 — Potujoča 1", "🚐 MPK2 — Potujoča 2", "🚐 MPK3 — Potujoča 3", "🏪 MPOC — Ribarnica Domžale"])
+    tabs     = st.tabs(["🚐 MPK1 — Potujoča 1", "🚐 MPK2 — Potujoča 2", "🚐 MPK3 — Potujoča 3", "🏪 MPOC — Ribarnica Domžale"])
     LOC_KEYS = ["MPK1", "MPK2", "MPK3", "MPOC"]
 
     for tab, loc_key in zip(tabs, LOC_KEYS):
@@ -176,6 +176,7 @@ def render():
                             selected_ids,
                             key=lambda eid: str(next((d.get("Date","") for d in drafts if d.get("StockEntryId") == eid), ""))
                         )
+
                         all_entry_data, all_doc_lines, all_item_ids = {}, {}, set()
                         for eid in sorted_ids:
                             ed = cli.get_entry_detail(eid)
@@ -184,17 +185,24 @@ def render():
                             all_doc_lines[eid]  = dl
                             for l in dl:
                                 if l.get("article_id"): all_item_ids.add(l["article_id"])
+
                         item_units = cli.get_item_units(list(all_item_ids))
                         for eid in sorted_ids:
                             all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
+
                         stock_raw = cli.get_stock_by_lots(wh_id)
                         if not any(r.get("BatchNumber") for r in stock_raw) and all_item_ids:
                             stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
                         stock = parse_stock_to_engine_format(stock_raw)
-                        today = datetime.now()
+
                         shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
-                        all_results     = {}
+                        all_results    = {}
+
+                        # Za vsak artikel shrani datum ZADNJEGA dokumenta kjer se pojavi
+                        # article_dates: {article_id: datetime}
+                        article_dates   = {}
                         doc_article_ids = set()
+
                         for eid in sorted_ids:
                             d_info = next((d for d in drafts if d.get("StockEntryId") == eid), {})
                             doc_date_str = str(d_info.get("Date", ""))[:10]
@@ -202,20 +210,25 @@ def render():
                                 doc_date = datetime.strptime(doc_date_str, "%Y-%m-%d")
                             except Exception:
                                 doc_date = datetime.now()
+
                             all_results[eid] = assign_lots_with_virtual(
                                 all_doc_lines[eid], stock, shared_virtual, doc_date
                             )
-                            for l in all_doc_lines[eid]:
-                                if l.get("article_id"):
-                                    doc_article_ids.add(l["article_id"])
 
-                        last_eid = sorted_ids[-1]
-                        last_d   = next((d for d in drafts if d.get("StockEntryId") == last_eid), {})
-                        try:
-                            warn_date = datetime.strptime(str(last_d.get("Date",""))[:10], "%Y-%m-%d")
-                        except Exception:
-                            warn_date = datetime.now()
-                        old_lot_warnings = check_old_lots(stock, warn_date)
+                            for l in all_doc_lines[eid]:
+                                aid = l.get("article_id")
+                                if aid:
+                                    doc_article_ids.add(aid)
+                                    # Posodobi na najnovejši datum za ta artikel
+                                    if aid not in article_dates or doc_date > article_dates[aid]:
+                                        article_dates[aid] = doc_date
+
+                        old_lot_warnings = check_old_lots(
+                            stock, datetime.now(),
+                            article_ids=doc_article_ids,
+                            article_dates=article_dates,
+                        )
+
                         st.session_state[f"multi_result_{loc_key}"] = {
                             "sorted_ids": sorted_ids, "all_results": all_results,
                             "all_entry_data": all_entry_data,
@@ -270,7 +283,11 @@ def render():
                     doc_date = str(d_e.get('Date',''))[:10]
                     for i, l in enumerate(lines_e, 1):
                         if l["status"] in ("no_match", "no_lots", "partial"):
-                            status_opis = {"no_match": "Ni zaloge za artikel", "no_lots": "Ni ustreznih lotov", "partial": "Premalo zaloge"}.get(l["status"], l["status"])
+                            status_opis = {
+                                "no_match": "Ni zaloge za artikel",
+                                "no_lots":  "Ni ustreznih lotov",
+                                "partial":  "Premalo zaloge",
+                            }.get(l["status"], l["status"])
                             detail = l.get("opis", "") or ""
                             if "[" in detail:
                                 detail = detail[detail.find("[")+1:detail.rfind("]")]
@@ -296,8 +313,15 @@ def render():
                 old_lots = multi_res.get("old_lot_warnings", [])
                 if old_lots:
                     with st.expander(f"⏰ Stari loti na zalogi ({len(old_lots)} opozoril)"):
-                        df_old = pd.DataFrame([{"Artikel": w["article"], "Lot": w["lot"], "Dni star": w["days_old"], "Qty": f"{w['qty']} {w['unit']}", "Opozorilo": w["warning"]} for w in old_lots])
+                        df_old = pd.DataFrame([{
+                            "Artikel":   w["article"],
+                            "Lot":       w["lot"],
+                            "Dni star":  w["days_old"],
+                            "Qty":       f"{w['qty']} {w['unit']}",
+                            "Opozorilo": w["warning"],
+                        } for w in old_lots])
                         st.dataframe(df_old, use_container_width=True, hide_index=True)
+                        st.caption("Starost lota je računana na datum zadnjega dokumenta kjer se artikel pojavi.")
 
                 if total_partial + total_none > 0:
                     st.warning(f"⚠️ {total_partial + total_none} vrstic(a) brez lota. Preverite ročno pred potrditvijo.")
@@ -305,7 +329,10 @@ def render():
                 st.divider()
                 col_save, col_cancel = st.columns(2)
                 with col_save:
-                    save_all_btn = st.button(f"💾 Shrani vse v Minimax ({len(sorted_ids)} dokumentov)", key=f"save_all_{loc_key}", type="primary", use_container_width=True)
+                    save_all_btn = st.button(
+                        f"💾 Shrani vse v Minimax ({len(sorted_ids)} dokumentov)",
+                        key=f"save_all_{loc_key}", type="primary", use_container_width=True,
+                    )
                 with col_cancel:
                     cancel_btn = st.button("✖ Zavrzi rezultate", key=f"cancel_multi_{loc_key}", use_container_width=True)
 
@@ -320,7 +347,10 @@ def render():
                             cli = get_client()
                             for eid in sorted_ids:
                                 try:
-                                    cli.update_entry_with_lots(entry_id=eid, entry_data=all_entry_data[eid], new_rows=all_results[eid])
+                                    cli.update_entry_with_lots(
+                                        entry_id=eid, entry_data=all_entry_data[eid],
+                                        new_rows=all_results[eid],
+                                    )
                                     saved += 1
                                 except Exception as e:
                                     errors.append(f"IS-{drafts_map.get(eid,{}).get('Number','?')}: {e}")
