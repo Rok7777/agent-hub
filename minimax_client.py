@@ -131,7 +131,7 @@ class MinimaxClient:
             except Exception as e:
                 k2.append({"id": j.get("JournalId"), "napaka": str(e)})
 
-        # Korak 3: direktno za znana osnutka
+        # Korak 3: pokaži cel Account objekt
         k3 = {}
         for jid in [225001987, 225001984]:
             try:
@@ -140,8 +140,7 @@ class MinimaxClient:
                 k3[jid] = {
                     "Status":        j.get("Status"),
                     "entries_count": len(entries),
-                    "konti":         [str(e.get("Account", {}).get("ID", "")) for e in entries],
-                    "analitike":     [(e.get("Analytic") or {}).get("Code", "") for e in entries],
+                    "entries_raw":   [e.get("Account") for e in entries[:6]],
                 }
             except Exception as e:
                 k3[jid] = {"napaka": str(e)}
