@@ -94,16 +94,13 @@ class MinimaxClient:
         page   = 1
         while True:
             data = self._get("/journals", params={
-                "DateFrom":    date_from,
-                "DateTo":      date_to,
+                "JournalType": "DI",
                 "CurrentPage": page,
                 "PageSize":    50,
             })
             rows = data.get("Rows", [])
             for row in rows:
-                opis = str(row.get("Description", "") or "")
-                if opis.startswith("DI:"):
-                    di_ids.append(row.get("JournalId"))
+                di_ids.append(row.get("JournalId"))
             total   = data.get("TotalRows", 0)
             fetched = (page - 1) * 50 + len(rows)
             if fetched >= total or not rows:
@@ -111,12 +108,13 @@ class MinimaxClient:
             page += 1
 
         # Za vsak DI pokliči GetJournal — ta vrne Status
+        # Status "O" = osnutek (kot vidimo iz GetJournal response)
         result = []
         for jid in di_ids:
             try:
                 j      = self.get_journal(jid)
-                status = str(j.get("Status", "")).upper()
-                if status in ("O", "DRAFT", "0", "OSNUTEK"):
+                status = str(j.get("Status", ""))
+                if status == "O":
                     result.append(j)
             except Exception:
                 continue
