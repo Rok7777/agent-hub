@@ -80,8 +80,11 @@ class MinimaxClient:
     def get_journal_drafts(self) -> list[dict]:
         """
         Vrne osnutke temeljnic tipa DI (dnevni iztržek iz Shopsy).
-        Filtrira po datumu zadnjih 60 dni — izogne se bodočim FT razmejitam.
-        Iz rezultatov vzame samo tiste z opisom DI: in pokliče GetJournal.
+        Ker API ne podpira filtra po statusu v seznamu:
+          1. Prelistamo vse strani z datumskim filtrom (zadnjih 60 dni)
+          2. Zberemo samo JournalId kjer opis začne z "DI:"
+          3. Za vsak DI pokličemo GetJournal ki vrne pravi Status
+          4. Obdržimo samo tiste s Status=O (osnutek)
         """
         from datetime import timedelta
         date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
@@ -107,7 +110,7 @@ class MinimaxClient:
                 break
             page += 1
 
-        # Za vsak DI journal pokliči GetJournal in filtriraj Status=O
+        # Za vsak DI pokliči GetJournal — ta vrne Status
         result = []
         for jid in di_ids:
             try:
@@ -120,16 +123,30 @@ class MinimaxClient:
         return result
 
     def get_journal_drafts_debug(self) -> dict:
-        """Debug: vrne surove podatke — zadnjih 60 dni."""
-        from datetime import timedelta
-        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
-        date_to   = datetime.now().strftime("%Y-%m-%d")
-        return self._get("/journals", params={
-            "DateFrom":    date_from,
-            "DateTo":      date_to,
+        """Debug: test JournalType=DI filter + GetJournal za Status."""
+        # Test 1: filter po vrsti DI
+        data = self._get("/journals", params={
+            "JournalType": "DI",
             "CurrentPage": 1,
             "PageSize":    5,
         })
+        rows = data.get("Rows", [])
+
+        # Test 2: GetJournal za prvega da vidimo Status
+        sample = None
+        if rows:
+            try:
+                sample = self.get_journal(rows[0].get("JournalId"))
+            except Exception:
+                pass
+
+        return {
+            "test_JournalType_DI": {
+                "TotalRows": data.get("TotalRows"),
+                "Rows":      rows,
+            },
+            "primer_GetJournal_Status": sample.get("Status") if sample else None,
+        }
 
     def get_journal(self, journal_id: int) -> dict:
         return self._get(f"/journals/{journal_id}")
