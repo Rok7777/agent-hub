@@ -1,528 +1,649 @@
 """
-Agent Hub — Avtomatska dodelitev lotov za maloprodajne dokumente v Minimaxu.
+Lot assignment engine — FIFO + smart matching za ribje artikle.
 """
 
-import streamlit as st
-import pandas as pd
-from datetime import datetime
-import traceback
+from datetime import datetime, timedelta
+from typing import Optional
+import re
 
-from minimax_client import (
-    MinimaxClient, LOCATIONS,
-    parse_stock_to_engine_format, parse_entry_to_lines,
+
+# ─── Lot date parsing ─────────────────────────────────────────────────────────
+
+def parse_lot_date(lot_code: str) -> Optional[datetime]:
+    """
+    Zadnjih 6 znakov lota je vedno DDMMYY.
+    Primer: PR300326 → 30/03/2026, FP271125 → 27/11/2025
+    """
+    if not lot_code or len(lot_code) < 6:
+        return None
+    try:
+        return datetime.strptime(lot_code[-6:], "%d%m%y")
+    except ValueError:
+        return None
+
+
+# ─── Pogoji svežosti artikla ──────────────────────────────────────────────────
+
+_FRESH_RE = re.compile('sve[žz]|sveži|svežih|svežim|bakala', re.IGNORECASE)
+_DELI_RE  = re.compile(r'^\(deli', re.IGNORECASE)
+_FROZEN_RE = re.compile(r'zamrznjen|odtaljen', re.IGNORECASE)
+
+_SEAFOOD_RE = re.compile(
+    'brancin|orada|losos|postrv|sard|oslič|oslic|tun|lignji|kozice|'
+    'skampi|škampi|klapavice|ostriga|hobotnica|sipa|lubin|kovac|kovač|'
+    'šur|platesa|trska|polenovka|zobatec|špar|kirnja|arbun|morsk',
+    re.IGNORECASE
 )
-from lot_engine import assign_lots, assign_lots_with_virtual, check_old_lots
+_MAQFINO_RE   = re.compile('maQfino', re.IGNORECASE)
+_TESTENINE_RE = re.compile('testenin', re.IGNORECASE)
 
-# ── Nastavitve strani ─────────────────────────────────────────────────────────
+def is_seafood(name: str) -> bool:
+    """Vrne True če je artikel riba ali morska hrana."""
+    return bool(_SEAFOOD_RE.search(name))
 
-st.set_page_config(
-    page_title="Agent Hub | Lot dodelitev",
-    page_icon="🐟",
-    layout="wide",
-)
+def is_fresh_or_deli(name: str) -> bool:
+    """Vrne True če artikel zahteva 14-dnevno mejo lotov (sveže ribe)."""
+    return bool(_DELI_RE.search(name) or _FRESH_RE.search(name))
 
-st.title("🐟 Agent Hub — Dodelitev lotov")
-st.caption("Avtomatska FIFO dodelitev serij za maloprodajne dokumente v Minimaxu")
-
-# ── Stranska vrstica: nastavitve ──────────────────────────────────────────────
-
-# ── Branje iz Streamlit Secrets (ali privzetih vrednosti) ──────────────────
-def _secret(key, default=""):
-    try:
-        return st.secrets[key]
-    except Exception:
-        return default
-
-with st.sidebar:
-    st.header("⚙️ Nastavitve API")
-
-    with st.expander("Minimax dostop", expanded=True):
-        st.caption("Podatki odjemalca (iz emaila Minimax podpore):")
-        client_id     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID", "OltreCon"))
-        client_secret = st.text_input("Client Secret",    value=_secret("MINIMAX_CLIENT_SECRET", ""), type="password")
-        st.caption("Podatki uporabnika:")
-        username      = st.text_input("Uporabniško ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
-        password      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD", ""), type="password")
-        st.caption("Organizacija:")
-        org_id        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID", "171038"))
-
-    st.divider()
-
-    with st.expander("Kode skladišč", expanded=True):
-        wh_mpk1 = st.text_input("MPK1 — Potujoča 1",  value=_secret("WH_MPK1", "MP-K1"))
-        wh_mpk2 = st.text_input("MPK2 — Potujoča 2",  value=_secret("WH_MPK2", "MP-K2"))
-        wh_mpk3 = st.text_input("MPK3 — Potujoča 3",  value=_secret("WH_MPK3", "MP-K3"))
-        wh_mpoc = st.text_input("MPOC — Rib. Domžale", value=_secret("WH_MPOC", "MP-RD"))
-
-    st.divider()
-
-    with st.expander("Kode analitik", expanded=True):
-        an_mpk1 = st.text_input("Analytic koda MPK1", value=_secret("AN_MPK1", "MPK1"))
-        an_mpk2 = st.text_input("Analytic koda MPK2", value=_secret("AN_MPK2", "MPK2"))
-        an_mpk3 = st.text_input("Analytic koda MPK3", value=_secret("AN_MPK3", "MPK3"))
-        an_mpoc = st.text_input("Analytic koda MPOC", value=_secret("AN_MPOC", "MPOC"))
-
-    st.divider()
-    if st.button("🔍 Poišči ID-je analitik avtomatsko"):
-        st.session_state["auto_find_analytics"] = True
-    if st.button("🔍 Poišči ID-je skladišč avtomatsko"):
-        st.session_state["auto_find_warehouses"] = True
-    if st.button("🔧 Diagnostika lotov (MPK2)"):
-        st.session_state["diagnose_lots"] = True
+def get_lot_warning_days(name: str) -> int:
+    """
+    Vrne mejo v dnevih za opozorilo starega lota.
+    0 = ni opozorila za to kategorijo.
+    """
+    if is_fresh_or_deli(name):
+        return 10
+    if _FROZEN_RE.search(name):
+        return 330   # 11 mesecev
+    if _MAQFINO_RE.search(name):
+        return 150   # 5 mesecev
+    if _TESTENINE_RE.search(name):
+        return 1095  # 3 leta
+    return 0         # vse ostalo — brez opozorila
 
 
 
-# ── Preverjanje nastavitev ────────────────────────────────────────────────────
+# ─── Kalo faktor ─────────────────────────────────────────────────────────────
 
-def _check_config() -> bool:
-    if not all([username, password, client_id, client_secret, org_id]):
-        st.warning("⚠️ Izpolnite vse nastavitve API v stranski vrstici.")
-        return False
-    return True
+_SARDELA_RE = re.compile('sard', re.IGNORECASE)
+_LOSOS_RE   = re.compile('losos', re.IGNORECASE)
+_TRIM_RE    = re.compile('trim', re.IGNORECASE)
 
-def _make_client() -> MinimaxClient:
-    return MinimaxClient(
-        username      = username,
-        password      = password,
-        client_id     = client_id,
-        client_secret = client_secret,
-        org_id        = int(org_id),
-    )
+KALO_FACTOR = 1.10  # 10% kalo za sardele in losos (brez trim)
 
-# Kode ki jih je vnesel uporabnik — numerične ID-je poiščemo dinamično
-WH_CODES = {"MPK1": wh_mpk1, "MPK2": wh_mpk2, "MPK3": wh_mpk3, "MPOC": wh_mpoc}
-AN_CODES = {"MPK1": an_mpk1, "MPK2": an_mpk2, "MPK3": an_mpk3, "MPOC": an_mpoc}
+def get_kalo_factor(article_name: str) -> float:
+    """Vrne kalo faktor za artikel. 1.10 za sardele in losos (brez trim)."""
+    if _SARDELA_RE.search(article_name):
+        return KALO_FACTOR
+    if _LOSOS_RE.search(article_name) and not _TRIM_RE.search(article_name):
+        return KALO_FACTOR
+    return 1.0
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _resolve_ids(_username, _password, _client_id, _client_secret, _org_id):
-    """Poišče numerične ID-je skladišč in analitik iz kod. Cache 1h."""
-    cli = MinimaxClient(
-        username=_username, password=_password,
-        client_id=_client_id, client_secret=_client_secret,
-        org_id=int(_org_id),
-    )
-    wh_map, an_map = {}, {}
-    try:
-        for row in cli.get_warehouses():
-            code = (row.get("Code") or "").strip().upper()
-            wid  = row.get("WarehouseId") or row.get("ID")
-            if code and wid:
-                wh_map[code] = int(wid)
-    except Exception:
-        pass
-    try:
-        for row in cli.get_analytics():
-            code = (row.get("Code") or "").strip().upper()
-            aid  = row.get("AnalyticId")
-            if code and aid:
-                an_map[code] = int(aid)
-    except Exception:
-        pass
-    return wh_map, an_map
 
-def _get_wh_id(loc_key: str) -> int:
-    code = WH_CODES.get(loc_key, "").strip().upper()
-    if not code:
-        return 0
-    if all([username, password, client_id, client_secret, org_id]):
-        wh_map, _ = _resolve_ids(username, password, client_id, client_secret, org_id)
-        return wh_map.get(code, 0)
-    return 0
+# ─── Opozorilo starih lotov ───────────────────────────────────────────────────
 
-def _get_an_id(loc_key: str) -> int:
-    code = AN_CODES.get(loc_key, "").strip().upper()
-    if not code:
-        return 0
-    if all([username, password, client_id, client_secret, org_id]):
-        _, an_map = _resolve_ids(username, password, client_id, client_secret, org_id)
-        return an_map.get(code, 0)
-    return 0
+def check_old_lots(stock: dict, today: datetime, article_ids: set = None, article_dates: dict = None) -> list[dict]:
+    """
+    Preveri zalogo za stare lote ki se niso razknjižili.
+    article_ids:   če podan, preveri samo te artikle.
+    article_dates: {article_id: datetime} — za vsak artikel datum zadnjega dokumenta
+                   v katerem se pojavi. Če ni podano, se uporabi today za vse.
+    """
+    warnings = []
+    for key, data in stock.items():
+        art_name  = data.get('article_name', key)
+        # Če je podan seznam article_ids, preveri samo te
+        if article_ids is not None:
+            art_id = data.get('article_id')
+            if art_id not in article_ids:
+                continue
+        threshold = get_lot_warning_days(art_name)
+        if threshold == 0:
+            continue  # ta kategorija nima opozoril
 
-# ── Auto-iskanje analitik ─────────────────────────────────────────────────────
+        # Datum za ta artikel: zadnji dokument kjer se artikel pojavi
+        art_id   = data.get('article_id')
+        ref_date = (article_dates.get(art_id) if article_dates and art_id else None) or today
 
-if st.session_state.get("auto_find_analytics") and _check_config():
-    st.session_state.pop("auto_find_analytics")
-    with st.spinner("Iščem analitike v Minimaxu ..."):
-        try:
-            cli  = _make_client()
-            rows = cli.get_analytics()
-            df   = pd.DataFrame([{
-                "Koda":       r.get("Code",""),
-                "Naziv":      r.get("Name",""),
-                "Analytic ID": r.get("AnalyticId",""),
-            } for r in rows])
-            st.sidebar.success("✅ Analitike najdene!")
-            st.sidebar.dataframe(df, use_container_width=True)
-            st.sidebar.caption("Prekopirajte ID-je v polja zgoraj.")
-        except Exception as e:
-            st.sidebar.error(f"Napaka: {e}")
+        for lot in data.get('lots', []):
+            if lot.get('quantity', 0) <= 0:
+                continue
+            lot_date = parse_lot_date(lot['code'])
+            if lot_date is None:
+                continue
+            days_old = (ref_date - lot_date).days
+            if days_old >= threshold:
+                warnings.append({
+                    'article':  art_name,
+                    'lot':      lot['code'],
+                    'days_old': days_old,
+                    'qty':      round(lot['quantity'], 3),
+                    'unit':     lot.get('unit', 'kg'),
+                    'warning':  f"Lot star {days_old} dni (opozorilo pri {threshold} dneh)",
+                })
+    warnings.sort(key=lambda x: x['days_old'], reverse=True)
+    return warnings
 
-# ── Diagnostika lotov ────────────────────────────────────────────────────────
 
-if st.session_state.get("diagnose_lots") and _check_config():
-    st.session_state.pop("diagnose_lots")
-    with st.spinner("Iščem dokumente z loti za MPK2 ..."):
-        try:
-            cli  = _make_client()
-            wh   = _get_wh_id("MPK2")
-            diag = cli.diagnose_lots(wh)
-            st.sidebar.success("✅ Diagnostika:")
-            st.sidebar.write(f"Warehouse ID: {diag['warehouse_id']}")
-            if diag['found']:
-                for f in diag['found']:
-                    st.sidebar.write(f"Tip {f['type']}: lot={f['batch']}, wh_from={f['wh_from']}, wh_to={f['wh_to']}")
-            else:
-                st.sidebar.warning("Ni dokumentov z loti v zadnjih 14 dneh!")
-        except Exception as e:
-            st.sidebar.error(f"Napaka: {e}")
+# ─── Filtriranje lotov (FIFO) ─────────────────────────────────────────────────
 
-# ── Auto-iskanje skladišč ────────────────────────────────────────────────────
+def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> list[dict]:
+    """
+    Vrne lote ustrezne za artikel, sortirane FIFO (najstarejši prvi).
+    Za sveže: normalni loti (<=14 dni) + aged loti (14-30 dni, za prisilni write-off).
+    Za zamrznjene: vsi loti.
+    """
+    needs_14d = is_fresh_or_deli(article_name)
+    cutoff    = today - timedelta(days=14) if needs_14d else None
+    aged_cutoff = today - timedelta(days=30) if needs_14d else None
 
-if st.session_state.get("auto_find_warehouses") and _check_config():
-    st.session_state.pop("auto_find_warehouses")
-    with st.spinner("Iščem skladišča v Minimaxu ..."):
-        try:
-            cli  = _make_client()
-            rows = cli.get_warehouses()
-            df   = pd.DataFrame([{
-                "Naziv":        r.get("Name",""),
-                "Koda":         r.get("Code",""),
-                "Warehouse ID": r.get("WarehouseId") or r.get("ID",""),
-            } for r in rows])
-            st.sidebar.success("✅ Skladišča najdena!")
-            st.sidebar.dataframe(df, use_container_width=True)
-            st.sidebar.caption("Poiščite MPK1/MPK2/MPK3/MPOC in prekopirajte ID-je v polja zgoraj.")
-        except Exception as e:
-            st.sidebar.error(f"Napaka: {e}")
-
-# ── Zavihki za lokacije ───────────────────────────────────────────────────────
-
-tabs = st.tabs([
-    "🚐 MPK1 — Potujoča 1",
-    "🚐 MPK2 — Potujoča 2",
-    "🚐 MPK3 — Potujoča 3",
-    "🏪 MPOC — Ribarnica Domžale",
-])
-
-LOC_KEYS = ["MPK1", "MPK2", "MPK3", "MPOC"]
-
-for tab, loc_key in zip(tabs, LOC_KEYS):
-    with tab:
-        loc_name  = LOCATIONS[loc_key]["name"]
-        wh_id     = _get_wh_id(loc_key)
-        an_id     = _get_an_id(loc_key)
-
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.subheader(f"{loc_name}")
-        with col2:
-            find_btn = st.button(
-                f"🔍 Poišči osnutke",
-                key=f"find_{loc_key}",
-                use_container_width=True,
-            )
-
-        if find_btn:
-            if not _check_config():
-                st.stop()
-            if an_id == 0:
-                # Poskusi prisilno razrešiti analitike
-                with st.spinner("Iščem analitike..."):
-                    try:
-                        cli2 = _make_client()
-                        _resolve_ids.clear()
-                        an_id = _get_an_id(loc_key)
-                    except Exception:
-                        pass
-            if an_id == 0:
-                st.error("Ne najdem analitike za to lokacijo. Preverite kodo analitike v nastavitvah.")
-                st.stop()
-
-            with st.spinner("Iščem osnutke dokumentov ..."):
-                try:
-                    cli     = _make_client()
-                    drafts  = cli.get_draft_entries(an_id)
-                    st.session_state[f"drafts_{loc_key}"] = drafts
-                except Exception as e:
-                    st.error(f"Napaka pri branju osnutkov: {e}")
-                    st.session_state[f"drafts_{loc_key}"] = []
-
-        drafts = st.session_state.get(f"drafts_{loc_key}", None)
-
-        if drafts is None:
-            st.info("Kliknite 'Poišči osnutke' za prikaz čakajočih dokumentov.")
+    result = []
+    for lot in lots:
+        if lot.get('quantity', 0) <= 0:
             continue
-
-        if not drafts:
-            st.success("✅ Ni čakajočih osnutkov za to lokacijo.")
+        d = parse_lot_date(lot['code'])
+        if d is None:
+            result.append({**lot, '_date': datetime(2099, 1, 1), '_aged': False})
             continue
+        # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
+        if needs_14d and (today - d).days > 30:
+            continue
+        days = (today - d).days
+        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 14 <= days <= 30)})
 
-        st.write(f"Najdenih **{len(drafts)}** osnutkov:")
+    result.sort(key=lambda x: x['_date'])
+    return result
 
-        # ── Checkboxi za izbiro dokumentov ───────────────────────────────────
-        st.caption("Izberite dokumente za obdelavo (kronološki vrstni red):")
-        select_all = st.checkbox("☑ Izberi vse", key=f"sel_all_{loc_key}", value=True)
 
-        selected_ids = []
-        for d in sorted(drafts, key=lambda x: str(x.get("Date",""))):
-            label = f"IS-{d.get('Number','?')} — {str(d.get('Date',''))[:10]}"
-            cb_key = f"cb_{loc_key}_{d.get('StockEntryId')}"
-            checked = st.checkbox(label, key=cb_key, value=select_all)
-            if checked:
-                selected_ids.append(d.get("StockEntryId"))
+# ─── Smart matching — razčlenjevanje artiklov ─────────────────────────────────
 
-        st.divider()
+_CODE_RE   = re.compile(r'^\(([^)]+)\)\s*')
+_FILLET_RE = re.compile(r'\bfil[ei]', re.IGNORECASE)
 
-        run_btn = st.button(
-            f"⚡ Obdelaj vse označene osnutke ({len(selected_ids)})",
-            key=f"run_{loc_key}",
-            type="primary",
-            use_container_width=True,
-            disabled=len(selected_ids) == 0,
+_SIZE_G = [
+    (0,100),(100,200),(200,300),(300,400),(400,600),
+    (600,800),(800,1000),(1000,1500),(1500,2000),
+    (2000,3000),(3000,5000),(5000,10000)
+]
+_SIZE_KG = [
+    (0,1),(1,2),(2,3),(3,4),(4,5),(5,7),(7,10),(10,20),(20,50)
+]
+_SIZE_COUNT = [
+    (1,5),(5,10),(10,20),(20,40),(40,80),(80,120),(120,200)
+]
+
+_ORIGINS = [
+    'HRVAŠKA','GRČIJA','NORVEŠKA','TURČIJA','ŠPANIJA','ITALIJA',
+    'PORTUGAL','MAROKO','PERU','VIETNAM','INDIJA','INDONEZIJA',
+    'FILIPINI','TAJSKA','SLOVENIJA','FRANCIJA','DANSKA','ŠKOTSKA',
+]
+
+def _get_code(name: str) -> Optional[str]:
+    m = _CODE_RE.match(name.strip())
+    return m.group(1) if m else None
+
+def _strip_code(name: str) -> str:
+    return _CODE_RE.sub('', name).strip()
+
+def _get_species(name: str) -> Optional[str]:
+    """Prva beseda po šifri (npr. BRANCIN, ORADA, LIGNJI ...)"""
+    clean = _strip_code(name).upper()
+    # vzami vse do prve vejice ali oklepaja
+    seg = re.split(r'[,\(]', clean)[0].strip()
+    return seg if seg else None
+
+def _has_fillet(name: str) -> bool:
+    return bool(_FILLET_RE.search(name))
+
+def _get_size(name: str) -> Optional[tuple]:
+    m = re.search(r'(\d+)[–\-](\d+)\s*(g|kg)?', name, re.IGNORECASE)
+    if not m:
+        return None
+    lo, hi = int(m.group(1)), int(m.group(2))
+    unit = (m.group(3) or '').lower()
+    return (lo, hi, unit)
+
+def _size_distance(s1: Optional[tuple], s2: Optional[tuple]) -> int:
+    if s1 is None or s2 is None:
+        return 3
+    lo1, hi1, u1 = s1
+    lo2, hi2, u2 = s2
+    # Normalizacija na grame
+    if u1 == 'kg': lo1, hi1, u1 = lo1*1000, hi1*1000, 'g'
+    if u2 == 'kg': lo2, hi2, u2 = lo2*1000, hi2*1000, 'g'
+    # Kosi (škampi, kozice) — manjše vrednosti
+    if not u1 and not u2 and lo1 < 200 and lo2 < 200:
+        seq = _SIZE_COUNT
+    elif lo1 >= 1000 or lo2 >= 1000:
+        seq = _SIZE_KG
+        lo1,hi1 = lo1/1000, hi1/1000
+        lo2,hi2 = lo2/1000, hi2/1000
+    else:
+        seq = _SIZE_G
+
+    def idx(lo, hi):
+        for i,(slo,shi) in enumerate(seq):
+            if slo <= lo and hi <= shi*1.5:
+                return i
+            if abs(lo-slo)<50:
+                return i
+        return None
+
+    i1, i2 = idx(lo1,hi1), idx(lo2,hi2)
+    if i1 is None or i2 is None:
+        return 5 if abs(lo1-lo2)>300 else 1
+    return abs(i1-i2)
+
+def _get_origin(name: str) -> Optional[str]:
+    nu = name.upper()
+    for o in _ORIGINS:
+        if o in nu:
+            return o
+    m = re.search(r'FAO\s*\d+', nu)
+    return m.group(0) if m else None
+
+
+def smart_match(
+    sold_name: str,
+    available: dict[str, list[dict]],
+    unit: str
+) -> tuple[Optional[str], str]:
+    """
+    Poišče najboljši dostopen artikel za prodan artikel.
+    available: {article_name: [lots]}
+    Vrne (matched_name, opis_notacija) ali (None, razlog)
+    """
+    sold_sp     = _get_species(sold_name)
+    sold_fillet = _has_fillet(sold_name)
+    sold_size   = _get_size(sold_name)
+    sold_origin = _get_origin(sold_name)
+    sold_code   = _get_code(sold_name)
+
+    if not sold_sp:
+        return None, "vrsta ni določena"
+
+    def has_stock(n):
+        return any(l.get('quantity',0) > 0 for l in available.get(n, []))
+
+    # Korak 1: Ista vrsta (obvezno) + ista ME
+    candidates = [
+        n for n in available
+        if _get_species(n) == sold_sp and has_stock(n)
+    ]
+    if not candidates:
+        return None, f"ni zaloge za {sold_sp}"
+
+    # Korak 2: File logika
+    if sold_fillet:
+        fillet_cands = [n for n in candidates if _has_fillet(n)]
+        candidates = fillet_cands if fillet_cands else [n for n in candidates if not _has_fillet(n)]
+    else:
+        non_fillet = [n for n in candidates if not _has_fillet(n)]
+        candidates = non_fillet if non_fillet else candidates
+
+    if not candidates:
+        return None, f"ni ustreznega artikla za {sold_sp}"
+
+    # Korak 3: Točkovanje (origin + teža)
+    def score(n):
+        s = 0
+        art_origin = _get_origin(n)
+        if sold_origin and art_origin:
+            s += 10 if art_origin == sold_origin else -3
+        s -= _size_distance(sold_size, _get_size(n)) * 3
+        return s
+
+    best = max(candidates, key=score)
+    best_code = _get_code(best) or '?'
+    sc = sold_code or '?'
+    return best, f"({sc})→({best_code})"
+
+
+# ─── Glavna funkcija dodelitve lotov ─────────────────────────────────────────
+
+def assign_lots(
+    document_lines: list[dict],
+    stock: dict[str, dict],
+    today: datetime
+) -> list[dict]:
+    """
+    Dodeli FIFO lote vrsticam dokumenta.
+
+    document_lines: [
+      { 'row_id': int, 'article_id': int, 'article_code': str,
+        'article_name': str, 'quantity': float, 'unit': str,
+        'selling_price': float, 'opis': str }
+    ]
+
+    stock: {
+      article_name: {
+        'article_id': int,
+        'article_code': str,
+        'lots': [{'code': str, 'quantity': float, 'unit': str}]
+      }
+    }
+
+    Vrne seznam outputnih vrstic z: lot, quantity_assigned, opis, status
+    """
+    # Indeks: article_id (str) → stock key
+    # Stock ključi so str(article_id)
+    by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
+    by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
+    by_name = {v.get('article_name',''): k for k, v in stock.items()}
+    # Case-insensitive name lookup
+    by_name_ci = {v.get('article_name','').strip().lower(): k for k, v in stock.items()}
+
+    # Virtualna zaloga
+    virtual: dict[str, list[dict]] = {
+        key: [lot.copy() for lot in data['lots']]
+        for key, data in stock.items()
+    }
+
+    output = []
+
+    for line in document_lines:
+        art_id     = str(line.get('article_id') or '')
+        art_code   = line.get('article_code', '')
+        art_name   = line.get('article_name', '')
+        qty_needed = round(float(line['quantity']), 4)
+        unit       = line['unit']
+        base_opis  = (line.get('opis') or '').strip()
+
+        matched_note = ''
+
+        # Kalo faktor — sardele in losos (brez trim) razknižimo 10% več
+        kalo = get_kalo_factor(art_name)
+        if kalo != 1.0:
+            qty_needed = round(qty_needed * kalo, 4)
+
+        # Iskanje v zalogi: najprej po ID, nato po kodi, nato po imenu
+        stock_key = (by_id.get(art_id) or by_code.get(art_code) or
+                     by_name.get(art_name) or by_name_ci.get(art_name.strip().lower()))
+
+        # Preverimo ali ima zaloga
+        has_vstock = (
+            stock_key is not None and
+            any(l.get('quantity',0) > 0 for l in virtual.get(stock_key, []))
         )
 
-        if run_btn and selected_ids:
-            if wh_id == 0:
-                st.error("Vnesite Warehouse kodo za to lokacijo v nastavitvah.")
-                st.stop()
+        if not has_vstock:
+            # Smart matching — gradi flat {name: lots} za smart_match
+            avail_with_stock = {}
+            for k, lots in virtual.items():
+                if any(l.get('quantity',0) > 0 for l in lots):
+                    sname = stock[k].get('article_name', k)
+                    avail_with_stock[sname] = lots
+            matched_name, note = smart_match(art_name, avail_with_stock, unit)
+            if matched_name is None:
+                output.append({**line,
+                    'lot': None, 'quantity_assigned': qty_needed,
+                    'opis': f"{base_opis} [brez lota: {note}]".strip(),
+                    'status': 'no_match'})
+                continue
+            # Poišči stock_key za matched_name
+            stock_key    = by_name.get(matched_name) or matched_name
+            matched_note = note
 
-            with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ⏳"):
-                try:
-                    cli = _make_client()
+        # FIFO filtriranje
+        name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
+        # Ne-morski artikli dobijo vse lote brez starostnih omejitev
+        _is_seafood  = is_seafood(name_for_check)
+        check_name = name_for_check if _is_seafood else ""
+        eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
-                    # Razvrsti po datumu kronološko
-                    sorted_ids = sorted(
-                        selected_ids,
-                        key=lambda eid: str(next(
-                            (d.get("Date","") for d in drafts if d.get("StockEntryId") == eid), ""
-                        ))
-                    )
+        if not eligible:
+            output.append({**line,
+                'lot': None, 'quantity_assigned': qty_needed,
+                'opis': f"{base_opis} [brez lota: ni ustreznih lotov]".strip(),
+                'status': 'no_lots'})
+            continue
 
-                    # Preberi vse dokumente in zberi article IDs
-                    all_entry_data = {}
-                    all_doc_lines  = {}
-                    all_item_ids   = set()
+        # Dodelitev po FIFO
+        # Aged loti (14-30 dni sveži) se razknižijo POLEG prodane količine
+        remaining   = qty_needed
+        assignments = []
+        fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood
 
-                    # Prvo branje brez enot (da dobimo article IDs)
-                    for eid in sorted_ids:
-                        ed = cli.get_entry_detail(eid)
-                        dl = parse_entry_to_lines(ed)
-                        all_entry_data[eid] = ed
-                        all_doc_lines[eid]  = dl
-                        for l in dl:
-                            if l.get("article_id"):
-                                all_item_ids.add(l["article_id"])
+        # Faza 1: normalna FIFO prodaja iz svežih lotov
+        for lot in eligible:
+            if remaining <= 0:
+                break
+            if lot.get("_aged"):
+                continue  # aged lote obravnavamo v fazi 2
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+            use = round(min(avail, remaining), 4)
+            assignments.append((lot['code'], use, 0))
+            remaining = round(remaining - use, 4)
+            for vl in virtual[stock_key]:
+                if vl['code'] == lot['code']:
+                    vl['quantity'] = round(vl['quantity'] - use, 4)
+                    break
 
-                    # Pridobi pravilne enote iz artikelskega šifranta
-                    item_units = cli.get_item_units(list(all_item_ids))
+        # Faza 2: aged loti — razknjiži cel lot (dodatno k prodaji)
+        for lot in eligible:
+            if not lot.get("_aged"):
+                continue
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+            lot_date = parse_lot_date(lot['code'])
+            days_old = (today - lot_date).days if lot_date else 0
+            if fresh_art:
+                # Razknjiži cel aged lot
+                assignments.append((lot['code'], avail, days_old))
+                remaining = round(max(0, remaining - avail), 4)
+            else:
+                # Ne-sveži (odtaljeni/zamrznjeni) — normalna FIFO
+                if remaining <= 0:
+                    break
+                use = round(min(avail, remaining), 4)
+                assignments.append((lot['code'], use, 0))
+                remaining = round(remaining - use, 4)
+            for vl in virtual[stock_key]:
+                if vl['code'] == lot['code']:
+                    vl['quantity'] = round(vl['quantity'] - (avail if fresh_art else min(avail, qty_needed)), 4)
+                    break
 
-                    # Ponovno razčleni z enotami
-                    for eid in sorted_ids:
-                        all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
-                    # Preberi zalogo enkrat za vse
-                    stock_raw = cli.get_stock_by_lots(wh_id)
-                    has_lots  = any(r.get("BatchNumber") for r in stock_raw)
-                    if not has_lots and all_item_ids:
-                        stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
+        # Faza 3: fallback če svežih ni bilo dovolj
+        if remaining > 0:
+            for lot in eligible:
+                if not lot.get("_aged") or remaining <= 0:
+                    continue
+                avail = round(lot['quantity'], 4)
+                if avail <= 0:
+                    continue
+                already = sum(q for c,q,_ in assignments if c == lot['code'])
+                leftover = round(avail - already, 4)
+                if leftover <= 0:
+                    continue
+                use = round(min(leftover, remaining), 4)
+                if use > 0:
+                    assignments.append((lot['code'], use, 0))
+                    remaining = round(remaining - use, 4)
 
-                    stock = parse_stock_to_engine_format(stock_raw)
+        opis = base_opis
+        if matched_note:
+            opis = (opis + ' ' + matched_note).strip() if opis else matched_note
 
-                    # Skupna virtualna zaloga — deli se med vsemi dokumenti
-                    shared_virtual = {
-                        key: [lot.copy() for lot in data["lots"]]
-                        for key, data in stock.items()
-                    }
+        stock_data = stock.get(stock_key, {})
+        for lot_code, qty, forced_days in assignments:
+            lot_opis = opis
+            if forced_days > 0:
+                lot_opis = (lot_opis + f' [celoten lot - star {forced_days} dni]').strip()
+            output.append({
+                **line,
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
+                'article_code': stock_data.get('article_code', art_code),
+                'article_name': stock_data.get('article_name', art_name),
+                'lot':          lot_code,
+                'quantity_assigned': qty,
+                'opis':         lot_opis,
+                'status':       'matched' if matched_note else 'ok'
+            })
 
-                    # Obdelaj kronološko z deljeno zalogo
-                    # Vsak dokument dobi SVOJ datum za pravilno starost lotov
-                    all_results = {}
-                    doc_article_ids = set()
-                    for eid in sorted_ids:
-                        d_info = next((d for d in drafts if d.get("StockEntryId") == eid), {})
-                        doc_date_str = str(d_info.get("Date", ""))[:10]
-                        try:
-                            doc_date = datetime.strptime(doc_date_str, "%Y-%m-%d")
-                        except Exception:
-                            doc_date = datetime.now()
-                        all_results[eid] = assign_lots_with_virtual(
-                            all_doc_lines[eid], stock, shared_virtual, doc_date
-                        )
-                        for l in all_doc_lines[eid]:
-                            if l.get("article_id"):
-                                doc_article_ids.add(l["article_id"])
+        if remaining > 0:
+            output.append({**line,
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
+                'article_code': stock_data.get('article_code', art_code),
+                'article_name': stock_data.get('article_name', art_name),
+                'lot':  None,
+                'quantity_assigned': remaining,
+                'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
+                'status': 'partial'
+            })
 
-                    # Opozorila računamo na datum zadnjega dokumenta
-                    last_eid = sorted_ids[-1]
-                    last_d = next((d for d in drafts if d.get("StockEntryId") == last_eid), {})
-                    try:
-                        warn_date = datetime.strptime(str(last_d.get("Date",""))[:10], "%Y-%m-%d")
-                    except Exception:
-                        warn_date = datetime.now()
-                    old_lot_warnings = check_old_lots(stock, warn_date, doc_article_ids)
+    return _merge_lot_lines(output)
 
-                    st.session_state[f"multi_result_{loc_key}"] = {
-                        "sorted_ids":       sorted_ids,
-                        "all_results":      all_results,
-                        "all_entry_data":   all_entry_data,
-                        "old_lot_warnings": old_lot_warnings,
-                        "drafts":           drafts,
-                    }
-                except Exception as e:
-                    st.error(f"Napaka pri obdelavi: {e}")
-                    st.error(traceback.format_exc())
+def _merge_lot_lines(lines: list[dict]) -> list[dict]:
+    """Združi vrstice z istim (article_code, lot)."""
+    seen  = {}
+    order = []
+    for line in lines:
+        key = (line.get('article_code',''), line.get('lot'))
+        if key not in seen:
+            seen[key] = {**line}
+            order.append(key)
+        else:
+            seen[key]['quantity_assigned'] = round(
+                seen[key]['quantity_assigned'] + line['quantity_assigned'], 4
+            )
+    return [seen[k] for k in order]
 
-        # ── Prikaz rezultatov skupne obdelave ────────────────────────────────
-        multi_res = st.session_state.get(f"multi_result_{loc_key}")
 
-        if multi_res:
-            st.divider()
-            sorted_ids     = multi_res["sorted_ids"]
-            all_results    = multi_res["all_results"]
-            all_entry_data = multi_res["all_entry_data"]
-            drafts_map     = {d.get("StockEntryId"): d for d in multi_res["drafts"]}
+def assign_lots_with_virtual(
+    document_lines: list[dict],
+    stock: dict[str, dict],
+    virtual: dict[str, list[dict]],
+    today: datetime
+) -> list[dict]:
+    """
+    Kot assign_lots ampak sprejme zunanjo virtual zalogo.
+    Omogoča skupno obdelavo več dokumentov z deljeno virtualno zalogo.
+    """
+    by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
+    by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
+    by_name = {v.get('article_name',''): k for k, v in stock.items()}
+    # Case-insensitive name lookup
+    by_name_ci = {v.get('article_name','').strip().lower(): k for k, v in stock.items()}
+    output  = []
 
-            # Skupna statistika
-            def row_color(s):
-                return {"ok":"🟢","matched":"🟡","partial":"🟠","no_match":"🔴","no_lots":"🔴"}.get(s,"⚪")
+    for line in document_lines:
+        art_id     = str(line.get('article_id') or '')
+        art_code   = line.get('article_code', '')
+        art_name   = line.get('article_name', '')
+        qty_needed = round(float(line['quantity']), 4)
+        unit       = line['unit']
+        base_opis  = (line.get('opis') or '').strip()
+        matched_note = ''
 
-            total_ok      = sum(len([l for l in r if l["status"]=="ok"])           for r in all_results.values())
-            total_matched = sum(len([l for l in r if l["status"]=="matched"])       for r in all_results.values())
-            total_partial = sum(len([l for l in r if l["status"]=="partial"])       for r in all_results.values())
-            total_none    = sum(len([l for l in r if l["status"] in ("no_match","no_lots")]) for r in all_results.values())
+        kalo = get_kalo_factor(art_name)
+        if kalo != 1.0:
+            qty_needed = round(qty_needed * kalo, 4)
 
-            c1,c2,c3,c4 = st.columns(4)
-            c1.metric("✅ Točno ujemanje",    total_ok)
-            c2.metric("🔄 Pametna zamenjava", total_matched)
-            c3.metric("⚠️ Delno pokrito",     total_partial)
-            c4.metric("❌ Brez lota",          total_none)
+        stock_key = (by_id.get(art_id) or by_code.get(art_code) or
+                     by_name.get(art_name) or by_name_ci.get(art_name.strip().lower()))
+        has_vstock = (stock_key is not None and
+                      any(l.get('quantity',0) > 0 for l in virtual.get(stock_key, [])))
 
-            # Prikaz po dokumentih
-            for eid in sorted_ids:
-                lines = all_results[eid]
-                d     = drafts_map.get(eid, {})
-                label = f"IS-{d.get('Number','?')} — {str(d.get('Date',''))[:10]}"
-                no_lot_count = len([l for l in lines if l["status"] in ("no_match","no_lots","partial")])
-                icon = "✅" if no_lot_count == 0 else "⚠️"
-                with st.expander(f"{icon} {label}  ({len(lines)} vrstic)", expanded=(no_lot_count > 0)):
-                    df_r = pd.DataFrame([{
-                        "":      row_color(l["status"]),
-                        "Artikel": l["article_name"],
-                        "Kol.":  l["quantity_assigned"],
-                        "ME":    l["unit"],
-                        "Lot":   l.get("lot") or "—",
-                        "Opis":  l.get("opis") or "",
-                    } for l in lines])
-                    st.dataframe(df_r, use_container_width=True, hide_index=True)
+        if not has_vstock:
+            avail_with_stock = {}
+            for k, lots in virtual.items():
+                if any(l.get('quantity',0) > 0 for l in lots):
+                    sname = stock[k].get('article_name', k)
+                    avail_with_stock[sname] = lots
+            matched_name, note = smart_match(art_name, avail_with_stock, unit)
+            if matched_name is None:
+                output.append({**line, 'lot': None, 'quantity_assigned': qty_needed,
+                    'opis': f"{base_opis} [brez lota: {note}]".strip(), 'status': 'no_match'})
+                continue
+            stock_key    = by_name.get(matched_name) or matched_name
+            matched_note = note
 
-            # ── Poročilo napak (brez lota / delno) ───────────────────────────────
-            error_rows = []
-            for eid in sorted_ids:
-                lines_e = all_results[eid]
-                d_e     = drafts_map.get(eid, {})
-                doc_num = f"IS-{d_e.get('Number','?')}"
-                doc_date = str(d_e.get('Date',''))[:10]
-                orig_doc = (all_entry_data[eid].get("OriginalDocumentType") or {})
-                orig_num = all_entry_data[eid].get("OriginalDocumentDate", "") or ""
-                for i, l in enumerate(lines_e, 1):
-                    if l["status"] in ("no_match", "no_lots", "partial"):
-                        status_opis = {
-                            "no_match": "Ni zaloge za artikel",
-                            "no_lots":  "Ni ustreznih lotov",
-                            "partial":  "Premalo zaloge",
-                        }.get(l["status"], l["status"])
-                        # Izvleči opis napake iz polja opis
-                        detail = l.get("opis", "") or ""
-                        if "[" in detail:
-                            detail = detail[detail.find("[")+1:detail.rfind("]")]
-                        error_rows.append({
-                            "Analitika":  loc_key,
-                            "Dokument":   doc_num,
-                            "Datum":      doc_date,
-                            "Vrstica":    i,
-                            "Artikel":    l["article_name"],
-                            "Kol.":       l["quantity_assigned"],
-                            "ME":         l.get("unit",""),
-                            "Napaka":     status_opis,
-                            "Podrobnost": detail,
-                        })
+        name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
+        _is_seafood2   = is_seafood(name_for_check)
+        check_name     = name_for_check if _is_seafood2 else ""
+        eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
-            if error_rows:
-                with st.expander(f"📋 Poročilo napak — za ročno popravilo ({len(error_rows)} vrstic)", expanded=True):
-                    df_err = pd.DataFrame(error_rows)
-                    st.dataframe(df_err, use_container_width=True, hide_index=True)
-                    # CSV prenos
-                    csv = df_err.to_csv(index=False, sep=";", encoding="utf-8-sig")
-                    st.download_button(
-                        label="⬇️ Prenesi poročilo (CSV)",
-                        data=csv,
-                        file_name=f"napake_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                        mime="text/csv",
-                    )
+        if not eligible:
+            output.append({**line, 'lot': None, 'quantity_assigned': qty_needed,
+                'opis': f"{base_opis} [brez lota: ni ustreznih lotov]".strip(), 'status': 'no_lots'})
+            continue
 
-            # Opozorilo starih lotov
-            old_lots = multi_res.get("old_lot_warnings", [])
-            if old_lots:
-                with st.expander(f"⏰ Stari loti na zalogi ({len(old_lots)} opozoril)"):
-                    df_old = pd.DataFrame([{
-                        "Artikel":   w["article"],
-                        "Lot":       w["lot"],
-                        "Dni star":  w["days_old"],
-                        "Qty":       f"{w['qty']} {w['unit']}",
-                        "Opozorilo": w["warning"],
-                    } for w in old_lots])
-                    st.dataframe(df_old, use_container_width=True, hide_index=True)
-                    st.caption("Ti loti so na zalogi dlje kot pričakovano. Preverite kalo faktor.")
+        remaining  = qty_needed
+        assignments = []
+        fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood2
 
-            if total_partial + total_none > 0:
-                st.warning(f"⚠️ {total_partial + total_none} vrstic(a) brez lota. Preverite ročno pred potrditvijo.")
+        # Faza 1: svežih lotov za prodajo
+        for lot in eligible:
+            if remaining <= 0:
+                break
+            if lot.get("_aged"):
+                continue
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+            use = round(min(avail, remaining), 4)
+            assignments.append((lot['code'], use, 0))
+            remaining = round(remaining - use, 4)
+            for vl in virtual[stock_key]:
+                if vl['code'] == lot['code']:
+                    vl['quantity'] = round(vl['quantity'] - use, 4)
+                    break
 
-            st.divider()
-            col_save, col_cancel = st.columns(2)
-            with col_save:
-                save_all_btn = st.button(
-                    f"💾 Shrani vse v Minimax ({len(sorted_ids)} dokumentov)",
-                    key=f"save_all_{loc_key}",
-                    type="primary",
-                    use_container_width=True,
-                )
-            with col_cancel:
-                cancel_btn = st.button("✖ Zavrzi rezultate", key=f"cancel_multi_{loc_key}", use_container_width=True)
+        # Faza 2: aged loti — razknjiži cel lot (pokriva prodajo + staranje)
+        for lot in eligible:
+            if not lot.get("_aged"):
+                continue
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+            lot_date = parse_lot_date(lot['code'])
+            days_old = (today - lot_date).days if lot_date else 0
+            if fresh_art:
+                use = avail
+                assignments.append((lot['code'], use, days_old))
+                remaining = round(max(0, remaining - use), 4)
+            else:
+                if remaining <= 0:
+                    break
+                use = round(min(avail, remaining), 4)
+                assignments.append((lot['code'], use, 0))
+                remaining = round(remaining - use, 4)
+            for vl in virtual[stock_key]:
+                if vl['code'] == lot['code']:
+                    vl['quantity'] = round(vl['quantity'] - use, 4)
+                    break
 
-            if cancel_btn:
-                del st.session_state[f"multi_result_{loc_key}"]
-                st.rerun()
+        opis = base_opis
+        if matched_note:
+            opis = (opis + ' ' + matched_note).strip() if opis else matched_note
 
-            if save_all_btn:
-                with st.spinner(f"Shranjujem {len(sorted_ids)} dokumentov v Minimax ..."):
-                    errors = []
-                    saved  = 0
-                    try:
-                        cli = _make_client()
-                        for eid in sorted_ids:
-                            try:
-                                cli.update_entry_with_lots(
-                                    entry_id   = eid,
-                                    entry_data = all_entry_data[eid],
-                                    new_rows   = all_results[eid],
-                                )
-                                saved += 1
-                            except Exception as e:
-                                errors.append(f"IS-{drafts_map.get(eid,{}).get('Number','?')}: {e}")
-                    except Exception as e:
-                        st.error(f"Napaka pri povezavi: {e}")
+        stock_data = stock.get(stock_key, {})
+        for lot_code, qty, forced_days in assignments:
+            lot_opis = opis
+            if forced_days > 0:
+                lot_opis = (lot_opis + f' [celoten lot - star {forced_days} dni]').strip()
+            output.append({
+                **line,
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
+                'article_code': stock_data.get('article_code', art_code),
+                'article_name': stock_data.get('article_name', art_name),
+                'lot':          lot_code,
+                'quantity_assigned': qty,
+                'opis':         lot_opis,
+                'status':       'matched' if matched_note else 'ok'
+            })
 
-                    if saved > 0:
-                        st.success(f"✅ {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
-                    for err in errors:
-                        st.error(err)
+        if remaining > 0:
+            output.append({**line,
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
+                'article_code': stock_data.get('article_code', art_code),
+                'article_name': stock_data.get('article_name', art_name),
+                'lot': None, 'quantity_assigned': remaining,
+                'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
+                'status': 'partial'
+            })
 
-                    del st.session_state[f"multi_result_{loc_key}"]
-                    if f"drafts_{loc_key}" in st.session_state:
-                        del st.session_state[f"drafts_{loc_key}"]
-                    st.rerun()
-
-# ── Noga ─────────────────────────────────────────────────────────────────────
-
-st.divider()
-st.caption("Agent Hub v1.0 · Minimax API · FIFO + smart matching za ribje artikle")
+    return _merge_lot_lines(output)
