@@ -164,7 +164,9 @@ class MinimaxClient:
         data_1000 = None
 
         for entry in entries:
-            account       = str(entry.get("Account", {}).get("ID", ""))
+            # Account ima lahko ID (interni) ali Code (konto šifra npr. 1000, 1652)
+            acc_obj  = entry.get("Account") or {}
+            acc_code = str(acc_obj.get("Code", "") or acc_obj.get("ID", ""))
             analytic_obj  = entry.get("Analytic") or {}
             analytic_code = analytic_obj.get("Code", "") or ""
 
@@ -176,9 +178,9 @@ class MinimaxClient:
             credit = float(entry.get("Credit", 0) or 0)
             znesek = debit if debit > 0 else credit
 
-            if account == "1652" and not data_1652:
+            if acc_code == "1652" and not data_1652:
                 data_1652 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
-            elif account == "1000" and not data_1000:
+            elif acc_code == "1000" and not data_1000:
                 data_1000 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
 
         if not data_1652 and not data_1000:
