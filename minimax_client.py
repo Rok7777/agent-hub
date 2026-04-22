@@ -80,43 +80,46 @@ class MinimaxClient:
     def get_journal_drafts(self) -> list[dict]:
         """
         Vrne osnutke temeljnic tipa DI (dnevni iztržek iz Shopsy).
-        Korak 1: Pokliče GetJournal za vsak osnutek (Status=O) — hitro
-        Korak 2: Filtrira samo tiste z opisom "DI:" — Shopsy iztržki
-        Ostali osnutki (npr. IR) se ignorirajo — urejajo se ročno.
+        Korak 1: Filtrira po Status=Osnutek — vrne samo osnutke (hitro, malo rezultatov)
+        Korak 2: Med osnutki obdrži samo tiste z opisom DI: — Shopsy iztržki
+        Korak 3: Za vsak pokliče GetJournal da dobi knjižbe
         """
-        # Korak 1: Poberi vse osnutke z API filtrom Status=O
         osnutki_raw = []
         page = 1
         while True:
             data = self._get("/journals", params={
-                "Status":      "O",
+                "Status":      "Osnutek",
                 "CurrentPage": page,
                 "PageSize":    50,
             })
             rows = data.get("Rows", [])
-            osnutki_raw.extend(rows)
+            for row in rows:
+                opis = str(row.get("Description", "") or "")
+                if opis.startswith("DI:"):
+                    osnutki_raw.append(row.get("JournalId"))
             total   = data.get("TotalRows", 0)
             fetched = (page - 1) * 50 + len(rows)
             if fetched >= total or not rows:
                 break
             page += 1
 
-        # Korak 2: Filtriraj samo DI: osnutke in pokliči GetJournal za knjižbe
+        # Za vsak najden ID pokliči GetJournal da dobi knjižbe
         result = []
-        for row in osnutki_raw:
-            opis = str(row.get("Description", "") or "")
-            if not opis.startswith("DI:"):
-                continue
+        for jid in osnutki_raw:
             try:
-                j = self.get_journal(row.get("JournalId"))
+                j = self.get_journal(jid)
                 result.append(j)
             except Exception:
                 continue
         return result
 
     def get_journal_drafts_debug(self) -> dict:
-        """Debug: vrne surove podatke iz API za prvih 5 journalov."""
-        return self._get("/journals", params={"CurrentPage": 1, "PageSize": 5})
+        """Debug: vrne surove podatke — test Status=Osnutek filter."""
+        return self._get("/journals", params={
+            "Status":      "Osnutek",
+            "CurrentPage": 1,
+            "PageSize":    5,
+        })
 
     def get_journal(self, journal_id: int) -> dict:
         return self._get(f"/journals/{journal_id}")
@@ -138,8 +141,8 @@ class MinimaxClient:
         data_1000 = None
 
         for entry in entries:
-            account      = str(entry.get("Account", {}).get("ID", ""))
-            analytic_obj = entry.get("Analytic") or {}
+            account       = str(entry.get("Account", {}).get("ID", ""))
+            analytic_obj  = entry.get("Analytic") or {}
             analytic_code = analytic_obj.get("Code", "") or ""
 
             import re
@@ -436,9 +439,9 @@ class MinimaxClient:
         api_rows = []
         for r in new_rows:
             row = {"Item": {"ID": r["article_id"]}, "Quantity": r["quantity_assigned"], "Note": r.get("opis", "") or ""}
-            if r.get("lot"):            row["BatchNumber"]       = r["lot"]
-            if r.get("selling_price") is not None: row["Price"] = r["selling_price"]
-            if r.get("unit"):           row["UnitOfMeasurement"] = r["unit"]
+            if r.get("lot"):                       row["BatchNumber"]       = r["lot"]
+            if r.get("selling_price") is not None: row["Price"]             = r["selling_price"]
+            if r.get("unit"):                      row["UnitOfMeasurement"] = r["unit"]
             api_rows.append(row)
         return self._put(f"/stockentry/{entry_id}", {**entry_data, "StockEntryItems": api_rows})
 
