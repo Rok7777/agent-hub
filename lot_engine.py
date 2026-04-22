@@ -129,12 +129,11 @@ def check_old_lots(stock: dict, today: datetime, article_ids: set = None, articl
 def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> list[dict]:
     """
     Vrne lote ustrezne za artikel, sortirane FIFO (najstarejši prvi).
-    Za sveže: normalni loti (<=14 dni) + aged loti (14-30 dni, za prisilni write-off).
-    Za zamrznjene: vsi loti.
+    NIKOLI ne vrne lotov novejših od today (datuma dokumenta).
+    Za sveže: normalni loti (<=14 dni) + aged loti (14-30 dni).
+    Za zamrznjene: vsi loti do datuma dokumenta.
     """
     needs_14d = is_fresh_or_deli(article_name)
-    cutoff    = today - timedelta(days=14) if needs_14d else None
-    aged_cutoff = today - timedelta(days=30) if needs_14d else None
 
     result = []
     for lot in lots:
@@ -144,10 +143,13 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
         if d is None:
             result.append({**lot, '_date': datetime(2099, 1, 1), '_aged': False})
             continue
-        # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
-        if needs_14d and (today - d).days > 30:
+        # NIKOLI ne uporabi lotov novejših od datuma dokumenta
+        if d > today:
             continue
         days = (today - d).days
+        # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
+        if needs_14d and days > 30:
+            continue
         result.append({**lot, '_date': d, '_aged': bool(needs_14d and 14 <= days <= 30)})
 
     result.sort(key=lambda x: x['_date'])
@@ -397,81 +399,61 @@ def assign_lots(
                 'status': 'no_lots'})
             continue
 
-        # Dodelitev po FIFO
-        # Aged loti (14-30 dni sveži) se razknižijo POLEG prodane količine
+        # ── FIFO dodelitev ──────────────────────────────────────────────────
+        # Aged lot (14-30 dni, sveže) — FIFO vrstni red (najstarejši najprej):
+        #   Aged lot se porabi PRED svežim lotom.
+        #   Vrstica 1: prodana količina iz aged lota
+        #   Vrstica 2: odpis preostanka aged lota (ločena vrstica)
+        #   Šele nato svež lot za morebitni preostanek prodaje.
+
         remaining   = qty_needed
-        assignments = []
+        assignments = []  # (lot_code, qty, days_old_for_writeoff)
         fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood
 
-        # Faza 1: normalna FIFO prodaja iz svežih lotov
         for lot in eligible:
-            if remaining <= 0:
-                break
-            if lot.get("_aged"):
-                continue  # aged lote obravnavamo v fazi 2
             avail = round(lot['quantity'], 4)
             if avail <= 0:
                 continue
-            use = round(min(avail, remaining), 4)
-            assignments.append((lot['code'], use, 0))
-            remaining = round(remaining - use, 4)
-            for vl in virtual[stock_key]:
-                if vl['code'] == lot['code']:
-                    vl['quantity'] = round(vl['quantity'] - use, 4)
-                    break
 
-        # Faza 2: aged loti — razknjiži cel lot (dodatno k prodaji)
-        for lot in eligible:
-            if not lot.get("_aged"):
-                continue
-            avail = round(lot['quantity'], 4)
-            if avail <= 0:
-                continue
-            lot_date = parse_lot_date(lot['code'])
-            days_old = (today - lot_date).days if lot_date else 0
-            if fresh_art:
-                # Razknjiži cel aged lot
-                assignments.append((lot['code'], avail, days_old))
-                remaining = round(max(0, remaining - avail), 4)
+            if lot.get('_aged') and fresh_art:
+                lot_date = parse_lot_date(lot['code'])
+                days_old = (today - lot_date).days if lot_date else 0
+                # Del za prodajo
+                use_sale = round(min(avail, remaining), 4)
+                if use_sale > 0:
+                    assignments.append((lot['code'], use_sale, 0, False))
+                    remaining = round(remaining - use_sale, 4)
+                # Odpis preostanka (ločena vrstica, oznaka _writeoff)
+                writeoff = round(avail - use_sale, 4)
+                if writeoff > 0:
+                    assignments.append((lot['code'], writeoff, days_old, True))
+                # Cel aged lot porabljen iz virtualne zaloge
+                for vl in virtual[stock_key]:
+                    if vl['code'] == lot['code']:
+                        vl['quantity'] = 0.0
+                        break
             else:
-                # Ne-sveži (odtaljeni/zamrznjeni) — normalna FIFO
                 if remaining <= 0:
                     break
                 use = round(min(avail, remaining), 4)
-                assignments.append((lot['code'], use, 0))
+                assignments.append((lot['code'], use, 0, False))
                 remaining = round(remaining - use, 4)
-            for vl in virtual[stock_key]:
-                if vl['code'] == lot['code']:
-                    vl['quantity'] = round(vl['quantity'] - (avail if fresh_art else min(avail, qty_needed)), 4)
-                    break
-
-
-        # Faza 3: fallback če svežih ni bilo dovolj
-        if remaining > 0:
-            for lot in eligible:
-                if not lot.get("_aged") or remaining <= 0:
-                    continue
-                avail = round(lot['quantity'], 4)
-                if avail <= 0:
-                    continue
-                already = sum(q for c,q,_ in assignments if c == lot['code'])
-                leftover = round(avail - already, 4)
-                if leftover <= 0:
-                    continue
-                use = round(min(leftover, remaining), 4)
-                if use > 0:
-                    assignments.append((lot['code'], use, 0))
-                    remaining = round(remaining - use, 4)
+                for vl in virtual[stock_key]:
+                    if vl['code'] == lot['code']:
+                        vl['quantity'] = round(vl['quantity'] - use, 4)
+                        break
 
         opis = base_opis
         if matched_note:
             opis = (opis + ' ' + matched_note).strip() if opis else matched_note
 
         stock_data = stock.get(stock_key, {})
-        for lot_code, qty, forced_days in assignments:
+        for entry in assignments:
+            lot_code, qty, forced_days = entry[0], entry[1], entry[2]
+            is_writeoff = entry[3] if len(entry) > 3 else False
             lot_opis = opis
             if forced_days > 0:
-                lot_opis = (lot_opis + f' [celoten lot - star {forced_days} dni]').strip()
+                lot_opis = (lot_opis + f' [odpis lota - star {forced_days} dni]').strip()
             output.append({
                 **line,
                 'article_id':   stock_data.get('article_id', line.get('article_id')),
@@ -480,7 +462,8 @@ def assign_lots(
                 'lot':          lot_code,
                 'quantity_assigned': qty,
                 'opis':         lot_opis,
-                'status':       'matched' if matched_note else 'ok'
+                'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
+                '_writeoff':    is_writeoff,
             })
 
         if remaining > 0:
@@ -491,25 +474,31 @@ def assign_lots(
                 'lot':  None,
                 'quantity_assigned': remaining,
                 'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
-                'status': 'partial'
+                'status': 'partial',
+                '_writeoff': False,
             })
 
     return _merge_lot_lines(output)
 
 def _merge_lot_lines(lines: list[dict]) -> list[dict]:
-    """Združi vrstice z istim (article_code, lot)."""
-    seen  = {}
-    order = []
+    """Združi vrstice z istim (article_code, lot), razen odpisnih vrstic."""
+    result = []
+    seen   = {}  # (article_code, lot) → index in result, samo za ne-writeoff
     for line in lines:
-        key = (line.get('article_code',''), line.get('lot'))
-        if key not in seen:
-            seen[key] = {**line}
-            order.append(key)
+        is_wo = line.get('_writeoff', False)
+        if is_wo:
+            # Odpisne vrstice nikoli ne združujemo
+            result.append({**line})
         else:
-            seen[key]['quantity_assigned'] = round(
-                seen[key]['quantity_assigned'] + line['quantity_assigned'], 4
-            )
-    return [seen[k] for k in order]
+            key = (line.get('article_code',''), line.get('lot'))
+            if key not in seen:
+                seen[key] = len(result)
+                result.append({**line})
+            else:
+                result[seen[key]]['quantity_assigned'] = round(
+                    result[seen[key]]['quantity_assigned'] + line['quantity_assigned'], 4
+                )
+    return result
 
 
 def assign_lots_with_virtual(
@@ -575,56 +564,51 @@ def assign_lots_with_virtual(
         assignments = []
         fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood2
 
-        # Faza 1: svežih lotov za prodajo
+        # FIFO — aged lot se porabi PRED svežim:
+        # Vrstica 1: prodana kol. iz aged lota
+        # Vrstica 2: odpis preostanka aged lota
+        # Nato svež lot za preostanek prodaje
         for lot in eligible:
-            if remaining <= 0:
-                break
-            if lot.get("_aged"):
-                continue
             avail = round(lot['quantity'], 4)
             if avail <= 0:
                 continue
-            use = round(min(avail, remaining), 4)
-            assignments.append((lot['code'], use, 0))
-            remaining = round(remaining - use, 4)
-            for vl in virtual[stock_key]:
-                if vl['code'] == lot['code']:
-                    vl['quantity'] = round(vl['quantity'] - use, 4)
-                    break
 
-        # Faza 2: aged loti — razknjiži cel lot (pokriva prodajo + staranje)
-        for lot in eligible:
-            if not lot.get("_aged"):
-                continue
-            avail = round(lot['quantity'], 4)
-            if avail <= 0:
-                continue
-            lot_date = parse_lot_date(lot['code'])
-            days_old = (today - lot_date).days if lot_date else 0
-            if fresh_art:
-                use = avail
-                assignments.append((lot['code'], use, days_old))
-                remaining = round(max(0, remaining - use), 4)
+            if lot.get('_aged') and fresh_art:
+                lot_date = parse_lot_date(lot['code'])
+                days_old = (today - lot_date).days if lot_date else 0
+                use_sale = round(min(avail, remaining), 4)
+                if use_sale > 0:
+                    assignments.append((lot['code'], use_sale, 0, False))
+                    remaining = round(remaining - use_sale, 4)
+                writeoff = round(avail - use_sale, 4)
+                if writeoff > 0:
+                    assignments.append((lot['code'], writeoff, days_old, True))
+                for vl in virtual[stock_key]:
+                    if vl['code'] == lot['code']:
+                        vl['quantity'] = 0.0
+                        break
             else:
                 if remaining <= 0:
                     break
                 use = round(min(avail, remaining), 4)
-                assignments.append((lot['code'], use, 0))
+                assignments.append((lot['code'], use, 0, False))
                 remaining = round(remaining - use, 4)
-            for vl in virtual[stock_key]:
-                if vl['code'] == lot['code']:
-                    vl['quantity'] = round(vl['quantity'] - use, 4)
-                    break
+                for vl in virtual[stock_key]:
+                    if vl['code'] == lot['code']:
+                        vl['quantity'] = round(vl['quantity'] - use, 4)
+                        break
 
         opis = base_opis
         if matched_note:
             opis = (opis + ' ' + matched_note).strip() if opis else matched_note
 
         stock_data = stock.get(stock_key, {})
-        for lot_code, qty, forced_days in assignments:
+        for entry in assignments:
+            lot_code, qty, forced_days = entry[0], entry[1], entry[2]
+            is_writeoff = entry[3] if len(entry) > 3 else False
             lot_opis = opis
             if forced_days > 0:
-                lot_opis = (lot_opis + f' [celoten lot - star {forced_days} dni]').strip()
+                lot_opis = (lot_opis + f' [odpis lota - star {forced_days} dni]').strip()
             output.append({
                 **line,
                 'article_id':   stock_data.get('article_id', line.get('article_id')),
@@ -633,7 +617,8 @@ def assign_lots_with_virtual(
                 'lot':          lot_code,
                 'quantity_assigned': qty,
                 'opis':         lot_opis,
-                'status':       'matched' if matched_note else 'ok'
+                'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
+                '_writeoff':    is_writeoff,
             })
 
         if remaining > 0:
@@ -643,7 +628,7 @@ def assign_lots_with_virtual(
                 'article_name': stock_data.get('article_name', art_name),
                 'lot': None, 'quantity_assigned': remaining,
                 'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
-                'status': 'partial'
+                'status': 'partial', '_writeoff': False,
             })
 
     return _merge_lot_lines(output)
