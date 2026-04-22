@@ -162,10 +162,14 @@ class MinimaxClient:
         data_1652 = None
         data_1000 = None
 
+        # Interni ID-ji za konte 1000 in 1652 v Minimax (Oltre Con d.o.o.)
+        # Pridobljeni iz GetJournal response — API vrača interni ID ne konto šifro
+        ID_GOTOVINA = 72537347   # konto 1000
+        ID_KARTICA  = 72537491   # konto 1652
+
         for entry in entries:
-            # Account ima lahko ID (interni) ali Code (konto šifra npr. 1000, 1652)
-            acc_obj  = entry.get("Account") or {}
-            acc_code = str(acc_obj.get("Code", "") or acc_obj.get("ID", ""))
+            acc_obj      = entry.get("Account") or {}
+            acc_id       = acc_obj.get("ID")
             analytic_obj  = entry.get("Analytic") or {}
             analytic_code = analytic_obj.get("Code", "") or ""
 
@@ -177,9 +181,9 @@ class MinimaxClient:
             credit = float(entry.get("Credit", 0) or 0)
             znesek = debit if debit > 0 else credit
 
-            if acc_code == "1652" and not data_1652:
+            if acc_id == ID_KARTICA and not data_1652:
                 data_1652 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
-            elif acc_code == "1000" and not data_1000:
+            elif acc_id == ID_GOTOVINA and not data_1000:
                 data_1000 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
 
         if not data_1652 and not data_1000:
