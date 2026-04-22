@@ -1,10 +1,8 @@
 """
 Tab: Loti — dodelitev serij
 Ureja: chat "Zapiranje LOT"
-Samostojen modul — brez config.py
 """
 
-import io
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -15,13 +13,7 @@ from minimax_client import (
     parse_stock_to_engine_format, parse_entry_to_lines,
 )
 from lot_engine import assign_lots_with_virtual, check_old_lots
-
-
-def _secret(key, default=""):
-    try:
-        return st.secrets[key]
-    except Exception:
-        return default
+from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
 def render():
@@ -31,31 +23,37 @@ def render():
     with st.sidebar:
         st.header("⚙️ Nastavitve API")
 
+        def _secret(key, default=""):
+            try:
+                return st.secrets[key]
+            except Exception:
+                return default
+
         with st.expander("Minimax dostop", expanded=True):
             st.caption("Podatki odjemalca (iz emaila Minimax podpore):")
-            client_id     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID", "OltreCon"))
-            client_secret = st.text_input("Client Secret",    value=_secret("MINIMAX_CLIENT_SECRET", ""), type="password")
+            st.session_state["client_id"]     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID", "OltreCon"))
+            st.session_state["client_secret"] = st.text_input("Client Secret",    value=_secret("MINIMAX_CLIENT_SECRET", ""), type="password")
             st.caption("Podatki uporabnika:")
-            username      = st.text_input("Uporabniško ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
-            password      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD", ""), type="password")
+            st.session_state["username"]      = st.text_input("Uporabniško ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
+            st.session_state["password"]      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD", ""), type="password")
             st.caption("Organizacija:")
-            org_id        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID", "171038"))
+            st.session_state["org_id"]        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID", "171038"))
 
         st.divider()
 
         with st.expander("Kode skladišč", expanded=True):
-            wh_mpk1 = st.text_input("MPK1 — Potujoča 1",  value=_secret("WH_MPK1", "MP-K1"))
-            wh_mpk2 = st.text_input("MPK2 — Potujoča 2",  value=_secret("WH_MPK2", "MP-K2"))
-            wh_mpk3 = st.text_input("MPK3 — Potujoča 3",  value=_secret("WH_MPK3", "MP-K3"))
-            wh_mpoc = st.text_input("MPOC — Rib. Domžale", value=_secret("WH_MPOC", "MP-RD"))
+            st.session_state["wh_mpk1"] = st.text_input("MPK1 — Potujoča 1",  value=_secret("WH_MPK1", "MP-K1"))
+            st.session_state["wh_mpk2"] = st.text_input("MPK2 — Potujoča 2",  value=_secret("WH_MPK2", "MP-K2"))
+            st.session_state["wh_mpk3"] = st.text_input("MPK3 — Potujoča 3",  value=_secret("WH_MPK3", "MP-K3"))
+            st.session_state["wh_mpoc"] = st.text_input("MPOC — Rib. Domžale", value=_secret("WH_MPOC", "MP-RD"))
 
         st.divider()
 
         with st.expander("Kode analitik", expanded=True):
-            an_mpk1 = st.text_input("Analytic koda MPK1", value=_secret("AN_MPK1", "MPK1"))
-            an_mpk2 = st.text_input("Analytic koda MPK2", value=_secret("AN_MPK2", "MPK2"))
-            an_mpk3 = st.text_input("Analytic koda MPK3", value=_secret("AN_MPK3", "MPK3"))
-            an_mpoc = st.text_input("Analytic koda MPOC", value=_secret("AN_MPOC", "MPOC"))
+            st.session_state["an_mpk1"] = st.text_input("Analytic koda MPK1", value=_secret("AN_MPK1", "MPK1"))
+            st.session_state["an_mpk2"] = st.text_input("Analytic koda MPK2", value=_secret("AN_MPK2", "MPK2"))
+            st.session_state["an_mpk3"] = st.text_input("Analytic koda MPK3", value=_secret("AN_MPK3", "MPK3"))
+            st.session_state["an_mpoc"] = st.text_input("Analytic koda MPOC", value=_secret("AN_MPOC", "MPOC"))
 
         st.divider()
         if st.button("🔍 Poišči ID-je analitik avtomatsko"):
@@ -65,74 +63,12 @@ def render():
         if st.button("🔧 Diagnostika lotov (MPK2)"):
             st.session_state["diagnose_lots"] = True
 
-    # ── Pomožne funkcije ──────────────────────────────────────────────────────
-
-    WH_CODES = {"MPK1": wh_mpk1, "MPK2": wh_mpk2, "MPK3": wh_mpk3, "MPOC": wh_mpoc}
-    AN_CODES = {"MPK1": an_mpk1, "MPK2": an_mpk2, "MPK3": an_mpk3, "MPOC": an_mpoc}
-
-    def check_config() -> bool:
-        if not all([username, password, client_id, client_secret, org_id]):
-            st.warning("⚠️ Izpolnite vse nastavitve API v stranski vrstici.")
-            return False
-        return True
-
-    def make_client() -> MinimaxClient:
-        return MinimaxClient(
-            username=username, password=password,
-            client_id=client_id, client_secret=client_secret, org_id=int(org_id),
-        )
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def resolve_ids(_u, _p, _ci, _cs, _oi):
-        cli = MinimaxClient(username=_u, password=_p, client_id=_ci, client_secret=_cs, org_id=int(_oi))
-        wh_map, an_map = {}, {}
-        try:
-            for row in cli.get_warehouses():
-                code = (row.get("Code") or "").strip().upper()
-                wid  = row.get("WarehouseId") or row.get("ID")
-                if code and wid: wh_map[code] = int(wid)
-        except Exception: pass
-        try:
-            for row in cli.get_analytics():
-                code = (row.get("Code") or "").strip().upper()
-                aid  = row.get("AnalyticId")
-                if code and aid: an_map[code] = int(aid)
-        except Exception: pass
-        return wh_map, an_map
-
-    def get_wh_id(loc_key):
-        code = WH_CODES.get(loc_key, "").strip().upper()
-        if not code: return 0
-        if all([username, password, client_id, client_secret, org_id]):
-            wh_map, _ = resolve_ids(username, password, client_id, client_secret, org_id)
-            return wh_map.get(code, 0)
-        return 0
-
-    def get_an_id(loc_key):
-        code = AN_CODES.get(loc_key, "").strip().upper()
-        if not code: return 0
-        if all([username, password, client_id, client_secret, org_id]):
-            _, an_map = resolve_ids(username, password, client_id, client_secret, org_id)
-            return an_map.get(code, 0)
-        return 0
-
-    def excel_download(df: pd.DataFrame, filename: str) -> bytes:
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Poročilo")
-            ws = writer.sheets["Poročilo"]
-            for col in ws.columns:
-                max_len = max(len(str(cell.value or "")) for cell in col) + 4
-                ws.column_dimensions[col[0].column_letter].width = min(max_len, 50)
-        return buf.getvalue()
-
     # ── Sidebar akcije ────────────────────────────────────────────────────────
-
     if st.session_state.get("auto_find_analytics") and check_config():
         st.session_state.pop("auto_find_analytics")
         with st.spinner("Iščem analitike ..."):
             try:
-                rows = make_client().get_analytics()
+                rows = get_client().get_analytics()
                 st.sidebar.success("✅ Analitike najdene!")
                 st.sidebar.dataframe(pd.DataFrame([{
                     "Koda": r.get("Code",""), "Naziv": r.get("Name",""), "Analytic ID": r.get("AnalyticId","")
@@ -145,7 +81,7 @@ def render():
         st.session_state.pop("diagnose_lots")
         with st.spinner("Diagnostika ..."):
             try:
-                diag = make_client().diagnose_lots(get_wh_id("MPK2"))
+                diag = get_client().diagnose_lots(get_wh_id("MPK2"))
                 st.sidebar.success(f"✅ WH ID: {diag['warehouse_id']}")
                 if diag['found']:
                     for f in diag['found']:
@@ -159,18 +95,16 @@ def render():
         st.session_state.pop("auto_find_warehouses")
         with st.spinner("Iščem skladišča ..."):
             try:
-                rows = make_client().get_warehouses()
+                rows = get_client().get_warehouses()
                 st.sidebar.success("✅ Skladišča najdena!")
                 st.sidebar.dataframe(pd.DataFrame([{
-                    "Naziv": r.get("Name",""), "Koda": r.get("Code",""),
-                    "Warehouse ID": r.get("WarehouseId") or r.get("ID","")
+                    "Naziv": r.get("Name",""), "Koda": r.get("Code",""), "Warehouse ID": r.get("WarehouseId") or r.get("ID","")
                 } for r in rows]), use_container_width=True)
                 st.sidebar.caption("Poiščite MPK1/MPK2/MPK3/MPOC in prekopirajte ID-je v polja zgoraj.")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
     # ── Tabs za lokacije ──────────────────────────────────────────────────────
-
     tabs     = st.tabs(["🚐 MPK1 — Potujoča 1", "🚐 MPK2 — Potujoča 2", "🚐 MPK3 — Potujoča 3", "🏪 MPOC — Ribarnica Domžale"])
     LOC_KEYS = ["MPK1", "MPK2", "MPK3", "MPOC"]
 
@@ -181,7 +115,8 @@ def render():
             an_id    = get_an_id(loc_key)
 
             col1, col2 = st.columns([2, 1])
-            with col1: st.subheader(loc_name)
+            with col1:
+                st.subheader(loc_name)
             with col2:
                 find_btn = st.button("🔍 Poišči osnutke", key=f"find_{loc_key}", use_container_width=True)
 
@@ -198,7 +133,7 @@ def render():
                     st.stop()
                 with st.spinner("Iščem osnutke dokumentov ..."):
                     try:
-                        drafts = make_client().get_draft_entries(an_id)
+                        drafts = get_client().get_draft_entries(an_id)
                         st.session_state[f"drafts_{loc_key}"] = drafts
                     except Exception as e:
                         st.error(f"Napaka pri branju osnutkov: {e}")
@@ -236,11 +171,12 @@ def render():
                     st.stop()
                 with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ⏳"):
                     try:
-                        cli = make_client()
+                        cli = get_client()
                         sorted_ids = sorted(
                             selected_ids,
                             key=lambda eid: str(next((d.get("Date","") for d in drafts if d.get("StockEntryId") == eid), ""))
                         )
+
                         all_entry_data, all_doc_lines, all_item_ids = {}, {}, set()
                         for eid in sorted_ids:
                             ed = cli.get_entry_detail(eid)
@@ -259,8 +195,11 @@ def render():
                             stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
                         stock = parse_stock_to_engine_format(stock_raw)
 
-                        shared_virtual  = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
-                        all_results     = {}
+                        shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
+                        all_results    = {}
+
+                        # Za vsak artikel shrani datum ZADNJEGA dokumenta kjer se pojavi
+                        # article_dates: {article_id: datetime}
                         article_dates   = {}
                         doc_article_ids = set()
 
@@ -271,13 +210,16 @@ def render():
                                 doc_date = datetime.strptime(doc_date_str, "%Y-%m-%d")
                             except Exception:
                                 doc_date = datetime.now()
+
                             all_results[eid] = assign_lots_with_virtual(
                                 all_doc_lines[eid], stock, shared_virtual, doc_date
                             )
+
                             for l in all_doc_lines[eid]:
                                 aid = l.get("article_id")
                                 if aid:
                                     doc_article_ids.add(aid)
+                                    # Posodobi na najnovejši datum za ta artikel
                                     if aid not in article_dates or doc_date > article_dates[aid]:
                                         article_dates[aid] = doc_date
 
@@ -286,6 +228,7 @@ def render():
                             article_ids=doc_article_ids,
                             article_dates=article_dates,
                         )
+
                         st.session_state[f"multi_result_{loc_key}"] = {
                             "sorted_ids": sorted_ids, "all_results": all_results,
                             "all_entry_data": all_entry_data,
@@ -304,7 +247,7 @@ def render():
                 drafts_map     = {d.get("StockEntryId"): d for d in multi_res["drafts"]}
 
                 def row_color(s):
-                    return {"ok":"🟢","matched":"🟡","partial":"🟠","no_match":"🔴","no_lots":"🔴"}.get(s,"⚪")
+                    return {"ok":"🟢","matched":"🟡","partial":"🟠","no_match":"🔴","no_lots":"🔴","writeoff":"📤"}.get(s,"⚪")
 
                 total_ok      = sum(len([l for l in r if l["status"]=="ok"])                    for r in all_results.values())
                 total_matched = sum(len([l for l in r if l["status"]=="matched"])                for r in all_results.values())
@@ -331,7 +274,7 @@ def render():
                         } for l in lines])
                         st.dataframe(df_r, use_container_width=True, hide_index=True)
 
-                # Poročilo napak — Excel
+                # Poročilo napak
                 error_rows = []
                 for eid in sorted_ids:
                     lines_e  = all_results[eid]
@@ -349,27 +292,22 @@ def render():
                             if "[" in detail:
                                 detail = detail[detail.find("[")+1:detail.rfind("]")]
                             error_rows.append({
-                                "Analitika":  loc_key,
-                                "Dokument":   doc_num,
-                                "Datum":      doc_date,
-                                "Vrstica":    i,
-                                "Artikel":    l["article_name"],
-                                "Količina":   l["quantity_assigned"],
-                                "ME":         l.get("unit",""),
-                                "Napaka":     status_opis,
-                                "Podrobnost": detail,
+                                "Analitika": loc_key, "Dokument": doc_num, "Datum": doc_date,
+                                "Vrstica": i, "Artikel": l["article_name"],
+                                "Kol.": l["quantity_assigned"], "ME": l.get("unit",""),
+                                "Napaka": status_opis, "Podrobnost": detail,
                             })
 
                 if error_rows:
                     with st.expander(f"📋 Poročilo napak ({len(error_rows)} vrstic)", expanded=True):
                         df_err = pd.DataFrame(error_rows)
                         st.dataframe(df_err, use_container_width=True, hide_index=True)
-                        xlsx = excel_download(df_err, f"napake_{loc_key}")
+                        csv = df_err.to_csv(index=False, sep=";", encoding="utf-8-sig")
                         st.download_button(
-                            label="⬇️ Prenesi poročilo (Excel)",
-                            data=xlsx,
-                            file_name=f"napake_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            label="⬇️ Prenesi poročilo (CSV)",
+                            data=csv,
+                            file_name=f"napake_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv",
                         )
 
                 old_lots = multi_res.get("old_lot_warnings", [])
@@ -406,7 +344,7 @@ def render():
                     with st.spinner(f"Shranjujem {len(sorted_ids)} dokumentov v Minimax ..."):
                         errors, saved = [], 0
                         try:
-                            cli = make_client()
+                            cli = get_client()
                             for eid in sorted_ids:
                                 try:
                                     cli.update_entry_with_lots(
