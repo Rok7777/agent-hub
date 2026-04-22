@@ -80,15 +80,19 @@ class MinimaxClient:
     def get_journal_drafts(self) -> list[dict]:
         """
         Vrne osnutke temeljnic tipa DI (dnevni iztržek iz Shopsy).
-        Korak 1: Filtrira po Status=Osnutek — vrne samo osnutke (hitro, malo rezultatov)
-        Korak 2: Med osnutki obdrži samo tiste z opisom DI: — Shopsy iztržki
-        Korak 3: Za vsak pokliče GetJournal da dobi knjižbe
+        Filtrira po datumu zadnjih 60 dni — izogne se bodočim FT razmejitam.
+        Iz rezultatov vzame samo tiste z opisom DI: in pokliče GetJournal.
         """
-        osnutki_raw = []
-        page = 1
+        from datetime import timedelta
+        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        date_to   = datetime.now().strftime("%Y-%m-%d")
+
+        di_ids = []
+        page   = 1
         while True:
             data = self._get("/journals", params={
-                "Status":      "Osnutek",
+                "DateFrom":    date_from,
+                "DateTo":      date_to,
                 "CurrentPage": page,
                 "PageSize":    50,
             })
@@ -96,27 +100,33 @@ class MinimaxClient:
             for row in rows:
                 opis = str(row.get("Description", "") or "")
                 if opis.startswith("DI:"):
-                    osnutki_raw.append(row.get("JournalId"))
+                    di_ids.append(row.get("JournalId"))
             total   = data.get("TotalRows", 0)
             fetched = (page - 1) * 50 + len(rows)
             if fetched >= total or not rows:
                 break
             page += 1
 
-        # Za vsak najden ID pokliči GetJournal da dobi knjižbe
+        # Za vsak DI journal pokliči GetJournal in filtriraj Status=O
         result = []
-        for jid in osnutki_raw:
+        for jid in di_ids:
             try:
-                j = self.get_journal(jid)
-                result.append(j)
+                j      = self.get_journal(jid)
+                status = str(j.get("Status", "")).upper()
+                if status in ("O", "DRAFT", "0", "OSNUTEK"):
+                    result.append(j)
             except Exception:
                 continue
         return result
 
     def get_journal_drafts_debug(self) -> dict:
-        """Debug: vrne surove podatke — test Status=Osnutek filter."""
+        """Debug: vrne surove podatke — zadnjih 60 dni."""
+        from datetime import timedelta
+        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        date_to   = datetime.now().strftime("%Y-%m-%d")
         return self._get("/journals", params={
-            "Status":      "Osnutek",
+            "DateFrom":    date_from,
+            "DateTo":      date_to,
             "CurrentPage": 1,
             "PageSize":    5,
         })
