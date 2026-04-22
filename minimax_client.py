@@ -163,28 +163,43 @@ class MinimaxClient:
         data_1000 = None
 
         # Interni ID-ji za konte 1000 in 1652 v Minimax (Oltre Con d.o.o.)
-        # Pridobljeni iz GetJournal response — API vrača interni ID ne konto šifro
         ID_GOTOVINA = 72537347   # konto 1000
         ID_KARTICA  = 72537491   # konto 1652
 
-        for entry in entries:
-            acc_obj      = entry.get("Account") or {}
-            acc_id       = acc_obj.get("ID")
-            analytic_obj  = entry.get("Analytic") or {}
-            analytic_code = analytic_obj.get("Code", "") or ""
+        import re
 
-            import re
-            m     = re.match(r"^(MPK\d+|MPOC)", analytic_code)
-            sifra = m.group(1) if m else analytic_code.split(" ")[0] if analytic_code else ""
+        # Analitiko (MPK2/MPK3/...) izvlečemo iz opisa journala
+        # Opis je npr. "DI:20260418_120000" — analitika je v Description AccountEntry-ja
+        # ali iz opisa samega journala ki se začne z "DI:"
+        journal_desc = journal.get("Description", "") or ""
+        # Poiščemo MPKx ali MPOC v opisu vseh entries
+        sifra_journal = ""
+        an_polno_journal = ""
+        for entry in entries:
+            desc = entry.get("Description", "") or ""
+            acc_name = (entry.get("Account") or {}).get("Name", "") or ""
+            an_obj = entry.get("Analytic") or {}
+            an_code_try = an_obj.get("Code", "") or ""
+            if not an_code_try:
+                # Poskusi iz ResourceUrl zadnji segment
+                url = an_obj.get("ResourceUrl", "") or ""
+            m = re.search(r"(MPK\d+|MPOC)", desc + " " + an_code_try + " " + journal_desc)
+            if m and not sifra_journal:
+                sifra_journal    = m.group(1)
+                an_polno_journal = an_code_try or sifra_journal
+
+        for entry in entries:
+            acc_obj = entry.get("Account") or {}
+            acc_id  = acc_obj.get("ID")
 
             debit  = float(entry.get("Debit", 0) or 0)
             credit = float(entry.get("Credit", 0) or 0)
             znesek = debit if debit > 0 else credit
 
             if acc_id == ID_KARTICA and not data_1652:
-                data_1652 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
+                data_1652 = {"analitika": an_polno_journal, "sifra": sifra_journal, "znesek": znesek}
             elif acc_id == ID_GOTOVINA and not data_1000:
-                data_1000 = {"analitika": analytic_code, "sifra": sifra, "znesek": znesek}
+                data_1000 = {"analitika": an_polno_journal, "sifra": sifra_journal, "znesek": znesek}
 
         if not data_1652 and not data_1000:
             return None
@@ -226,24 +241,51 @@ class MinimaxClient:
             except Exception:
                 pass
 
+        # Interni ID-ji za konte 1000 in 1652
+        ID_GOTOVINA = 72537347
+        ID_KARTICA  = 72537491
+
         nove_entries, entry_1652, entry_1000 = [], None, None
         for entry in entries:
-            account = str(entry.get("Account", {}).get("ID", ""))
-            if account == "1652":   entry_1652 = entry
-            elif account == "1000": entry_1000 = entry
-            else:                   nove_entries.append(entry)
+            acc_id = (entry.get("Account") or {}).get("ID")
+            if acc_id == ID_KARTICA:   entry_1652 = entry
+            elif acc_id == ID_GOTOVINA: entry_1000 = entry
+            else:                       nove_entries.append(entry)
 
         ref_entry    = entry_1652 or entry_1000
         analitika_id = (ref_entry.get("Analytic") or {}).get("ID") if ref_entry else None
+        entry_date   = ref_entry.get("EntryDate") if ref_entry else None
+        description  = ref_entry.get("Description") if ref_entry else None
 
-        nova = {"Account": {"ID": 120000}, "Analytic": {"ID": analitika_id} if analitika_id else None,
-                "Customer": stranka_obj, "Debit": podatki["skupaj"], "Credit": 0}
-        if ref_entry:
-            nova["EntryDate"]   = ref_entry.get("EntryDate")
-            nova["Description"] = ref_entry.get("Description")
+        # Poišči interni ID za konto 120000
+        konto_120000_id = None
+        try:
+            acc_rows = self._get("/accounts", params={"Code": "120000", "PageSize": 5})
+            for a in acc_rows.get("Rows", []):
+                if str(a.get("Code", "")) == "120000":
+                    konto_120000_id = a.get("AccountId") or a.get("ID")
+                    break
+        except Exception:
+            pass
+
+        nova = {
+            "Account":     {"ID": konto_120000_id} if konto_120000_id else {"Code": "120000"},
+            "Analytic":    {"ID": analitika_id} if analitika_id else None,
+            "Customer":    stranka_obj,
+            "Debit":       podatki["skupaj"],
+            "Credit":      0,
+            "EntryDate":   entry_date,
+            "Description": description,
+        }
         nove_entries.append(nova)
 
-        self.update_journal(podatki["journal_id"], {**journal, "Status": "P", "JournalEntries": nove_entries})
+        # Svež GetJournal za pravilni RowVersion
+        svez = self.get_journal(podatki["journal_id"])
+        self.update_journal(podatki["journal_id"], {
+            **svez,
+            "Status":         "P",
+            "JournalEntries": nove_entries,
+        })
         return True
 
     # ── Analitike ─────────────────────────────────────────────────────────────
