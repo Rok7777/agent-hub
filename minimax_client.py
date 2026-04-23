@@ -401,8 +401,8 @@ class MinimaxClient:
                             for row in (detail.get("StockEntryRows") or []):
                                 wh_from = (row.get("WarehouseFrom") or {}).get("ID")
                                 wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                                if entry_type == "P" and wh_to != warehouse_id: continue
-                                if entry_type == "I" and wh_from != warehouse_id: continue
+                                if entry_type == "P" and str(wh_to) != str(warehouse_id): continue
+                                if entry_type == "I" and str(wh_from) != str(warehouse_id): continue
                                 item_id = (row.get("Item") or {}).get("ID")
                                 batch   = row.get("BatchNumber", "") or ""
                                 qty     = float(row.get("Quantity") or 0)
