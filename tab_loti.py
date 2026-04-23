@@ -225,9 +225,21 @@ def render():
                         for eid in sorted_ids:
                             all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
-                        stock_raw = cli.get_stock_by_lots(wh_id)
+                        # Razreši numerični warehouse ID (koda "MP-K2" → numerični 27421)
+                        numeric_wh_id = wh_id
+                        try:
+                            for wh in cli.get_warehouses():
+                                wh_num  = wh.get("WarehouseId") or wh.get("ID")
+                                wh_code = wh.get("Code", "")
+                                if str(wh_num) == str(wh_id) or wh_code == str(wh_id):
+                                    numeric_wh_id = wh_num
+                                    break
+                        except Exception:
+                            pass
+
+                        stock_raw = cli.get_stock_by_lots(numeric_wh_id)
                         if not any(r.get("BatchNumber") for r in stock_raw) and all_item_ids:
-                            stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
+                            stock_raw = cli.get_stock_for_items(numeric_wh_id, list(all_item_ids))
                         stock = parse_stock_to_engine_format(stock_raw)
 
                         shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
