@@ -349,12 +349,14 @@ def render():
                     with st.expander(f"📋 Poročilo napak ({len(error_rows)} vrstic)", expanded=True):
                         df_err = pd.DataFrame(error_rows)
                         st.dataframe(df_err, use_container_width=True, hide_index=True)
-                        csv = df_err.to_csv(index=False, sep=";", encoding="utf-8-sig")
+                        import io
+                        buf = io.BytesIO()
+                        df_err.to_excel(buf, index=False, engine="openpyxl")
                         st.download_button(
-                            label="⬇️ Prenesi poročilo (CSV)",
-                            data=csv,
-                            file_name=f"napake_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
-                            mime="text/csv",
+                            label="⬇️ Prenesi poročilo (Excel)",
+                            data=buf.getvalue(),
+                            file_name=f"napake_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         )
 
                 old_lots = multi_res.get("old_lot_warnings", [])
