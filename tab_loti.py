@@ -62,6 +62,8 @@ def render():
             st.session_state["auto_find_warehouses"] = True
         if st.button("🔧 Diagnostika lotov (MPK2)"):
             st.session_state["diagnose_lots"] = True
+        if st.button("🔍 Debug zaloge (MPK2)"):
+            st.session_state["debug_stock"] = True
 
     # ── Sidebar akcije ────────────────────────────────────────────────────────
     if st.session_state.get("auto_find_analytics") and check_config():
@@ -88,6 +90,39 @@ def render():
                         st.sidebar.write(f"Tip {f['type']}: lot={f['batch']}, wh_from={f['wh_from']}, wh_to={f['wh_to']}")
                 else:
                     st.sidebar.warning("Ni dokumentov z loti v zadnjih 14 dneh!")
+            except Exception as e:
+                st.sidebar.error(f"Napaka: {e}")
+
+    if st.session_state.get("debug_stock") and check_config():
+        st.session_state.pop("debug_stock")
+        with st.spinner("Berem zalogo ..."):
+            try:
+                cli   = get_client()
+                wh    = get_wh_id("MPK2")
+                raw   = cli.get_stock_by_lots(wh)
+                has_lots = any(r.get("BatchNumber") for r in raw)
+                st.sidebar.write(f"WH ID: `{wh}` (tip: {type(wh).__name__})")
+                st.sidebar.write(f"get_stock_by_lots: {len(raw)} vrstic, loti: {has_lots}")
+                if not has_lots:
+                    items = cli.get_stock_for_items(wh, [])
+                    st.sidebar.write(f"get_stock_for_items: {len(items)} vrstic")
+                    sample = items[:5]
+                    for s in sample:
+                        st.sidebar.write(f"  {s.get('ItemName','')} | lot={s.get('BatchNumber')} | qty={s.get('Quantity')}")
+                    if not items:
+                        # Show raw P/L docs
+                        try:
+                            from datetime import timedelta
+                            date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+                            data = cli._get("/stockentry", params={"StockEntryType":"P","StockEntrySubtype":"L","Status":"P","DateFrom":date_from,"CurrentPage":1,"PageSize":5})
+                            docs = data.get("Rows",[])
+                            st.sidebar.write(f"P/L dokumenti (60 dni): {data.get('TotalRows',0)}")
+                            if docs:
+                                d0 = cli.get_entry_detail(docs[0].get("StockEntryId"))
+                                r0 = (d0.get("StockEntryRows") or [{}])[0]
+                                st.sidebar.write(f"Prva vrstica: wh_from={((r0.get('WarehouseFrom') or {}).get('ID'))}, wh_to={((r0.get('WarehouseTo') or {}).get('ID'))}")
+                        except Exception as ex:
+                            st.sidebar.error(f"P/L debug napaka: {ex}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
