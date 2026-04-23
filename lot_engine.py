@@ -143,9 +143,6 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
         if d is None:
             result.append({**lot, '_date': datetime(2099, 1, 1), '_aged': False})
             continue
-        # NIKOLI ne uporabi lotov novejših od datuma dokumenta
-        if d > today:
-            continue
         days = (today - d).days
         # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
         if needs_14d and days > 30:
