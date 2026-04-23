@@ -364,6 +364,18 @@ class MinimaxClient:
         from collections import defaultdict
         from datetime import datetime, timedelta
 
+        # Razreši numerični warehouse ID (npr. "MP-K2" → 27421)
+        numeric_wh_id = warehouse_id
+        try:
+            for wh in self.get_warehouses():
+                wh_num  = wh.get("WarehouseId") or wh.get("ID")
+                wh_code = wh.get("Code", "")
+                if str(wh_num) == str(warehouse_id) or wh_code == str(warehouse_id):
+                    numeric_wh_id = wh_num
+                    break
+        except Exception:
+            pass
+
         item_info = {}
         try:
             base = self.get_stock_by_lots(warehouse_id)
@@ -401,8 +413,8 @@ class MinimaxClient:
                             for row in (detail.get("StockEntryRows") or []):
                                 wh_from = (row.get("WarehouseFrom") or {}).get("ID")
                                 wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                                if entry_type == "P" and str(wh_to) != str(warehouse_id): continue
-                                if entry_type == "I" and str(wh_from) != str(warehouse_id): continue
+                                if entry_type == "P" and str(wh_to) != str(numeric_wh_id): continue
+                                if entry_type == "I" and str(wh_from) != str(numeric_wh_id): continue
                                 item_id = (row.get("Item") or {}).get("ID")
                                 batch   = row.get("BatchNumber", "") or ""
                                 qty     = float(row.get("Quantity") or 0)
