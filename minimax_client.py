@@ -73,7 +73,8 @@ class MinimaxClient:
     def _put(self, path: str, body: dict) -> dict:
         url = f"{BASE}/api/orgs/{self.org_id}{path}"
         r = requests.put(url, headers=self._headers(), json=body, timeout=20)
-        r.raise_for_status()
+        if not r.ok:
+            raise Exception(f"PUT {path} → {r.status_code}: {r.text[:500]}")
         return r.json()
 
     # ── Journal (Temeljnice) ──────────────────────────────────────────────────
@@ -534,8 +535,6 @@ class MinimaxClient:
         clean_data = {k: v for k, v in entry_data.items() if k not in READONLY_FIELDS}
 
         body = {**clean_data, "StockEntryRows": api_rows}
-        import json
-        raise Exception(f"DEBUG api_rows[0:3]: {json.dumps(api_rows[:3], ensure_ascii=False)}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
