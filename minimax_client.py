@@ -534,6 +534,8 @@ class MinimaxClient:
         clean_data = {k: v for k, v in entry_data.items() if k not in READONLY_FIELDS}
 
         body = {**clean_data, "StockEntryRows": api_rows}
+        import json
+        raise Exception(f"DEBUG api_rows[0:3]: {json.dumps(api_rows[:3], ensure_ascii=False)}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
