@@ -418,20 +418,30 @@ def render():
                         try:
                             cli = get_client()
                             for eid in sorted_ids:
+                                doc_label = f"IS-{drafts_map.get(eid,{}).get('Number','?')}"
                                 try:
+                                    rows = all_results[eid]
+                                    st.write(f"Shranjujem {doc_label} ({len(rows)} vrstic)...")
                                     cli.update_entry_with_lots(
                                         entry_id=eid, entry_data=all_entry_data[eid],
-                                        new_rows=all_results[eid],
+                                        new_rows=rows,
                                     )
                                     saved += 1
+                                    st.write(f"✅ {doc_label} shranjen")
                                 except Exception as e:
-                                    errors.append(f"IS-{drafts_map.get(eid,{}).get('Number','?')}: {e}")
+                                    import traceback
+                                    errors.append(f"{doc_label}: {e}")
+                                    st.error(f"Napaka {doc_label}: {e}")
+                                    st.code(traceback.format_exc())
                         except Exception as e:
+                            import traceback
                             st.error(f"Napaka pri povezavi: {e}")
+                            st.code(traceback.format_exc())
                         if saved > 0:
                             st.success(f"✅ {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
                         for err in errors:
                             st.error(err)
-                        del st.session_state[f"multi_result_{loc_key}"]
-                        st.session_state.pop(f"drafts_{loc_key}", None)
-                        st.rerun()
+                        if saved > 0:
+                            del st.session_state[f"multi_result_{loc_key}"]
+                            st.session_state.pop(f"drafts_{loc_key}", None)
+                            st.rerun()
