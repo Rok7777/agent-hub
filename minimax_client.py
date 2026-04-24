@@ -526,7 +526,14 @@ class MinimaxClient:
             if r.get("unit"):                      row["UnitOfMeasurement"] = r["unit"]
             api_rows.append(row)
 
-        body = {**entry_data, "StockEntryRows": api_rows}
+        # Odstrani readonly polja iz entry_data
+        READONLY_FIELDS = [
+            "StockEntryId", "Number", "RowVersion", "RecordDtModified",
+            "ResourceUrl", "StockEntry", "StockEntryRowId",
+        ]
+        clean_data = {k: v for k, v in entry_data.items() if k not in READONLY_FIELDS}
+
+        body = {**clean_data, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
