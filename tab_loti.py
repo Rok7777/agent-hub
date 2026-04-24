@@ -441,7 +441,10 @@ def render():
                             st.success(f"✅ {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
                         for err in errors:
                             st.error(err)
-                        if saved > 0:
+                        # Rerun samo če ni napak
+                        if saved > 0 and not errors:
                             del st.session_state[f"multi_result_{loc_key}"]
                             st.session_state.pop(f"drafts_{loc_key}", None)
                             st.rerun()
+                        elif errors:
+                            st.warning("⚠️ Napake pri shranjevanju — rezultati ostanejo prikazani.")
