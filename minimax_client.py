@@ -534,9 +534,9 @@ class MinimaxClient:
         ]
         clean_data = {k: v for k, v in entry_data.items() if k not in READONLY_FIELDS}
 
-        # DEBUG: pošlji samo prvo vrstico
-        test_body = {**clean_data, "StockEntryRows": api_rows[:1]}
-        return self._put(f"/stockentry/{entry_id}", test_body)
+        import json
+        raise Exception(f"DEBUG prva vrstica: {json.dumps(api_rows[0], ensure_ascii=False, default=str)}")
+        return self._put(f"/stockentry/{entry_id}", {**clean_data, "StockEntryRows": api_rows})
 
 
 # ── Pretvorba ─────────────────────────────────────────────────────────────────
