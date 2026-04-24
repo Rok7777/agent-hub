@@ -64,6 +64,11 @@ def render():
             st.session_state["diagnose_lots"] = True
         if st.button("🔍 Debug zaloge (MPK2)"):
             st.session_state["debug_stock"] = True
+        if st.button("🗑️ Počisti cache zaloge"):
+            for k in list(st.session_state.keys()):
+                if k.startswith("stock_cache_") or k == "item_units_cache":
+                    del st.session_state[k]
+            st.sidebar.success("Cache počiščen!")
 
     # ── Sidebar akcije ────────────────────────────────────────────────────────
     if st.session_state.get("auto_find_analytics") and check_config():
@@ -221,7 +226,14 @@ def render():
                             for l in dl:
                                 if l.get("article_id"): all_item_ids.add(l["article_id"])
 
-                        item_units = cli.get_item_units(list(all_item_ids))
+                        # Cache item_units v session da ne kličemo API vsakič
+                        if "item_units_cache" not in st.session_state:
+                            st.session_state["item_units_cache"] = {}
+                        missing = [i for i in all_item_ids if i not in st.session_state["item_units_cache"]]
+                        if missing:
+                            new_units = cli.get_item_units(missing)
+                            st.session_state["item_units_cache"].update(new_units)
+                        item_units = st.session_state["item_units_cache"]
                         for eid in sorted_ids:
                             all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
@@ -237,9 +249,14 @@ def render():
                         except Exception:
                             pass
 
-                        stock_raw = cli.get_stock_by_lots(numeric_wh_id)
-                        if not any(r.get("BatchNumber") for r in stock_raw) and all_item_ids:
-                            stock_raw = cli.get_stock_for_items(numeric_wh_id, list(all_item_ids))
+                        # Cache zaloge v session (velja za to sejo)
+                        stock_cache_key = f"stock_cache_{loc_key}"
+                        if stock_cache_key not in st.session_state:
+                            stock_raw = cli.get_stock_by_lots(numeric_wh_id)
+                            if not any(r.get("BatchNumber") for r in stock_raw) and all_item_ids:
+                                stock_raw = cli.get_stock_for_items(numeric_wh_id, list(all_item_ids))
+                            st.session_state[stock_cache_key] = stock_raw
+                        stock_raw = st.session_state[stock_cache_key]
                         stock = parse_stock_to_engine_format(stock_raw)
 
                         shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
