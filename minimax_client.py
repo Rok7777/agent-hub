@@ -513,6 +513,9 @@ class MinimaxClient:
         """
         api_rows = []
         for r in new_rows:
+            # Odpisne vrstice (write-off) ne gredo v Minimax — so samo interni odpis
+            if r.get("_writeoff"):
+                continue
             row = {
                 "Item":     {"ID": r["article_id"]},
                 "Quantity": r["quantity_assigned"],
