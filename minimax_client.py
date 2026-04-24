@@ -527,16 +527,24 @@ class MinimaxClient:
             if r.get("unit"):                      row["UnitOfMeasurement"] = r["unit"]
             api_rows.append(row)
 
-        # Odstrani readonly polja iz entry_data
-        READONLY_FIELDS = [
-            "StockEntryId", "Number", "RowVersion", "RecordDtModified",
-            "ResourceUrl", "StockEntry", "StockEntryRowId",
-        ]
-        clean_data = {k: v for k, v in entry_data.items() if k not in READONLY_FIELDS}
+        def _clean_fk(obj):
+            if isinstance(obj, dict) and "ID" in obj:
+                return {"ID": obj["ID"]}
+            return obj
 
-        import json
-        raise Exception(f"DEBUG clean_data keys: {list(clean_data.keys())}, sample: {json.dumps({k: clean_data[k] for k in list(clean_data.keys())[:5]}, ensure_ascii=False, default=str)}")
-        return self._put(f"/stockentry/{entry_id}", {**clean_data, "StockEntryRows": api_rows})
+        def _clean_entry(data):
+            SKIP = {"StockEntryId", "Number", "RowVersion", "RecordDtModified",
+                    "ResourceUrl", "StockEntryRows"}
+            result = {}
+            for k, v in data.items():
+                if k in SKIP:
+                    continue
+                result[k] = _clean_fk(v)
+            return result
+
+        clean_data = _clean_entry(entry_data)
+        body = {**clean_data, "StockEntryRows": api_rows}
+        return self._put(f"/stockentry/{entry_id}", body)
 
 
 # ── Pretvorba ─────────────────────────────────────────────────────────────────
