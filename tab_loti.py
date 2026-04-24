@@ -211,7 +211,10 @@ def render():
                     st.stop()
                 with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ⏳"):
                     try:
-                        cli = get_client()
+                        # Cache client v session (izognemo se novemu token requestu)
+                        if "cached_client" not in st.session_state:
+                            st.session_state["cached_client"] = get_client()
+                        cli = st.session_state["cached_client"]
                         sorted_ids = sorted(
                             selected_ids,
                             key=lambda eid: str(next((d.get("Date","") for d in drafts if d.get("StockEntryId") == eid), ""))
@@ -238,23 +241,12 @@ def render():
                             all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
                         # Razreši numerični warehouse ID (koda "MP-K2" → numerični 27421)
-                        numeric_wh_id = wh_id
-                        try:
-                            for wh in cli.get_warehouses():
-                                wh_num  = wh.get("WarehouseId") or wh.get("ID")
-                                wh_code = wh.get("Code", "")
-                                if str(wh_num) == str(wh_id) or wh_code == str(wh_id):
-                                    numeric_wh_id = wh_num
-                                    break
-                        except Exception:
-                            pass
-
-                        # Cache zaloge v session (velja za to sejo)
+                        # wh_id je že numerični ID iz config.py → get_wh_id()
                         stock_cache_key = f"stock_cache_{loc_key}"
                         if stock_cache_key not in st.session_state:
-                            stock_raw = cli.get_stock_by_lots(numeric_wh_id)
+                            stock_raw = cli.get_stock_by_lots(wh_id)
                             if not any(r.get("BatchNumber") for r in stock_raw) and all_item_ids:
-                                stock_raw = cli.get_stock_for_items(numeric_wh_id, list(all_item_ids))
+                                stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
                             st.session_state[stock_cache_key] = stock_raw
                         stock_raw = st.session_state[stock_cache_key]
                         stock = parse_stock_to_engine_format(stock_raw)
