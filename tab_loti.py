@@ -244,9 +244,15 @@ def render():
                         # wh_id je že numerični ID iz config.py → get_wh_id()
                         stock_cache_key = f"stock_cache_{loc_key}"
                         if stock_cache_key not in st.session_state:
+                            import time
+                            t0 = time.time()
                             stock_raw = cli.get_stock_by_lots(wh_id)
-                            if not any(r.get("BatchNumber") for r in stock_raw) and all_item_ids:
+                            has_lots = any(r.get("BatchNumber") for r in stock_raw)
+                            st.info(f"⏱ get_stock_by_lots: {time.time()-t0:.1f}s, vrstic={len(stock_raw)}, loti={has_lots}")
+                            if not has_lots and all_item_ids:
+                                t1 = time.time()
                                 stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
+                                st.info(f"⏱ get_stock_for_items: {time.time()-t1:.1f}s, vrstic={len(stock_raw)}")
                             st.session_state[stock_cache_key] = stock_raw
                         stock_raw = st.session_state[stock_cache_key]
                         stock = parse_stock_to_engine_format(stock_raw)
