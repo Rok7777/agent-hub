@@ -534,8 +534,9 @@ class MinimaxClient:
         ]
         clean_data = {k: v for k, v in entry_data.items() if k not in READONLY_FIELDS}
 
-        body = {**clean_data, "StockEntryRows": api_rows}
-        return self._put(f"/stockentry/{entry_id}", body)
+        # DEBUG: pošlji samo prvo vrstico
+        test_body = {**clean_data, "StockEntryRows": api_rows[:1]}
+        return self._put(f"/stockentry/{entry_id}", test_body)
 
 
 # ── Pretvorba ─────────────────────────────────────────────────────────────────
