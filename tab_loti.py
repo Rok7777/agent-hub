@@ -16,6 +16,24 @@ from lot_engine import assign_lots_with_virtual, check_old_lots
 from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
+@st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
+def _get_stock_cached(username, org_id, wh_id):
+    """Cachirana zaloga po lotih — velja 15 minut."""
+    from minimax_client import MinimaxClient
+    from config import _secret
+    cli = MinimaxClient(
+        username      = username,
+        password      = _secret("MINIMAX_PASSWORD", ""),
+        client_id     = _secret("MINIMAX_CLIENT_ID", ""),
+        client_secret = _secret("MINIMAX_CLIENT_SECRET", ""),
+        org_id        = int(org_id),
+    )
+    stock_raw = cli.get_stock_by_lots(wh_id)
+    if not any(r.get("BatchNumber") for r in stock_raw):
+        stock_raw = cli.get_stock_for_items(wh_id, [])
+    return stock_raw
+
+
 def render():
     st.caption("Avtomatska FIFO dodelitev serij za maloprodajne dokumente v Minimaxu")
 
@@ -241,20 +259,10 @@ def render():
                             all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
                         # Razreši numerični warehouse ID (koda "MP-K2" → numerični 27421)
-                        # wh_id je že numerični ID iz config.py → get_wh_id()
-                        stock_cache_key = f"stock_cache_{loc_key}"
-                        if stock_cache_key not in st.session_state:
-                            import time
-                            t0 = time.time()
-                            stock_raw = cli.get_stock_by_lots(wh_id)
-                            has_lots = any(r.get("BatchNumber") for r in stock_raw)
-                            st.info(f"⏱ get_stock_by_lots: {time.time()-t0:.1f}s, vrstic={len(stock_raw)}, loti={has_lots}")
-                            if not has_lots and all_item_ids:
-                                t1 = time.time()
-                                stock_raw = cli.get_stock_for_items(wh_id, list(all_item_ids))
-                                st.info(f"⏱ get_stock_for_items: {time.time()-t1:.1f}s, vrstic={len(stock_raw)}")
-                            st.session_state[stock_cache_key] = stock_raw
-                        stock_raw = st.session_state[stock_cache_key]
+                        # Cachirana zaloga (15 min) — get_stock_for_items se kliče samo enkrat
+                        username = st.session_state.get("username", "")
+                        org_id   = st.session_state.get("org_id", "171038")
+                        stock_raw = _get_stock_cached(username, org_id, wh_id)
                         stock = parse_stock_to_engine_format(stock_raw)
 
                         shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
