@@ -137,18 +137,25 @@ class MinimaxClient:
             except Exception as e:
                 k2.append({"id": j.get("JournalId"), "napaka": str(e)})
 
+        # Pokaži cel entry (Account + Analytic) za prvi osnutek
         k3 = {}
-        for jid in [225001987, 225001984]:
+        if osnutki:
+            jid = osnutki[0].get("JournalId")
             try:
                 j       = self.get_journal(jid)
                 entries = j.get("JournalEntries", [])
-                k3[jid] = {
-                    "Status":        j.get("Status"),
-                    "entries_count": len(entries),
-                    "entries_raw":   [e.get("Account") for e in entries[:6]],
+                k3["prvi_osnutek"] = {
+                    "JournalId":   jid,
+                    "Description": j.get("Description"),
+                    "entries": [{
+                        "Account":  e.get("Account"),
+                        "Analytic": e.get("Analytic"),
+                        "Debit":    e.get("Debit"),
+                        "Credit":   e.get("Credit"),
+                    } for e in entries]
                 }
             except Exception as e:
-                k3[jid] = {"napaka": str(e)}
+                k3["prvi_osnutek"] = {"napaka": str(e)}
 
         return {"k1_get_drafts": k1, "k2_parse": k2, "k3_direktno": k3}
 
