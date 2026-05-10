@@ -572,39 +572,44 @@ class MinimaxClient:
     def update_entry_with_lots(self, entry_id: int, entry_data: dict, new_rows: list[dict]) -> dict:
         """
         Posodobi dokument z dodelitvami lotov.
-        new_rows: [{'article_id', 'quantity_assigned', 'lot', 'unit', 'selling_price', 'opis'}, ...]
+        Originalne vrstice ohranimo z StockEntryRowId + dodamo BatchNumber.
+        Dodatne vrstice (drugi loti) pošljemo brez StockEntryRowId.
         """
+        fresh = self.get_entry_detail(entry_id)
+        orig_rows = fresh.get("StockEntryRows") or []
+
+        # Indeks originalnih vrstic po RowNumber (1-based → 0-based)
+        orig_by_rownum = {r.get("RowNumber", 0) - 1: r for r in orig_rows}
+
         api_rows = []
         for r in new_rows:
-            # Odpisne vrstice (write-off) ne gredo v Minimax — so samo interni odpis
             if r.get("_writeoff"):
                 continue
-            row = {
-                "Item":     {"ID": r["article_id"]},
-                "Quantity": r["quantity_assigned"],
-                "Note":     r.get("opis", "") or "",
-            }
-            if r.get("lot"):                       row["BatchNumber"]       = r["lot"]
-            if r.get("selling_price") is not None: row["SellingPrice"]      = r["selling_price"]
-            if r.get("unit"):                      row["UnitOfMeasurement"] = r["unit"]
-            api_rows.append(row)
+            row_id = r.get("row_id", 0)
+            orig   = orig_by_rownum.get(row_id)
 
-        # Svež GetEntry za pravilen RowVersion
-        fresh = self.get_entry_detail(entry_id)
+            if orig:
+                # Obstoječa vrstica — ohrani vse + dodaj lot
+                new_orig = {**orig}
+                if r.get("lot"):
+                    new_orig["BatchNumber"] = r["lot"]
+                new_orig["Quantity"] = r["quantity_assigned"]
+                api_rows.append(new_orig)
+            else:
+                # Nova vrstica (drugi lot istega artikla)
+                row = {
+                    "Item":         {"ID": r["article_id"]},
+                    "Quantity":     r["quantity_assigned"],
+                    "SellingPrice": r.get("selling_price"),
+                    "Note":         r.get("opis", "") or "",
+                }
+                if r.get("lot"):
+                    row["BatchNumber"] = r["lot"]
+                if r.get("unit"):
+                    row["UnitOfMeasurement"] = r["unit"]
+                api_rows.append(row)
 
-        body = {
-            "StockEntryType":    fresh.get("StockEntryType"),
-            "StockEntrySubtype": fresh.get("StockEntrySubtype"),
-            "Date":              fresh.get("Date"),
-            "Customer":          {"ID": (fresh.get("Customer") or {}).get("ID")},
-            "Analytic":          {"ID": (fresh.get("Analytic") or {}).get("ID")},
-            "Status":            fresh.get("Status"),
-            "RowVersion":        fresh.get("RowVersion"),
-            "StockEntryRows":    api_rows,
-        }
-        # Odstrani None vrednosti
-        body = {k: v for k, v in body.items() if v is not None}
-
+        body = {**fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
