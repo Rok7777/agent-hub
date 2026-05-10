@@ -617,7 +617,14 @@ class MinimaxClient:
                     row["BatchNumber"] = r["lot"]
                 if r.get("unit"):
                     row["UnitOfMeasurement"] = r["unit"]
-                if default_wh_from:
+                # Vzemi Price in WarehouseFrom iz originalne vrstice istega row_id
+                orig_for_row = orig_by_rownum.get(row_id)
+                if orig_for_row:
+                    if orig_for_row.get("Price") is not None:
+                        row["Price"] = orig_for_row.get("Price")
+                    if orig_for_row.get("WarehouseFrom"):
+                        row["WarehouseFrom"] = orig_for_row.get("WarehouseFrom")
+                elif default_wh_from:
                     row["WarehouseFrom"] = default_wh_from
                 api_rows.append(row)
 
