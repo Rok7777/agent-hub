@@ -274,13 +274,22 @@ def smart_match(
     if not candidates:
         return None, f"ni zaloge za {sold_sp}"
 
-    # Korak 2: File logika
+    # Korak 2: File + očiščeno logika s fallback na sveže
+    _OCISCEN_RE = re.compile(r'oči[sš][cč]en', re.IGNORECASE)
+    sold_ociscen = bool(_OCISCEN_RE.search(sold_name))
+
     if sold_fillet:
+        # file → če ni filea, vzami sveže iste vrste
         fillet_cands = [n for n in candidates if _has_fillet(n)]
-        candidates = fillet_cands if fillet_cands else [n for n in candidates if not _has_fillet(n)]
+        candidates = fillet_cands if fillet_cands else candidates
+    elif sold_ociscen:
+        # očiščeno → če ni očiščenega, vzami sveže iste vrste
+        ociscen_cands = [n for n in candidates if _OCISCEN_RE.search(n)]
+        candidates = ociscen_cands if ociscen_cands else candidates
     else:
-        non_fillet = [n for n in candidates if not _has_fillet(n)]
-        candidates = non_fillet if non_fillet else candidates
+        # cel/svež → preferiramo brez file in brez očiščeno
+        basic_cands = [n for n in candidates if not _has_fillet(n) and not _OCISCEN_RE.search(n)]
+        candidates = basic_cands if basic_cands else candidates
 
     if not candidates:
         return None, f"ni ustreznega artikla za {sold_sp}"
