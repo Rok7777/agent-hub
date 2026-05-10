@@ -581,6 +581,11 @@ class MinimaxClient:
         # Indeks originalnih vrstic po RowNumber (1-based → 0-based)
         orig_by_rownum = {r.get("RowNumber", 0) - 1: r for r in orig_rows}
 
+        # Vzemi WarehouseFrom iz prve originalne vrstice
+        default_wh_from = None
+        if orig_rows:
+            default_wh_from = orig_rows[0].get("WarehouseFrom")
+
         api_rows    = []
         used_row_ids = set()
 
@@ -612,6 +617,8 @@ class MinimaxClient:
                     row["BatchNumber"] = r["lot"]
                 if r.get("unit"):
                     row["UnitOfMeasurement"] = r["unit"]
+                if default_wh_from:
+                    row["WarehouseFrom"] = default_wh_from
                 api_rows.append(row)
 
         body = {**fresh, "StockEntryRows": api_rows}
