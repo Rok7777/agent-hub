@@ -269,17 +269,19 @@ class MinimaxClient:
             except Exception:
                 pass
 
-        # Poišči entries za 1000/1652 po Account Name (ne ID — ker se ID razlikuje)
+        # Odstrani 1652/1000 in morebitne obstoječe 120000 vrstice (cleanup duplikatov)
         nove_entries, entry_1652, entry_1000 = [], None, None
         for entry in entries:
-            acc     = entry.get("Account") or {}
-            acc_id  = acc.get("ID")
-            acc_name = acc.get("Name", "") or ""
-            # Ujemanje po internem ID-ju ali po imenu konta
+            acc      = entry.get("Account") or {}
+            acc_id   = acc.get("ID")
+            acc_name = (acc.get("Name", "") or "").lower()
+            # Ujemanje po ID-ju IN imenu konta
             is_kartica  = (acc_id == ID_KARTICA)  or "1652" in acc_name
-            is_gotovina = (acc_id == ID_GOTOVINA) or ("1000" in acc_name and "1652" not in acc_name)
+            is_gotovina = (acc_id == ID_GOTOVINA) or ("1000 -" in acc_name)
+            is_120000   = (acc_id == 130744074)   or "120000" in acc_name
             if is_kartica and not entry_1652:    entry_1652 = entry
             elif is_gotovina and not entry_1000: entry_1000 = entry
+            elif is_120000:                      pass  # preskoči obstoječe 120000
             else:                                nove_entries.append(entry)
 
         ref_entry    = entry_1652 or entry_1000
@@ -319,17 +321,11 @@ class MinimaxClient:
             nova.pop(f, None)
         nove_entries.append(nova)
 
-        # Korak 1: Posodobi knjižbe
+        # En sam PUT — posodobi knjižbe IN potrdi
         self.update_journal(podatki["journal_id"], {
             **journal,
+            "Status":         "P",
             "JournalEntries": nove_entries,
-        })
-
-        # Korak 2: Potrdi (confirm) — ločen klic
-        svez = self.get_journal(podatki["journal_id"])
-        self.update_journal(podatki["journal_id"], {
-            **svez,
-            "Status": "P",
         })
         return True
 
