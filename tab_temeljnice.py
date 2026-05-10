@@ -104,56 +104,45 @@ def render():
     sel_all_j = st.checkbox("☑ Izberi vse", value=True, key="j_sel_all")
     izbrani   = []
 
-    # ── Prikaz po datumih, znotraj po analitiki ───────────────────────────────
-    po_datumih = defaultdict(list)
+    # ── Prikaz po blagajnah, znotraj po datumih ──────────────────────────────
+    po_blagajnah = defaultdict(list)
     for o in osnutki:
-        po_datumih[o["datum"]].append(o)
+        sifra = o.get("analitika_sifra") or "—"
+        po_blagajnah[sifra].append(o)
 
-    for datum in sorted(po_datumih.keys()):
-        skupina_datum = sorted(po_datumih[datum], key=lambda x: x["analitika_sifra"])
-        gotovina_dan  = sum(o["znesek_gotovina"] for o in skupina_datum)
-        kartica_dan   = sum(o["znesek_kartica"]  for o in skupina_datum)
-        skupaj_dan    = sum(o["skupaj"]           for o in skupina_datum)
+    for blagajna_sifra in sorted(po_blagajnah.keys()):
+        skupina = sorted(po_blagajnah[blagajna_sifra], key=lambda x: x["datum"])
+        naziv    = skupina[0].get("blagajna_naziv") or blagajna_sifra
+        got_blag = sum(o["znesek_gotovina"] for o in skupina)
+        kar_blag = sum(o["znesek_kartica"]  for o in skupina)
+        skup_blag = sum(o["skupaj"]          for o in skupina)
 
         st.markdown(
-            f"### 📅 {datum} &nbsp;&nbsp;"
-            f"<small>gotovina: **{gotovina_dan:.2f} €** &nbsp;|&nbsp; "
-            f"kartica: **{kartica_dan:.2f} €** &nbsp;|&nbsp; "
-            f"skupaj: **{skupaj_dan:.2f} €**</small>",
+            f"### 🏪 {blagajna_sifra} — {naziv} &nbsp;&nbsp;"
+            f"<small>gotovina: **{got_blag:.2f} €** &nbsp;|&nbsp; "
+            f"kartica: **{kar_blag:.2f} €** &nbsp;|&nbsp; "
+            f"skupaj: **{skup_blag:.2f} €**</small>",
             unsafe_allow_html=True
         )
 
-        hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([0.5, 2, 1.5, 1, 1, 1])
+        hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([0.5, 1.5, 1.5, 1, 1, 1])
         hc1.markdown("**✓**")
-        hc2.markdown("**Blagajna**")
+        hc2.markdown("**Datum**")
         hc3.markdown("**Vrsta plačila**")
         hc4.markdown("**Gotovina (1000)**")
         hc5.markdown("**Kartica (1652)**")
         hc6.markdown("**Skupaj**")
 
-        for o in skupina_datum:
-            if o["rezim"] == "oba":
-                vrsta = "Gotovina + Kartica"
-            elif o["rezim"] == "samo_kartica":
-                vrsta = "Samo kartica"
-            else:
-                vrsta = "Samo gotovina"
+        for o in skupina:
+            if o["rezim"] == "oba":            vrsta = "Gotovina + Kartica"
+            elif o["rezim"] == "samo_kartica": vrsta = "Samo kartica"
+            else:                              vrsta = "Samo gotovina"
 
-            # Prikaz blagajne — če ni analitike, pokaži journal opis
-            sifra  = o.get("analitika_sifra") or ""
-            naziv  = o.get("blagajna_naziv") or ""
-            if sifra:
-                blagajna_prikaz = f"**{sifra}** — {naziv}"
-            else:
-                # Fallback: iz opisa journala
-                opis = o.get("journal_raw", {}).get("Description", "") or ""
-                blagajna_prikaz = opis or "—"
-
-            c1, c2, c3, c4, c5, c6 = st.columns([0.5, 2, 1.5, 1, 1, 1])
+            c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.5, 1.5, 1, 1, 1])
             checked = c1.checkbox("", value=sel_all_j,
                                   key=f"jcb_{o['journal_id']}",
                                   label_visibility="collapsed")
-            c2.write(blagajna_prikaz)
+            c2.write(f"**{o['datum']}**")
             c3.write(vrsta)
             c4.write(f"{o['znesek_gotovina']:.2f} €" if o["znesek_gotovina"] else "—")
             c5.write(f"{o['znesek_kartica']:.2f} €"  if o["znesek_kartica"]  else "—")
@@ -161,10 +150,9 @@ def render():
             if checked:
                 izbrani.append(o)
 
-            with st.expander("📋 Navodila za vnos v blagajno"):
+            an_prikaz = o.get("analitika_polno") or o.get("analitika_sifra") or "—"
+            with st.expander(f"📋 Navodila — {o['datum']}"):
                 col1, col2 = st.columns(2)
-                an_prikaz = o.get("analitika_polno") or o.get("analitika_sifra") or \
-                            o.get("journal_raw", {}).get("Description", "") or "—"
                 with col1:
                     st.markdown("**Blagajniški PREJEMEK:**")
                     st.markdown(f"- Stranka: `Končni kupec - maloprodaja`")
