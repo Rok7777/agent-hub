@@ -589,21 +589,18 @@ class MinimaxClient:
             if r.get("unit"):                      row["UnitOfMeasurement"] = r["unit"]
             api_rows.append(row)
 
-        customer_id = (entry_data.get("Customer") or {}).get("ID")
-        analytic_id = (entry_data.get("Analytic") or {}).get("ID")
-
         body = {
             "StockEntryType":    entry_data.get("StockEntryType"),
             "StockEntrySubtype": entry_data.get("StockEntrySubtype"),
             "Date":              entry_data.get("Date"),
             "Status":            entry_data.get("Status"),
+            "Customer":          {"ID": (entry_data.get("Customer") or {}).get("ID")},
+            "Analytic":          {"ID": (entry_data.get("Analytic") or {}).get("ID")},
             "StockEntryRows":    api_rows,
         }
-        if customer_id: body["Customer"] = {"ID": customer_id}
-        if analytic_id: body["Analytic"] = {"ID": analytic_id}
+        # Odstrani None vrednosti
+        body = {k: v for k, v in body.items() if v is not None}
 
-        import json
-        raise Exception(f"DEBUG body: {json.dumps(body, ensure_ascii=False, default=str)[:800]}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
