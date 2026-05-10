@@ -279,16 +279,9 @@ class MinimaxClient:
         ref_entry    = entry_1652 or entry_1000
         analitika_id = (ref_entry.get("Analytic") or {}).get("ID") if ref_entry else None
 
-        # Poišči pravi interni ID za konto 120000
-        konto_120000_id = None
-        try:
-            acc_data = self._get("/accounts", params={"Code": "120000", "PageSize": 5})
-            for a in (acc_data.get("Rows") or []):
-                if str(a.get("Code", "")) == "120000":
-                    konto_120000_id = a.get("AccountId") or a.get("ID")
-                    break
-        except Exception:
-            pass
+        # Interni ID za konto 120000 (Končni kupec - maloprodaja) — Oltre Con d.o.o.
+        # Pridobljeno iz GetJournal debug response
+        konto_120000_id = 130744074
 
         # Vzemi datum in denarno enoto iz obstoječih vrstic
         entry_date = journal.get("JournalDate", "")[:10] + "T00:00:00"
