@@ -174,26 +174,15 @@ def render():
     st.caption("Za primerjavo s POS poročilom plačil")
 
     vrstice = []
-    for datum in sorted(po_datumih.keys()):
-        skupina = po_datumih[datum]
-        for o in sorted(skupina, key=lambda x: x["analitika_sifra"]):
-            sifra  = o.get("analitika_sifra") or o.get("journal_raw", {}).get("Description", "") or "—"
-            naziv  = o.get("blagajna_naziv") or ""
-            vrstice.append({
-                "Datum":           datum,
-                "Blagajna":        f"{sifra} — {naziv}" if naziv else sifra,
-                "Gotovina (1000)": f"{o['znesek_gotovina']:.2f} €" if o["znesek_gotovina"] else "—",
-                "Kartica (1652)":  f"{o['znesek_kartica']:.2f} €"  if o["znesek_kartica"]  else "—",
-                "Skupaj":          f"{o['skupaj']:.2f} €",
-            })
-        got_dan = sum(o["znesek_gotovina"] for o in skupina)
-        kar_dan = sum(o["znesek_kartica"]  for o in skupina)
+    for o in sorted(osnutki, key=lambda x: (x.get("analitika_sifra",""), x["datum"])):
+        sifra = o.get("analitika_sifra") or "—"
+        naziv = o.get("blagajna_naziv") or ""
         vrstice.append({
-            "Datum":           f"  ∑ {datum}",
-            "Blagajna":        "",
-            "Gotovina (1000)": f"{got_dan:.2f} €",
-            "Kartica (1652)":  f"{kar_dan:.2f} €",
-            "Skupaj":          f"{round(got_dan + kar_dan, 2):.2f} €",
+            "Blagajna":        f"{sifra} — {naziv}" if naziv else sifra,
+            "Datum":           o["datum"],
+            "Gotovina (1000)": f"{o['znesek_gotovina']:.2f} €" if o["znesek_gotovina"] else "—",
+            "Kartica (1652)":  f"{o['znesek_kartica']:.2f} €"  if o["znesek_kartica"]  else "—",
+            "Skupaj":          f"{o['skupaj']:.2f} €",
         })
 
     vrstice.append({
