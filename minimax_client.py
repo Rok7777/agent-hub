@@ -325,6 +325,9 @@ class MinimaxClient:
             nova.pop(f, None)
         nove_entries.append(nova)
 
+        import json
+        raise Exception(f"DEBUG nova={json.dumps(nova, ensure_ascii=False, default=str)[:500]}, stranka={stranka_obj}, entries_count={len(nove_entries)}")
+
         self.update_journal(podatki["journal_id"], {
             **journal,
             "Status":         "P",
