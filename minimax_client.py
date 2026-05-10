@@ -269,36 +269,42 @@ class MinimaxClient:
             except Exception:
                 pass
 
+        # Poišči entries za 1000/1652 po Account Name (ne ID — ker se ID razlikuje)
         nove_entries, entry_1652, entry_1000 = [], None, None
         for entry in entries:
-            acc_id = (entry.get("Account") or {}).get("ID")
-            if acc_id == ID_KARTICA:    entry_1652 = entry
-            elif acc_id == ID_GOTOVINA: entry_1000 = entry
-            else:                       nove_entries.append(entry)
+            acc     = entry.get("Account") or {}
+            acc_id  = acc.get("ID")
+            acc_name = acc.get("Name", "") or ""
+            # Ujemanje po internem ID-ju ali po imenu konta
+            is_kartica  = (acc_id == ID_KARTICA)  or "1652" in acc_name
+            is_gotovina = (acc_id == ID_GOTOVINA) or ("1000" in acc_name and "1652" not in acc_name)
+            if is_kartica and not entry_1652:    entry_1652 = entry
+            elif is_gotovina and not entry_1000: entry_1000 = entry
+            else:                                nove_entries.append(entry)
 
         ref_entry    = entry_1652 or entry_1000
         analitika_id = (ref_entry.get("Analytic") or {}).get("ID") if ref_entry else None
 
-        # Interni ID za konto 120000 (Končni kupec - maloprodaja) — Oltre Con d.o.o.
-        # Pridobljeno iz GetJournal debug response
+        # Interni ID za konto 120000 — Oltre Con d.o.o.
         konto_120000_id = 130744074
 
-        # Vzemi datum in denarno enoto iz obstoječih vrstic
-        entry_date = journal.get("JournalDate", "")[:10] + "T00:00:00"
-        currency   = "EUR"
-        if ref_entry:
-            entry_date = ref_entry.get("EntryDate") or entry_date
-            currency   = ref_entry.get("Currency", {}).get("Code", "EUR") if isinstance(ref_entry.get("Currency"), dict) else "EUR"
+        # Datum iz journala, valuta EUR
+        journal_date = journal.get("JournalDate", "")
+        entry_date   = journal_date if journal_date else datetime.now().strftime("%Y-%m-%dT00:00:00")
+        if ref_entry and ref_entry.get("EntryDate"):
+            entry_date = ref_entry.get("EntryDate")
 
         nova = {
-            "Account":     {"ID": konto_120000_id} if konto_120000_id else {"Code": "120000"},
+            "Account":     {"ID": konto_120000_id},
             "Analytic":    {"ID": analitika_id} if analitika_id else None,
             "Customer":    stranka_obj,
             "Debit":       podatki["skupaj"],
             "Credit":      0,
             "EntryDate":   entry_date,
-            "Description": ref_entry.get("Description") if ref_entry else journal.get("Description"),
-            "Currency":    {"Code": currency},
+            "DatePerformed": entry_date,
+            "DateDue":     entry_date,
+            "Description": journal.get("Description", ""),
+            "Currency":    {"Code": "EUR"},
         }
         nove_entries.append(nova)
 
