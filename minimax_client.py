@@ -298,35 +298,35 @@ class MinimaxClient:
         template = dict(nove_entries[0]) if nove_entries else {}
         journal_date = journal.get("JournalDate", "")
 
-        # Poišči stranko - najprej iz entries, potem po imenu
+        # Poišči stranko po API
         if not stranka_obj:
-            for e in nove_entries:
-                c = e.get("Customer") or e.get("Supplier")
-                if c and c.get("ID"):
-                    stranka_obj = {"ID": c["ID"]}
-                    break
+            try:
+                stranke = self._get("/customers", params={"PageSize": 50})
+                for s in stranke.get("Rows", []):
+                    if "končni kupec" in (s.get("Name", "") or "").lower():
+                        cid = s.get("CustomerID") or s.get("CustomerId") or s.get("ID")
+                        if cid:
+                            stranka_obj = {"ID": cid}
+                            break
+            except Exception:
+                pass
 
         nova = {
             **template,
-            "Account":        {"ID": konto_120000_id},
-            "Analytic":       {"ID": analitika_id} if analitika_id else None,
-            "Customer":       stranka_obj,
-            "Debit":          podatki["skupaj"],
-            "Credit":         0,
-            "DebitDomestic":  podatki["skupaj"],
-            "CreditDomestic": 0,
-            "DebitForeign":   0,
-            "CreditForeign":  0,
-            "DatePerformed":  journal_date,
-            "DateDue":        journal_date,
+            "Account":                    {"ID": konto_120000_id},
+            "Analytic":                   {"ID": analitika_id} if analitika_id else None,
+            "Customer":                   stranka_obj,
+            "Debit":                      podatki["skupaj"],
+            "Credit":                     0,
+            "DebitInDomesticCurrency":    podatki["skupaj"],
+            "CreditInDomesticCurrency":   0,
+            "TransactionDate":            journal_date,
+            "DueDate":                    journal_date,
         }
         # Odstrani readonly polja
-        for f in ["JournalEntryId", "RowVersion", "RecordDtModified", "ResourceUrl"]:
+        for f in ["JournalEntryId", "RowVersion", "RecordDtModified", "ResourceUrl", "Journal"]:
             nova.pop(f, None)
         nove_entries.append(nova)
-
-        import json
-        raise Exception(f"DEBUG nova={json.dumps(nova, ensure_ascii=False, default=str)[:500]}, stranka={stranka_obj}, entries_count={len(nove_entries)}")
 
         self.update_journal(podatki["journal_id"], {
             **journal,
