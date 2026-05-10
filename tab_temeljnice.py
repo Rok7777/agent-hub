@@ -1,15 +1,55 @@
 """
 Tab: Temeljnice — dnevni izkupiček
 Ureja: chat "Ločeni procesi za knjiženje blagajn"
+Samostojen modul — brez config.py
 """
 
+import io
 import streamlit as st
 import pandas as pd
 from collections import defaultdict
 import traceback
 
-from minimax_client import BLAGAJNE
-from config import get_client, check_config
+from minimax_client import MinimaxClient, BLAGAJNE
+
+
+def _secret(key, default=""):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return default
+
+
+def _make_client() -> MinimaxClient:
+    return MinimaxClient(
+        username      = st.session_state.get("username",      _secret("MINIMAX_USERNAME", "")),
+        password      = st.session_state.get("password",      _secret("MINIMAX_PASSWORD", "")),
+        client_id     = st.session_state.get("client_id",     _secret("MINIMAX_CLIENT_ID", "")),
+        client_secret = st.session_state.get("client_secret", _secret("MINIMAX_CLIENT_SECRET", "")),
+        org_id        = int(st.session_state.get("org_id",    _secret("MINIMAX_ORG_ID", "171038"))),
+    )
+
+
+def _check_config() -> bool:
+    u  = st.session_state.get("username",      _secret("MINIMAX_USERNAME", ""))
+    p  = st.session_state.get("password",      _secret("MINIMAX_PASSWORD", ""))
+    ci = st.session_state.get("client_id",     _secret("MINIMAX_CLIENT_ID", ""))
+    cs = st.session_state.get("client_secret", _secret("MINIMAX_CLIENT_SECRET", ""))
+    if not all([u, p, ci, cs]):
+        st.warning("⚠️ Izpolnite vse nastavitve API v stranski vrstici (odprite Loti tab).")
+        return False
+    return True
+
+
+def _excel_download(df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Temeljnice")
+        ws = writer.sheets["Temeljnice"]
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or "")) for cell in col) + 4
+            ws.column_dimensions[col[0].column_letter].width = min(max_len, 50)
+    return buf.getvalue()
 
 
 def render():
@@ -23,19 +63,19 @@ def render():
         debug_btn = st.button("🔧 Debug API", use_container_width=True, key="debug_journals")
 
     if debug_btn:
-        if not check_config(): st.stop()
+        if not _check_config(): st.stop()
         with st.spinner("Kličem API ..."):
             try:
-                data = get_client().get_journal_drafts_debug()
+                data = _make_client().get_journal_drafts_debug()
                 st.json(data)
             except Exception as e:
                 st.error(f"Napaka: {e}")
 
     if scan_btn:
-        if not check_config(): st.stop()
+        if not _check_config(): st.stop()
         with st.spinner("Iščem osnutke temeljnic ..."):
             try:
-                cli         = get_client()
+                cli         = _make_client()
                 osnutki_raw = cli.get_journal_drafts()
                 osnutki     = []
                 for j in osnutki_raw:
@@ -99,11 +139,21 @@ def render():
             else:
                 vrsta = "Samo gotovina"
 
+            # Prikaz blagajne — če ni analitike, pokaži journal opis
+            sifra  = o.get("analitika_sifra") or ""
+            naziv  = o.get("blagajna_naziv") or ""
+            if sifra:
+                blagajna_prikaz = f"**{sifra}** — {naziv}"
+            else:
+                # Fallback: iz opisa journala
+                opis = o.get("journal_raw", {}).get("Description", "") or ""
+                blagajna_prikaz = opis or "—"
+
             c1, c2, c3, c4, c5, c6 = st.columns([0.5, 2, 1.5, 1, 1, 1])
             checked = c1.checkbox("", value=sel_all_j,
                                   key=f"jcb_{o['journal_id']}",
                                   label_visibility="collapsed")
-            c2.write(f"**{o['analitika_sifra']}** — {o['blagajna_naziv']}")
+            c2.write(blagajna_prikaz)
             c3.write(vrsta)
             c4.write(f"{o['znesek_gotovina']:.2f} €" if o["znesek_gotovina"] else "—")
             c5.write(f"{o['znesek_kartica']:.2f} €"  if o["znesek_kartica"]  else "—")
@@ -113,15 +163,17 @@ def render():
 
             with st.expander("📋 Navodila za vnos v blagajno"):
                 col1, col2 = st.columns(2)
+                an_prikaz = o.get("analitika_polno") or o.get("analitika_sifra") or \
+                            o.get("journal_raw", {}).get("Description", "") or "—"
                 with col1:
                     st.markdown("**Blagajniški PREJEMEK:**")
                     st.markdown(f"- Stranka: `Končni kupec - maloprodaja`")
-                    st.markdown(f"- Analitika: `{o['analitika_polno']}`")
+                    st.markdown(f"- Analitika: `{an_prikaz}`")
                     st.markdown(f"- Tip: `Dnevni iztržek`")
                     st.markdown(f"- Znesek: **{o['skupaj']:.2f} €**")
                 with col2:
                     st.markdown("**Blagajniški IZDATEK:**")
-                    st.markdown(f"- Analitika: `{o['analitika_polno']}`")
+                    st.markdown(f"- Analitika: `{an_prikaz}`")
                     if o["rezim"] in ("oba", "samo_gotovina"):
                         st.markdown(f"- Polog gotovine - domača DE: **{o['znesek_gotovina']:.2f} €**")
                     if o["rezim"] in ("oba", "samo_kartica"):
@@ -137,9 +189,11 @@ def render():
     for datum in sorted(po_datumih.keys()):
         skupina = po_datumih[datum]
         for o in sorted(skupina, key=lambda x: x["analitika_sifra"]):
+            sifra  = o.get("analitika_sifra") or o.get("journal_raw", {}).get("Description", "") or "—"
+            naziv  = o.get("blagajna_naziv") or ""
             vrstice.append({
                 "Datum":           datum,
-                "Blagajna":        f"{o['analitika_sifra']} — {o['blagajna_naziv']}",
+                "Blagajna":        f"{sifra} — {naziv}" if naziv else sifra,
                 "Gotovina (1000)": f"{o['znesek_gotovina']:.2f} €" if o["znesek_gotovina"] else "—",
                 "Kartica (1652)":  f"{o['znesek_kartica']:.2f} €"  if o["znesek_kartica"]  else "—",
                 "Skupaj":          f"{o['skupaj']:.2f} €",
@@ -162,7 +216,17 @@ def render():
         "Skupaj":          f"{sum(o['skupaj'] for o in osnutki):.2f} €",
     })
 
-    st.dataframe(pd.DataFrame(vrstice), use_container_width=True, hide_index=True)
+    df_sestevek = pd.DataFrame(vrstice)
+    st.dataframe(df_sestevek, use_container_width=True, hide_index=True)
+
+    # Excel izvoz seštevka
+    xlsx = _excel_download(df_sestevek)
+    st.download_button(
+        label="⬇️ Prenesi seštevek (Excel)",
+        data=xlsx,
+        file_name=f"sestevek_temeljnice_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
     # ── Obdelava ──────────────────────────────────────────────────────────────
     st.divider()
@@ -182,9 +246,9 @@ def render():
     )
 
     if run_j_btn and izbrani:
-        if not check_config(): st.stop()
+        if not _check_config(): st.stop()
         with st.spinner("Popravljam temeljnice ..."):
-            cli     = get_client()
+            cli     = _make_client()
             uspesno = []
             napake  = []
             for o in izbrani:
