@@ -269,6 +269,11 @@ class MinimaxClient:
             except Exception:
                 pass
 
+        # DEBUG — pokaži vse entries z Account podatki
+        import json
+        entries_debug = [{"acc_id": (e.get("Account") or {}).get("ID"), "acc_name": (e.get("Account") or {}).get("Name", "")} for e in entries]
+        raise Exception(f"ENTRIES DEBUG: {json.dumps(entries_debug, ensure_ascii=False, default=str)}")
+
         # Odstrani 1652/1000 in morebitne obstoječe 120000 vrstice (cleanup duplikatov)
         nove_entries, entry_1652, entry_1000 = [], None, None
         for entry in entries:
