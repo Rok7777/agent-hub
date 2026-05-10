@@ -294,18 +294,19 @@ class MinimaxClient:
         if ref_entry and ref_entry.get("EntryDate"):
             entry_date = ref_entry.get("EntryDate")
 
+        # Kopiraj strukturo iz prve obstoječe knjižbe — zagotovi vse obvezne formate
+        template = dict(nove_entries[0]) if nove_entries else {}
         nova = {
+            **template,
             "Account":     {"ID": konto_120000_id},
             "Analytic":    {"ID": analitika_id} if analitika_id else None,
             "Customer":    stranka_obj,
             "Debit":       podatki["skupaj"],
             "Credit":      0,
-            "EntryDate":   entry_date,
-            "DatePerformed": entry_date,
-            "DateDue":     entry_date,
-            "Description": journal.get("Description", ""),
-            "Currency":    {"Code": "EUR"},
         }
+        # Odstrani polja ki ne smejo biti v novi knjižbi
+        for f in ["JournalEntryId", "RowVersion", "RecordDtModified"]:
+            nova.pop(f, None)
         nove_entries.append(nova)
 
         self.update_journal(podatki["journal_id"], {
