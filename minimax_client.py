@@ -294,18 +294,34 @@ class MinimaxClient:
         if ref_entry and ref_entry.get("EntryDate"):
             entry_date = ref_entry.get("EntryDate")
 
-        # Kopiraj strukturo iz prve obstoječe knjižbe — zagotovi vse obvezne formate
+        # Kopiraj strukturo iz prve obstoječe knjižbe
         template = dict(nove_entries[0]) if nove_entries else {}
+        journal_date = journal.get("JournalDate", "")
+
+        # Poišči stranko - najprej iz entries, potem po imenu
+        if not stranka_obj:
+            for e in nove_entries:
+                c = e.get("Customer") or e.get("Supplier")
+                if c and c.get("ID"):
+                    stranka_obj = {"ID": c["ID"]}
+                    break
+
         nova = {
             **template,
-            "Account":     {"ID": konto_120000_id},
-            "Analytic":    {"ID": analitika_id} if analitika_id else None,
-            "Customer":    stranka_obj,
-            "Debit":       podatki["skupaj"],
-            "Credit":      0,
+            "Account":        {"ID": konto_120000_id},
+            "Analytic":       {"ID": analitika_id} if analitika_id else None,
+            "Customer":       stranka_obj,
+            "Debit":          podatki["skupaj"],
+            "Credit":         0,
+            "DebitDomestic":  podatki["skupaj"],
+            "CreditDomestic": 0,
+            "DebitForeign":   0,
+            "CreditForeign":  0,
+            "DatePerformed":  journal_date,
+            "DateDue":        journal_date,
         }
-        # Odstrani polja ki ne smejo biti v novi knjižbi
-        for f in ["JournalEntryId", "RowVersion", "RecordDtModified"]:
+        # Odstrani readonly polja
+        for f in ["JournalEntryId", "RowVersion", "RecordDtModified", "ResourceUrl"]:
             nova.pop(f, None)
         nove_entries.append(nova)
 
