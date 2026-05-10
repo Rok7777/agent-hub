@@ -298,18 +298,9 @@ class MinimaxClient:
         template = dict(nove_entries[0]) if nove_entries else {}
         journal_date = journal.get("JournalDate", "")
 
-        # Poišči stranko po API
+        # Končni kupec - maloprodaja (Oltre Con d.o.o.) — hardkodirano
         if not stranka_obj:
-            try:
-                stranke = self._get("/customers", params={"PageSize": 50})
-                for s in stranke.get("Rows", []):
-                    if "končni kupec" in (s.get("Name", "") or "").lower():
-                        cid = s.get("CustomerID") or s.get("CustomerId") or s.get("ID")
-                        if cid:
-                            stranka_obj = {"ID": cid}
-                            break
-            except Exception:
-                pass
+            stranka_obj = {"ID": 17414634}
 
         nova = {
             **template,
