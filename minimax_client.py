@@ -589,12 +589,27 @@ class MinimaxClient:
             orig   = orig_by_rownum.get(row_id)
 
             if orig:
-                # Obstoječa vrstica — ohrani vse + dodaj lot
-                new_orig = {**orig}
-                if r.get("lot"):
-                    new_orig["BatchNumber"] = r["lot"]
-                new_orig["Quantity"] = r["quantity_assigned"]
-                api_rows.append(new_orig)
+                orig_article_id   = (orig.get("Item") or {}).get("ID")
+                result_article_id = r.get("article_id")
+
+                if orig_article_id == result_article_id:
+                    # Isti artikel — posodobi obstoječo vrstico
+                    new_orig = {**orig}
+                    if r.get("lot"):
+                        new_orig["BatchNumber"] = r["lot"]
+                    new_orig["Quantity"] = r["quantity_assigned"]
+                    api_rows.append(new_orig)
+                else:
+                    # Pametna zamenjava — nov artikel, nova vrstica (brez StockEntryRowId)
+                    row = {
+                        "Item":         {"ID": result_article_id},
+                        "Quantity":     r["quantity_assigned"],
+                        "SellingPrice": r.get("selling_price"),
+                        "Note":         r.get("opis", "") or "",
+                    }
+                    if r.get("lot"):
+                        row["BatchNumber"] = r["lot"]
+                    api_rows.append(row)
             else:
                 # Nova vrstica (drugi lot istega artikla)
                 row = {
