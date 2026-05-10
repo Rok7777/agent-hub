@@ -602,6 +602,8 @@ class MinimaxClient:
         if customer_id: body["Customer"] = {"ID": customer_id}
         if analytic_id: body["Analytic"] = {"ID": analytic_id}
 
+        import json
+        raise Exception(f"DEBUG body: {json.dumps(body, ensure_ascii=False, default=str)[:800]}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
