@@ -581,39 +581,29 @@ class MinimaxClient:
         # Indeks originalnih vrstic po RowNumber (1-based → 0-based)
         orig_by_rownum = {r.get("RowNumber", 0) - 1: r for r in orig_rows}
 
-        api_rows = []
+        api_rows    = []
+        used_row_ids = set()
+
         for r in new_rows:
             if r.get("_writeoff"):
                 continue
-            row_id = r.get("row_id", 0)
-            orig   = orig_by_rownum.get(row_id)
+            row_id            = r.get("row_id", 0)
+            orig              = orig_by_rownum.get(row_id)
+            orig_article_id   = (orig.get("Item") or {}).get("ID") if orig else None
+            result_article_id = r.get("article_id")
 
-            if orig:
-                orig_article_id   = (orig.get("Item") or {}).get("ID")
-                result_article_id = r.get("article_id")
-
-                if orig_article_id == result_article_id:
-                    # Isti artikel — posodobi obstoječo vrstico
-                    new_orig = {**orig}
-                    if r.get("lot"):
-                        new_orig["BatchNumber"] = r["lot"]
-                    new_orig["Quantity"] = r["quantity_assigned"]
-                    api_rows.append(new_orig)
-                else:
-                    # Pametna zamenjava — nov artikel, nova vrstica (brez StockEntryRowId)
-                    row = {
-                        "Item":         {"ID": result_article_id},
-                        "Quantity":     r["quantity_assigned"],
-                        "SellingPrice": r.get("selling_price"),
-                        "Note":         r.get("opis", "") or "",
-                    }
-                    if r.get("lot"):
-                        row["BatchNumber"] = r["lot"]
-                    api_rows.append(row)
+            if orig and orig_article_id == result_article_id and row_id not in used_row_ids:
+                # Prva vrstica tega row_id — ohrani StockEntryRowId
+                new_orig = {**orig}
+                if r.get("lot"):
+                    new_orig["BatchNumber"] = r["lot"]
+                new_orig["Quantity"] = r["quantity_assigned"]
+                api_rows.append(new_orig)
+                used_row_ids.add(row_id)
             else:
-                # Nova vrstica (drugi lot istega artikla)
+                # Dodatna vrstica (drugi lot) ali zamenjava — nova vrstica brez StockEntryRowId
                 row = {
-                    "Item":         {"ID": r["article_id"]},
+                    "Item":         {"ID": result_article_id},
                     "Quantity":     r["quantity_assigned"],
                     "SellingPrice": r.get("selling_price"),
                     "Note":         r.get("opis", "") or "",
