@@ -34,8 +34,9 @@ class MinimaxClient:
         self.client_id     = client_id
         self.client_secret = client_secret
         self.org_id        = org_id
-        self._token        = None
-        self._token_expiry = datetime.min
+        self._token          = None
+        self._token_expiry   = datetime.min
+        self._analytics_map  = None  # cache: {analytic_id: code}
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -178,6 +179,10 @@ class MinimaxClient:
 
         import re
 
+        def _analytic_sifra_from_code(code):
+            m = re.search(r"(MPK\d+|MPOC)", code or "")
+            return m.group(1) if m else ""
+
         def _analytic_sifra(entry):
             an   = entry.get("Analytic") or {}
             code = an.get("Code", "") or ""
@@ -188,10 +193,14 @@ class MinimaxClient:
             return m.group(1) if m else ""
 
         for entry in entries:
-            acc_id = (entry.get("Account") or {}).get("ID")
-            sifra  = _analytic_sifra(entry)
-            an_obj = entry.get("Analytic") or {}
-            an_code = an_obj.get("Code", "") or sifra
+            acc_id  = (entry.get("Account") or {}).get("ID")
+            an_obj  = entry.get("Analytic") or {}
+            an_id   = an_obj.get("ID")
+            an_code = an_obj.get("Code", "") or ""
+            # Če Code ni na voljo, poišči po ID-ju
+            if not an_code and an_id:
+                an_code = self._get_analytic_code(an_id)
+            sifra = _analytic_sifra_from_code(an_code) or _analytic_sifra(entry)
 
             debit  = float(entry.get("Debit", 0) or 0)
             credit = float(entry.get("Credit", 0) or 0)
@@ -282,6 +291,20 @@ class MinimaxClient:
         return True
 
     # ── Analitike ─────────────────────────────────────────────────────────────
+
+    def _get_analytic_code(self, analytic_id) -> str:
+        """Vrne kodo analitike (npr. 'MPK2') po internem ID-ju. Cachira rezultat."""
+        if self._analytics_map is None:
+            self._analytics_map = {}
+            try:
+                for row in self.get_analytics():
+                    aid  = row.get("AnalyticId")
+                    code = row.get("Code", "") or ""
+                    if aid and code:
+                        self._analytics_map[aid] = code
+            except Exception:
+                pass
+        return self._analytics_map.get(analytic_id, "")
 
     def get_analytics(self) -> list[dict]:
         """Vrne seznam analitik (za iskanje ID-jev MPK1, MPK2 ...)."""
