@@ -590,9 +590,21 @@ class MinimaxClient:
         used_row_ids = set()
 
         for r in new_rows:
-            if r.get("_writeoff"):
-                continue
             row_id            = r.get("row_id", 0)
+            orig_for_writeoff = orig_by_rownum.get(row_id)
+
+            if r.get("_writeoff"):
+                row = {
+                    "Item":          {"ID": r["article_id"]},
+                    "Quantity":      r["quantity_assigned"],
+                    "Note":          r.get("opis", "") or "",
+                    "BatchNumber":   r["lot"],
+                    "WarehouseFrom": default_wh_from,
+                }
+                if orig_for_writeoff and orig_for_writeoff.get("Price") is not None:
+                    row["Price"] = orig_for_writeoff.get("Price")
+                api_rows.append(row)
+                continue
             orig              = orig_by_rownum.get(row_id)
             orig_article_id   = (orig.get("Item") or {}).get("ID") if orig else None
             result_article_id = r.get("article_id")
