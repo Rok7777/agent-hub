@@ -279,14 +279,33 @@ class MinimaxClient:
         ref_entry    = entry_1652 or entry_1000
         analitika_id = (ref_entry.get("Analytic") or {}).get("ID") if ref_entry else None
 
+        # Poišči pravi interni ID za konto 120000
+        konto_120000_id = None
+        try:
+            acc_data = self._get("/accounts", params={"Code": "120000", "PageSize": 5})
+            for a in (acc_data.get("Rows") or []):
+                if str(a.get("Code", "")) == "120000":
+                    konto_120000_id = a.get("AccountId") or a.get("ID")
+                    break
+        except Exception:
+            pass
+
+        # Vzemi datum in denarno enoto iz obstoječih vrstic
+        entry_date = journal.get("JournalDate", "")[:10] + "T00:00:00"
+        currency   = "EUR"
+        if ref_entry:
+            entry_date = ref_entry.get("EntryDate") or entry_date
+            currency   = ref_entry.get("Currency", {}).get("Code", "EUR") if isinstance(ref_entry.get("Currency"), dict) else "EUR"
+
         nova = {
-            "Account":     {"ID": 138921799},  # konto 120000 interni ID
+            "Account":     {"ID": konto_120000_id} if konto_120000_id else {"Code": "120000"},
             "Analytic":    {"ID": analitika_id} if analitika_id else None,
             "Customer":    stranka_obj,
             "Debit":       podatki["skupaj"],
             "Credit":      0,
-            "EntryDate":   ref_entry.get("EntryDate") if ref_entry else None,
-            "Description": ref_entry.get("Description") if ref_entry else None,
+            "EntryDate":   entry_date,
+            "Description": ref_entry.get("Description") if ref_entry else journal.get("Description"),
+            "Currency":    {"Code": currency},
         }
         nove_entries.append(nova)
 
