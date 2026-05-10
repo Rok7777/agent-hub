@@ -319,15 +319,18 @@ class MinimaxClient:
             nova.pop(f, None)
         nove_entries.append(nova)
 
-        rezultat = self.update_journal(podatki["journal_id"], {
+        # Korak 1: Posodobi knjižbe
+        self.update_journal(podatki["journal_id"], {
             **journal,
-            "Status":         "P",
             "JournalEntries": nove_entries,
         })
-        # Preveri ali je status res spremenjen
-        nov_status = str(rezultat.get("Status", "")) if isinstance(rezultat, dict) else ""
-        if nov_status != "P":
-            raise Exception(f"Journal posodobljen ampak Status={nov_status} namesto P. Odgovor: {str(rezultat)[:300]}")
+
+        # Korak 2: Potrdi (confirm) — ločen klic
+        svez = self.get_journal(podatki["journal_id"])
+        self.update_journal(podatki["journal_id"], {
+            **svez,
+            "Status": "P",
+        })
         return True
 
     # ── Analitike ─────────────────────────────────────────────────────────────
