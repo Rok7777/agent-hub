@@ -585,17 +585,21 @@ class MinimaxClient:
                 "Note":     r.get("opis", "") or "",
             }
             if r.get("lot"):                       row["BatchNumber"]       = r["lot"]
-            if r.get("selling_price") is not None: row["Price"]             = r["selling_price"]
+            if r.get("selling_price") is not None: row["SellingPrice"]      = r["selling_price"]
             if r.get("unit"):                      row["UnitOfMeasurement"] = r["unit"]
             api_rows.append(row)
 
+        # Svež GetEntry za pravilen RowVersion
+        fresh = self.get_entry_detail(entry_id)
+
         body = {
-            "StockEntryType":    entry_data.get("StockEntryType"),
-            "StockEntrySubtype": entry_data.get("StockEntrySubtype"),
-            "Date":              entry_data.get("Date"),
-            "Status":            entry_data.get("Status"),
-            "Customer":          {"ID": (entry_data.get("Customer") or {}).get("ID")},
-            "Analytic":          {"ID": (entry_data.get("Analytic") or {}).get("ID")},
+            "StockEntryType":    fresh.get("StockEntryType"),
+            "StockEntrySubtype": fresh.get("StockEntrySubtype"),
+            "Date":              fresh.get("Date"),
+            "Customer":          {"ID": (fresh.get("Customer") or {}).get("ID")},
+            "Analytic":          {"ID": (fresh.get("Analytic") or {}).get("ID")},
+            "Status":            fresh.get("Status"),
+            "RowVersion":        fresh.get("RowVersion"),
             "StockEntryRows":    api_rows,
         }
         # Odstrani None vrednosti
