@@ -663,13 +663,18 @@ class MinimaxClient:
                 return {"ID": v["ID"]}
             return v
 
-        clean_fresh = {
-            k: _clean_fk(v)
-            for k, v in fresh.items()
-            if k not in SKIP_KEYS
+        body = {
+            "StockEntryType":    fresh.get("StockEntryType"),
+            "StockEntrySubtype": fresh.get("StockEntrySubtype"),
+            "Date":              fresh.get("Date"),
+            "Customer":          {"ID": (fresh.get("Customer") or {}).get("ID")},
+            "Analytic":          {"ID": (fresh.get("Analytic") or {}).get("ID")},
+            "Status":            fresh.get("Status"),
+            "StockEntryRows":    api_rows,
         }
 
-        body = {**clean_fresh, "StockEntryRows": api_rows}
+        import json
+        raise Exception(f"BODY: {json.dumps(body, ensure_ascii=False, default=str)[:1000]}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
