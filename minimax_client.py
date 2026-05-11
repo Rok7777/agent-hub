@@ -641,11 +641,13 @@ class MinimaxClient:
                 api_rows.append(row)
 
         def _clean_row(row):
-            """Odstrani readonly polja iz vrstice."""
+            """Odstrani readonly polja, null vrednosti in ResourceUrl iz FK objektov."""
             cleaned = {}
             for k, v in row.items():
                 if k in ("StockEntry", "ItemName", "RowNumber", "RecordDtModified", "RowVersion"):
                     continue
+                if v is None:
+                    continue  # Odstrani null vrednosti
                 if isinstance(v, dict) and "ID" in v:
                     cleaned[k] = {"ID": v["ID"]}
                 else:
@@ -673,8 +675,6 @@ class MinimaxClient:
             "StockEntryRows":    api_rows,
         }
 
-        import json
-        raise Exception(f"BODY: {json.dumps(body, ensure_ascii=False, default=str)[:1000]}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
