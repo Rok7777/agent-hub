@@ -654,7 +654,22 @@ class MinimaxClient:
 
         api_rows = [_clean_row(r) for r in api_rows]
 
-        body = {**fresh, "StockEntryRows": api_rows}
+        # Očisti fresh — readonly polja in ResourceUrl iz FK objektov
+        SKIP_KEYS = {"StockEntryId", "Number", "RowVersion", "RecordDtModified",
+                     "ResourceUrl", "StockEntryRows", "AssociationWithIssuedInvoice"}
+
+        def _clean_fk(v):
+            if isinstance(v, dict) and "ID" in v:
+                return {"ID": v["ID"]}
+            return v
+
+        clean_fresh = {
+            k: _clean_fk(v)
+            for k, v in fresh.items()
+            if k not in SKIP_KEYS
+        }
+
+        body = {**clean_fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
