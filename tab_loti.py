@@ -330,6 +330,38 @@ def render():
                 c3.metric("⚠️ Delno pokrito",     total_partial)
                 c4.metric("❌ Brez lota",          total_none)
 
+                # Pripravi Excel za vse dodeljene lote
+                all_lots_rows = []
+                for eid in sorted_ids:
+                    lines = all_results[eid]
+                    d     = drafts_map.get(eid, {})
+                    doc_num  = f"IS-{d.get('Number','?')}"
+                    doc_date = str(d.get('Date',''))[:10]
+                    for l in lines:
+                        all_lots_rows.append({
+                            "Analitika":  loc_key,
+                            "Dokument":   doc_num,
+                            "Datum":      doc_date,
+                            "Artikel":    l["article_name"],
+                            "Kol.":       l["quantity_assigned"],
+                            "ME":         l.get("unit",""),
+                            "Lot":        l.get("lot") or "—",
+                            "Status":     l["status"],
+                            "Opis":       l.get("opis") or "",
+                        })
+
+                if all_lots_rows:
+                    import io
+                    buf_lots = io.BytesIO()
+                    pd.DataFrame(all_lots_rows).to_excel(buf_lots, index=False, engine="openpyxl")
+                    st.download_button(
+                        label="⬇️ Prenesi seznam lotov (Excel)",
+                        data=buf_lots.getvalue(),
+                        file_name=f"loti_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_lots_{loc_key}",
+                    )
+
                 for eid in sorted_ids:
                     lines = all_results[eid]
                     d     = drafts_map.get(eid, {})
