@@ -640,6 +640,8 @@ class MinimaxClient:
                     row["WarehouseFrom"] = default_wh_from
                 api_rows.append(row)
 
+        import json
+        raise Exception(f"DEBUG rows[0:3]: {json.dumps(api_rows[:3], ensure_ascii=False, default=str)}")
         body = {**fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
