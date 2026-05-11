@@ -640,8 +640,20 @@ class MinimaxClient:
                     row["WarehouseFrom"] = default_wh_from
                 api_rows.append(row)
 
-        import json
-        raise Exception(f"DEBUG rows[0:3]: {json.dumps(api_rows[:3], ensure_ascii=False, default=str)}")
+        def _clean_row(row):
+            """Odstrani readonly polja iz vrstice."""
+            cleaned = {}
+            for k, v in row.items():
+                if k in ("StockEntry", "ItemName", "RowNumber", "RecordDtModified", "RowVersion"):
+                    continue
+                if isinstance(v, dict) and "ID" in v:
+                    cleaned[k] = {"ID": v["ID"]}
+                else:
+                    cleaned[k] = v
+            return cleaned
+
+        api_rows = [_clean_row(r) for r in api_rows]
+
         body = {**fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
