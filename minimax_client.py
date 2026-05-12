@@ -667,6 +667,22 @@ class MinimaxClient:
 
         api_rows = [_clean_row(r) for r in api_rows]
 
+        # Združi vrstice z istim artiklom in lotom v eno
+        merged = {}
+        merged_order = []
+        for row in api_rows:
+            item_id = (row.get("Item") or {}).get("ID")
+            batch   = row.get("BatchNumber", "")
+            key     = (item_id, batch)
+            if key in merged:
+                merged[key]["Quantity"] = round(
+                    merged[key]["Quantity"] + row.get("Quantity", 0), 4
+                )
+            else:
+                merged[key] = dict(row)
+                merged_order.append(key)
+        api_rows = [merged[k] for k in merged_order]
+
         # Očisti fresh — readonly polja in ResourceUrl iz FK objektov
         SKIP_KEYS = {"StockEntryId", "Number", "RowVersion", "RecordDtModified",
                      "ResourceUrl", "StockEntryRows", "AssociationWithIssuedInvoice"}
