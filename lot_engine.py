@@ -586,9 +586,23 @@ def assign_lots_with_virtual(
         eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
         if not eligible:
-            output.append({**line, 'lot': None, 'quantity_assigned': qty_needed,
-                'opis': f"{base_opis} [brez lota: ni ustreznih lotov]".strip(), 'status': 'no_lots'})
-            continue
+            # Ni ustreznih lotov — poskusi smart match (npr. isti artikel, druga šifra)
+            avail_sm = {}
+            for k, lots in virtual.items():
+                if any(l.get('quantity', 0) > 0 for l in lots):
+                    sname = stock[k].get('article_name', k)
+                    if sname != art_name:  # ne ponujaj istega artikla
+                        avail_sm[sname] = lots
+            matched_sm, note_sm = smart_match(art_name, avail_sm, unit)
+            if matched_sm:
+                stock_key    = by_name.get(matched_sm) or matched_sm
+                matched_note = note_sm
+                eligible     = get_eligible_lots(virtual.get(stock_key, []), matched_sm, today)
+            if not eligible:
+                output.append({**line, 'lot': None, 'quantity_assigned': qty_needed,
+                    'opis': f"{base_opis} [brez lota: ni ustreznih lotov]".strip(),
+                    'status': 'no_lots', '_writeoff': False})
+                continue
 
         remaining  = qty_needed
         assignments = []
