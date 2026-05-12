@@ -717,10 +717,8 @@ class MinimaxClient:
         }
         # Odstrani None vrednosti
         body = {k: v for k, v in body.items() if v is not None}
-        # Začasni test — odstrani smart-match vrstice (Note vsebuje "→")
-        test_rows = [r for r in body.get("StockEntryRows", []) if not ("→" in (r.get("Note") or ""))]
+        test_rows = [r for r in api_rows if not ("→" in (r.get("Note") or ""))]
         body["StockEntryRows"] = test_rows
-        raise Exception(f"TEST {len(test_rows)} vrstic: {[r.get('Item',{}).get('ID') for r in test_rows]}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
