@@ -717,8 +717,8 @@ class MinimaxClient:
         }
         # Odstrani None vrednosti
         body = {k: v for k, v in body.items() if v is not None}
-        test_rows = [r for r in api_rows if not ("→" in (r.get("Note") or ""))]
-        body["StockEntryRows"] = test_rows
+        orig_only = [r for r in api_rows if r.get("StockEntryRowId")]
+        body["StockEntryRows"] = orig_only
         return self._put(f"/stockentry/{entry_id}", body)
 
 
