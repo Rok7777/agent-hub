@@ -686,6 +686,17 @@ class MinimaxClient:
             "StockEntryRows":    api_rows,
         }
 
+        # Začasni test — samo originalne vrstice
+        orig_only = [r for r in api_rows if r.get("StockEntryRowId")]
+        body = {
+            "StockEntryType":    fresh.get("StockEntryType"),
+            "StockEntrySubtype": fresh.get("StockEntrySubtype"),
+            "Date":              fresh.get("Date"),
+            "Customer":          {"ID": (fresh.get("Customer") or {}).get("ID")},
+            "Analytic":          {"ID": (fresh.get("Analytic") or {}).get("ID")},
+            "Status":            fresh.get("Status"),
+            "StockEntryRows":    orig_only,
+        }
         return self._put(f"/stockentry/{entry_id}", body)
 
 
