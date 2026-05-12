@@ -558,10 +558,16 @@ class MinimaxClient:
                 continue
 
             if r.get("status") == "partial":
-                # Delna zaloga — ohrani original nespremenjeno
-                if orig and row_id not in used_row_ids:
-                    api_rows.append(orig)
-                    used_row_ids.add(row_id)
+                # Dodaj novo vrstico z originalno količino brez lota (za ročno ureditev)
+                orig_qty = orig.get("Quantity") if orig else r.get("quantity_assigned", 0)
+                leftover = {
+                    "Item":          {"ID": r["article_id"]},
+                    "Quantity":      orig_qty,
+                    "SellingPrice":  r.get("selling_price"),
+                    "WarehouseFrom": default_wh_from,
+                    "Note":          "[rocna ureditev]",
+                }
+                api_rows.append(leftover)
                 continue
 
             if r.get("_writeoff"):
@@ -603,18 +609,22 @@ class MinimaxClient:
                     row["UnitOfMeasurement"] = r["unit"]
                 orig_for_row = orig_by_rownum.get(row_id)
                 if orig_for_row:
-                    if orig_for_row.get("Price") is not None:
-                        row["Price"] = orig_for_row.get("Price")
                     if orig_for_row.get("WarehouseFrom"):
                         row["WarehouseFrom"] = orig_for_row.get("WarehouseFrom")
                 elif default_wh_from:
                     row["WarehouseFrom"] = default_wh_from
+                # Nabavna cena iz lot podatkov
+                lp = float(r.get("lot_price") or 0)
+                if lp > 0:
+                    row["Price"] = lp
+                    row["Value"] = round(lp * r.get("quantity_assigned", 0), 4)
                 api_rows.append(row)
 
         def _clean_row(row):
             """Ohrani samo nujna polja za vrstico."""
             KEEP = {"StockEntryRowId", "Item", "Quantity", "BatchNumber",
-                    "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note"}
+                    "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note",
+                    "Price", "Value"}
             cleaned = {}
             for k, v in row.items():
                 if k not in KEEP:
@@ -670,10 +680,10 @@ def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
             result[key] = {"article_id": aid, "article_code": code, "article_name": name, "lots": []}
         if batch:
             result[key]["lots"].append({
-                "code":     batch,
-                "quantity": qty,
-                "unit":     unit,
-                "price":    float(row.get("Price") or 0),
+                "code":      batch,
+                "quantity":  qty,
+                "unit":      unit,
+                "lot_price": float(row.get("Price") or 0),
             })
     return result
 
