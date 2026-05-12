@@ -703,11 +703,17 @@ class MinimaxClient:
                 return {"ID": v["ID"]}
             return v
 
-        clean_fresh = {
-            k: _clean_fk(v)
-            for k, v in fresh.items()
-            if k not in SKIP_KEYS and v is not None
-        }
+        clean_fresh = {}
+        for k, v in fresh.items():
+            if k in SKIP_KEYS:
+                continue
+            # Ohrani prazne stringe — Minimax jih potrebuje
+            if isinstance(v, dict) and "ID" in v:
+                clean_fresh[k] = {"ID": v["ID"]}
+            elif isinstance(v, dict) and not v:
+                continue  # prazen dict preskoči
+            else:
+                clean_fresh[k] = v  # ohrani vse, tudi ""
 
         body = {**clean_fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
