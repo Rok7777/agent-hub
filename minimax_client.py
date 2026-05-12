@@ -714,6 +714,8 @@ class MinimaxClient:
         }
         # Odstrani None vrednosti
         body = {k: v for k, v in body.items() if v is not None}
+        import json
+        raise Exception(f"BODY_FULL: {json.dumps(body, ensure_ascii=False, default=str)}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
