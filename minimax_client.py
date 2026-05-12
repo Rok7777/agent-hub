@@ -664,16 +664,12 @@ class MinimaxClient:
         for k, v in fresh.items():
             if k in SKIP_TOP:
                 continue
-            if k == "AssociationWithIssuedInvoice":
-                clean_fresh[k] = "N"  # Začasno odstrani povezavo za PUT
-                continue
+
             if isinstance(v, dict) and "ID" in v:
                 clean_fresh[k] = {"ID": v["ID"]}
             else:
                 clean_fresh[k] = v
         body = {**clean_fresh, "StockEntryRows": api_rows}
-        orig_only = [r for r in api_rows if r.get("StockEntryRowId")][:1]
-        body["StockEntryRows"] = orig_only
         return self._put(f"/stockentry/{entry_id}", body)
 
 
