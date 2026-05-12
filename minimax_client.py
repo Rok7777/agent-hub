@@ -695,27 +695,8 @@ class MinimaxClient:
                 return {"ID": v["ID"]}
             return v
 
-        SKIP_KEYS = {"StockEntryId", "Number", "RecordDtModified",
-                     "ResourceUrl", "StockEntryRows"}
-
-        def _clean_fk(v):
-            if isinstance(v, dict) and "ID" in v:
-                return {"ID": v["ID"]}
-            return v
-
-        clean_fresh = {}
-        for k, v in fresh.items():
-            if k in SKIP_KEYS:
-                continue
-            # Ohrani prazne stringe — Minimax jih potrebuje
-            if isinstance(v, dict) and "ID" in v:
-                clean_fresh[k] = {"ID": v["ID"]}
-            elif isinstance(v, dict) and not v:
-                continue  # prazen dict preskoči
-            else:
-                clean_fresh[k] = v  # ohrani vse, tudi ""
-
-        body = {**clean_fresh, "StockEntryRows": api_rows}
+        # Pošlji cel fresh + zamenjane vrstice (vrstice so že očiščene z _clean_row)
+        body = {**fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
