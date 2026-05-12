@@ -672,6 +672,8 @@ class MinimaxClient:
             else:
                 clean_fresh[k] = v
         body = {**clean_fresh, "StockEntryRows": api_rows}
+        orig_only = [r for r in api_rows if r.get("StockEntryRowId")][:1]
+        body["StockEntryRows"] = orig_only
         return self._put(f"/stockentry/{entry_id}", body)
 
 
