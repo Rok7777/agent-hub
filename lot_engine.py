@@ -73,14 +73,7 @@ KALO_FACTOR = 1.10  # 10% kalo za sardele in losos (brez trim)
 _LOSOSOVA_RE = re.compile(r'lososov', re.IGNORECASE)  # Lososova postrv ≠ Losos
 
 def get_kalo_factor(article_name: str) -> float:
-    """Vrne kalo faktor za artikel. 1.10 za sardele in losos (brez trim, brez lososova postrv)."""
-    if _SARDELA_RE.search(article_name):
-        return KALO_FACTOR
-    # Lososova postrv je ločen artikel — brez kala
-    if _LOSOSOVA_RE.search(article_name):
-        return 1.0
-    if _LOSOS_RE.search(article_name) and not _TRIM_RE.search(article_name):
-        return KALO_FACTOR
+    """Kalo faktor — zaenkrat 1.0 za vse artikle."""
     return 1.0
 
 
@@ -155,7 +148,7 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
         # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
         if needs_14d and days > 30:
             continue
-        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 14 <= days <= 30)})
+        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 14 <= days <= 30), 'lot_price': lot.get('lot_price', 0)})
 
     result.sort(key=lambda x: x['_date'])
     return result
@@ -279,6 +272,12 @@ def smart_match(
         n for n in available
         if _get_species(n) == sold_sp and has_stock(n)
     ]
+    # Fallback za Lososova postrv — išči tudi po "POSTRV"
+    if not candidates and "LOSOSOVA POSTRV" in (sold_sp or ""):
+        candidates = [
+            n for n in available
+            if "POSTRV" in (_get_species(n) or "").upper() and has_stock(n)
+        ]
     if not candidates:
         return None, f"ni zaloge za {sold_sp}"
 
@@ -448,12 +447,12 @@ def assign_lots(
                 # Del za prodajo
                 use_sale = round(min(avail, remaining), 4)
                 if use_sale > 0:
-                    assignments.append((lot['code'], use_sale, 0, False))
+                    assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
                     remaining = round(remaining - use_sale, 4)
                 # Odpis preostanka (ločena vrstica, oznaka _writeoff)
                 writeoff = round(avail - use_sale, 4)
                 if writeoff > 0:
-                    assignments.append((lot['code'], writeoff, days_old, True))
+                    assignments.append((lot['code'], writeoff, days_old, True, lot.get('lot_price', 0)))
                 # Cel aged lot porabljen iz virtualne zaloge
                 for vl in virtual[stock_key]:
                     if vl['code'] == lot['code']:
@@ -463,7 +462,7 @@ def assign_lots(
                 if remaining <= 0:
                     break
                 use = round(min(avail, remaining), 4)
-                assignments.append((lot['code'], use, 0, False))
+                assignments.append((lot['code'], use, 0, False, lot.get('lot_price', 0)))
                 remaining = round(remaining - use, 4)
                 for vl in virtual[stock_key]:
                     if vl['code'] == lot['code']:
@@ -478,6 +477,7 @@ def assign_lots(
         for entry in assignments:
             lot_code, qty, forced_days = entry[0], entry[1], entry[2]
             is_writeoff = entry[3] if len(entry) > 3 else False
+            lp = entry[4] if len(entry) > 4 else 0
             lot_opis = opis
             if forced_days > 0:
                 lot_opis = (lot_opis + f' [odpis lota - star {forced_days} dni]').strip()
@@ -491,6 +491,7 @@ def assign_lots(
                 'opis':         lot_opis,
                 'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
                 '_writeoff':    is_writeoff,
+                'lot_price':    lp,
             })
 
         if remaining > 0:
@@ -607,11 +608,11 @@ def assign_lots_with_virtual(
                 days_old = (today - lot_date).days if lot_date else 0
                 use_sale = round(min(avail, remaining), 4)
                 if use_sale > 0:
-                    assignments.append((lot['code'], use_sale, 0, False))
+                    assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
                     remaining = round(remaining - use_sale, 4)
                 writeoff = round(avail - use_sale, 4)
                 if writeoff > 0:
-                    assignments.append((lot['code'], writeoff, days_old, True))
+                    assignments.append((lot['code'], writeoff, days_old, True, lot.get('lot_price', 0)))
                 for vl in virtual[stock_key]:
                     if vl['code'] == lot['code']:
                         vl['quantity'] = 0.0
@@ -620,7 +621,7 @@ def assign_lots_with_virtual(
                 if remaining <= 0:
                     break
                 use = round(min(avail, remaining), 4)
-                assignments.append((lot['code'], use, 0, False))
+                assignments.append((lot['code'], use, 0, False, lot.get('lot_price', 0)))
                 remaining = round(remaining - use, 4)
                 for vl in virtual[stock_key]:
                     if vl['code'] == lot['code']:
@@ -635,6 +636,7 @@ def assign_lots_with_virtual(
         for entry in assignments:
             lot_code, qty, forced_days = entry[0], entry[1], entry[2]
             is_writeoff = entry[3] if len(entry) > 3 else False
+            lp = entry[4] if len(entry) > 4 else 0
             lot_opis = opis
             if forced_days > 0:
                 lot_opis = (lot_opis + f' [odpis lota - star {forced_days} dni]').strip()
@@ -648,6 +650,7 @@ def assign_lots_with_virtual(
                 'opis':         lot_opis,
                 'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
                 '_writeoff':    is_writeoff,
+                'lot_price':    lp,
             })
 
         if remaining > 0:
