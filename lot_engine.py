@@ -148,7 +148,7 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
         # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
         if needs_14d and days > 30:
             continue
-        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 14 <= days <= 30), 'lot_price': lot.get('lot_price', 0)})
+        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 14 <= days <= 30), 'lot_price': lot.get('lot_price', lot.get('price', 0))})
 
     result.sort(key=lambda x: x['_date'])
     return result
