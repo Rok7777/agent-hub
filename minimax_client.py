@@ -659,7 +659,8 @@ class MinimaxClient:
                 merged_order.append(key)
         api_rows = [merged[k] for k in merged_order]
 
-        body = {**fresh, "StockEntryRows": api_rows}
+        # Test: pošlji dokument z originalnimi vrsticami (brez naših sprememb)
+        body = {**fresh, "StockEntryRows": orig_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
