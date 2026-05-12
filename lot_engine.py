@@ -70,10 +70,15 @@ _TRIM_RE    = re.compile('trim', re.IGNORECASE)
 
 KALO_FACTOR = 1.10  # 10% kalo za sardele in losos (brez trim)
 
+_LOSOSOVA_RE = re.compile(r'lososov', re.IGNORECASE)  # Lososova postrv ≠ Losos
+
 def get_kalo_factor(article_name: str) -> float:
-    """Vrne kalo faktor za artikel. 1.10 za sardele in losos (brez trim)."""
+    """Vrne kalo faktor za artikel. 1.10 za sardele in losos (brez trim, brez lososova postrv)."""
     if _SARDELA_RE.search(article_name):
         return KALO_FACTOR
+    # Lososova postrv je ločen artikel — brez kala
+    if _LOSOSOVA_RE.search(article_name):
+        return 1.0
     if _LOSOS_RE.search(article_name) and not _TRIM_RE.search(article_name):
         return KALO_FACTOR
     return 1.0
@@ -186,9 +191,14 @@ def _get_code(name: str) -> Optional[str]:
 def _strip_code(name: str) -> str:
     return _CODE_RE.sub('', name).strip()
 
+_LOSOSOVA_SPEC_RE = re.compile(r'lososov', re.IGNORECASE)
+
 def _get_species(name: str) -> Optional[str]:
     """Prva beseda po šifri (npr. BRANCIN, ORADA, LIGNJI ...)"""
     clean = _strip_code(name).upper()
+    # Posebej ločimo LOSOSOVA POSTRV od LOSOS
+    if _LOSOSOVA_SPEC_RE.search(clean):
+        return "LOSOSOVA POSTRV"
     # vzami vse do prve vejice ali oklepaja
     seg = re.split(r'[,\(]', clean)[0].strip()
     return seg if seg else None
@@ -209,31 +219,29 @@ def _size_distance(s1: Optional[tuple], s2: Optional[tuple]) -> int:
         return 3
     lo1, hi1, u1 = s1
     lo2, hi2, u2 = s2
-    # Normalizacija na grame
+    # Normalizacija na grame — samo če je enota kg
     if u1 == 'kg': lo1, hi1, u1 = lo1*1000, hi1*1000, 'g'
     if u2 == 'kg': lo2, hi2, u2 = lo2*1000, hi2*1000, 'g'
-    # Kosi (škampi, kozice) — manjše vrednosti
+    # Kosi (škampi, kozice) — brez enote, majhne vrednosti
     if not u1 and not u2 and lo1 < 200 and lo2 < 200:
         seq = _SIZE_COUNT
-    elif lo1 >= 1000 or lo2 >= 1000:
-        seq = _SIZE_KG
-        lo1,hi1 = lo1/1000, hi1/1000
-        lo2,hi2 = lo2/1000, hi2/1000
     else:
         seq = _SIZE_G
 
     def idx(lo, hi):
-        for i,(slo,shi) in enumerate(seq):
-            if slo <= lo and hi <= shi*1.5:
+        for i, (slo, shi) in enumerate(seq):
+            if slo <= lo and hi <= shi * 1.5:
                 return i
-            if abs(lo-slo)<50:
-                return i
-        return None
+        # Fallback: najbližji razred
+        best_i, best_d = 0, float('inf')
+        for i, (slo, shi) in enumerate(seq):
+            d = abs(lo - slo)
+            if d < best_d:
+                best_d, best_i = d, i
+        return best_i
 
-    i1, i2 = idx(lo1,hi1), idx(lo2,hi2)
-    if i1 is None or i2 is None:
-        return 5 if abs(lo1-lo2)>300 else 1
-    return abs(i1-i2)
+    i1, i2 = idx(lo1, hi1), idx(lo2, hi2)
+    return abs(i1 - i2)
 
 def _get_origin(name: str) -> Optional[str]:
     nu = name.upper()
@@ -274,33 +282,43 @@ def smart_match(
     if not candidates:
         return None, f"ni zaloge za {sold_sp}"
 
-    # Korak 2: File + očiščeno logika s fallback na sveže
+    # Korak 2: File → očiščeno → sveže hierarhija
     _OCISCEN_RE = re.compile(r'oči[sš][cč]en', re.IGNORECASE)
     sold_ociscen = bool(_OCISCEN_RE.search(sold_name))
 
     if sold_fillet:
-        # file → če ni filea, vzami sveže iste vrste
+        # file → očiščeno → sveže
         fillet_cands = [n for n in candidates if _has_fillet(n)]
-        candidates = fillet_cands if fillet_cands else candidates
+        if not fillet_cands:
+            fillet_cands = [n for n in candidates if _OCISCEN_RE.search(n)]
+        if not fillet_cands:
+            fillet_cands = candidates
+        candidates = fillet_cands
     elif sold_ociscen:
-        # očiščeno → če ni očiščenega, vzami sveže iste vrste
+        # očiščeno → sveže (brez file)
         ociscen_cands = [n for n in candidates if _OCISCEN_RE.search(n)]
-        candidates = ociscen_cands if ociscen_cands else candidates
+        if not ociscen_cands:
+            ociscen_cands = [n for n in candidates if not _has_fillet(n)]
+        if not ociscen_cands:
+            ociscen_cands = candidates
+        candidates = ociscen_cands
     else:
-        # cel/svež → preferiramo brez file in brez očiščeno
+        # cel/svež → brez file in brez očiščeno
         basic_cands = [n for n in candidates if not _has_fillet(n) and not _OCISCEN_RE.search(n)]
         candidates = basic_cands if basic_cands else candidates
 
     if not candidates:
         return None, f"ni ustreznega artikla za {sold_sp}"
 
-    # Korak 3: Točkovanje (origin + teža)
+    # Korak 3: Točkovanje — teža je primarna, država sekundarna
     def score(n):
-        s = 0
+        size_dist = _size_distance(sold_size, _get_size(n))
+        # Teža je primarna (večja kazen za napačno težo)
+        s = -size_dist * 10
+        # Država je sekundarna (manjši bonus/malus)
         art_origin = _get_origin(n)
         if sold_origin and art_origin:
-            s += 10 if art_origin == sold_origin else -3
-        s -= _size_distance(sold_size, _get_size(n)) * 3
+            s += 3 if art_origin == sold_origin else 0
         return s
 
     best = max(candidates, key=score)
@@ -633,13 +651,55 @@ def assign_lots_with_virtual(
             })
 
         if remaining > 0:
-            output.append({**line,
-                'article_id':   stock_data.get('article_id', line.get('article_id')),
-                'article_code': stock_data.get('article_code', art_code),
-                'article_name': stock_data.get('article_name', art_name),
-                'lot': None, 'quantity_assigned': remaining,
-                'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
-                'status': 'partial', '_writeoff': False,
-            })
+            # Poskusi pametno zamenjavo za razliko
+            avail_for_remainder = {}
+            for k, lots in virtual.items():
+                if any(l.get('quantity', 0) > 0 for l in lots):
+                    sname = stock[k].get('article_name', k)
+                    avail_for_remainder[sname] = lots
+            matched_rem, note_rem = smart_match(art_name, avail_for_remainder, unit)
+            if matched_rem and matched_rem != stock.get(stock_key, {}).get('article_name'):
+                rem_stock_key = by_name.get(matched_rem) or matched_rem
+                rem_eligible  = get_eligible_lots(virtual.get(rem_stock_key, []), matched_rem, today)
+                rem_remaining = remaining
+                for lot in rem_eligible:
+                    if rem_remaining <= 0:
+                        break
+                    avail = round(lot['quantity'], 4)
+                    if avail <= 0:
+                        continue
+                    use = round(min(avail, rem_remaining), 4)
+                    rem_stock_data = stock.get(rem_stock_key, {})
+                    output.append({**line,
+                        'article_id':   rem_stock_data.get('article_id', line.get('article_id')),
+                        'article_code': rem_stock_data.get('article_code', art_code),
+                        'article_name': rem_stock_data.get('article_name', art_name),
+                        'lot': lot['code'], 'quantity_assigned': use,
+                        'opis': (opis + f' {note_rem} [zamenjava za razliko]').strip(),
+                        'status': 'matched', '_writeoff': False,
+                    })
+                    rem_remaining = round(rem_remaining - use, 4)
+                    for vl in virtual[rem_stock_key]:
+                        if vl['code'] == lot['code']:
+                            vl['quantity'] = round(vl['quantity'] - use, 4)
+                            break
+                if rem_remaining > 0:
+                    output.append({**line,
+                        'article_id':   stock_data.get('article_id', line.get('article_id')),
+                        'article_code': stock_data.get('article_code', art_code),
+                        'article_name': stock_data.get('article_name', art_name),
+                        'lot': None, 'quantity_assigned': rem_remaining,
+                        'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
+                        'status': 'partial', '_writeoff': False,
+                    })
+            else:
+                output.append({**line,
+                    'article_id':   stock_data.get('article_id', line.get('article_id')),
+                    'article_code': stock_data.get('article_code', art_code),
+                    'article_name': stock_data.get('article_name', art_name),
+                    'lot': None, 'quantity_assigned': remaining,
+                    'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
+                    'status': 'partial', '_writeoff': False,
+                })
 
     return _merge_lot_lines(output)
