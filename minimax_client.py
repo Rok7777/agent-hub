@@ -682,6 +682,8 @@ class MinimaxClient:
             "StockEntryRows":    api_rows,
         }
 
+        import json
+        raise Exception(f"BODY: {json.dumps(body, ensure_ascii=False, default=str)[:2000]}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
