@@ -31,7 +31,8 @@ _FROZEN_RE = re.compile(r'zamrznjen|odtaljen', re.IGNORECASE)
 _SEAFOOD_RE = re.compile(
     'brancin|orada|losos|postrv|sard|oslič|oslic|tun|lignji|kozice|'
     'skampi|škampi|klapavice|ostriga|hobotnica|sipa|lubin|kovac|kovač|'
-    'šur|platesa|trska|polenovka|zobatec|špar|kirnja|arbun|morsk',
+    'šur|platesa|trska|polenovka|bakala|zobatec|špar|kirnja|arbun|morsk|'
+    'som|brancin|lubin|romb|skuš|inčun|list|list|pic|mugilid',
     re.IGNORECASE
 )
 _MAQFINO_RE   = re.compile('maQfino', re.IGNORECASE)
@@ -491,6 +492,8 @@ def assign_lots(
                 'opis':         lot_opis,
                 'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
                 '_writeoff':    is_writeoff,
+                '_writeoff_qty': qty if is_writeoff else 0,
+                '_sale_qty':     qty if not is_writeoff else 0,
                 'lot_price':    lp,
             })
 
@@ -510,24 +513,42 @@ def assign_lots(
 
 def _merge_lot_lines(lines: list[dict]) -> list[dict]:
     """
-    Združi vrstice z istim (row_id, article_code, lot), razen odpisnih vrstic.
-    Vsaka originalna vrstica dokumenta (row_id) se obravnava ločeno.
+    Združi vrstice z istim (row_id, article_code, lot).
+    Prodajne in odpisne vrstice istega lota se združijo — opis pokaže sestavo.
     """
     result = []
     seen   = {}  # (row_id, article_code, lot) → index in result
     for line in lines:
-        is_wo = line.get('_writeoff', False)
-        if is_wo:
+        key = (line.get('row_id', 0), line.get('article_code',''), line.get('lot'))
+        if key not in seen:
+            seen[key] = len(result)
             result.append({**line})
         else:
-            key = (line.get('row_id', 0), line.get('article_code',''), line.get('lot'))
-            if key not in seen:
-                seen[key] = len(result)
-                result.append({**line})
-            else:
-                result[seen[key]]['quantity_assigned'] = round(
-                    result[seen[key]]['quantity_assigned'] + line['quantity_assigned'], 4
-                )
+            existing = result[seen[key]]
+            existing['quantity_assigned'] = round(
+                existing['quantity_assigned'] + line['quantity_assigned'], 4
+            )
+            # Seštej prodajo in odpis
+            existing['_sale_qty']    = round(existing.get('_sale_qty', 0) + line.get('_sale_qty', 0), 4)
+            existing['_writeoff_qty']= round(existing.get('_writeoff_qty', 0) + line.get('_writeoff_qty', 0), 4)
+            # Shrani dni starosti iz odpis vrstice
+            if line.get('_writeoff') and line.get('opis'):
+                existing['_writeoff_opis'] = line['opis']
+            # Status: merged vrstica ni writeoff
+            existing['_writeoff'] = False
+            existing['status']    = 'ok' if existing.get('status') in ('ok','writeoff') else existing.get('status','ok')
+    # Dodaj opis sestave kjer je prišlo do merge odpisa
+    import re as _re
+    for row in result:
+        wo  = row.get('_writeoff_qty', 0)
+        sal = row.get('_sale_qty', 0)
+        if wo > 0 and sal > 0:
+            # Poišči dni iz odpis opisa
+            wo_opis = row.get('_writeoff_opis', '')
+            m = _re.search(r'star (\d+) dni', wo_opis)
+            dni = m.group(1) if m else '?'
+            base = (row.get('opis') or '').strip()
+            row['opis'] = (base + f' [prodaja {sal}kg + odpis {wo}kg, lot star {dni} dni]').strip()
     return result
 
 
@@ -664,6 +685,8 @@ def assign_lots_with_virtual(
                 'opis':         lot_opis,
                 'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
                 '_writeoff':    is_writeoff,
+                '_writeoff_qty': qty if is_writeoff else 0,
+                '_sale_qty':     qty if not is_writeoff else 0,
                 'lot_price':    lp,
             })
 
