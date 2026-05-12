@@ -453,6 +453,7 @@ class MinimaxClient:
             pass
 
         lot_qty   = defaultdict(lambda: defaultdict(float))
+        lot_price = defaultdict(lambda: defaultdict(float))
         date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
 
         for entry_type, subtype, sign in [("P", "L", 1.0), ("I", "S", -1.0)]:
@@ -481,8 +482,11 @@ class MinimaxClient:
                                 item_id = (row.get("Item") or {}).get("ID")
                                 batch   = row.get("BatchNumber", "") or ""
                                 qty     = float(row.get("Quantity") or 0)
+                                price = float(row.get("Price") or 0)
                                 if item_id and batch and qty > 0:
                                     lot_qty[item_id][batch] += sign * qty
+                                    if price > 0:
+                                        lot_price[item_id][batch] = price
                                     if item_id not in item_info:
                                         item_info[item_id] = {
                                             "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
@@ -507,6 +511,7 @@ class MinimaxClient:
                         "BatchNumber":       batch,
                         "Quantity":          round(qty, 4),
                         "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
+                        "Price":             lot_price.get(item_id, {}).get(batch, 0),
                     })
         return result
 
@@ -696,7 +701,7 @@ def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
         if key not in result:
             result[key] = {"article_id": aid, "article_code": code, "article_name": name, "lots": []}
         if batch:
-            result[key]["lots"].append({"code": batch, "quantity": qty, "unit": unit})
+            result[key]["lots"].append({"code": batch, "quantity": qty, "unit": unit, "price": float(row.get("Price") or 0)})
     return result
 
 
