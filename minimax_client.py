@@ -599,6 +599,7 @@ class MinimaxClient:
             orig_for_writeoff = orig_by_rownum.get(row_id)
 
             if r.get("_writeoff"):
+                orig_sp = orig_for_writeoff.get("SellingPrice") if orig_for_writeoff else None
                 row = {
                     "Item":          {"ID": r["article_id"]},
                     "Quantity":      r["quantity_assigned"],
@@ -606,8 +607,8 @@ class MinimaxClient:
                     "BatchNumber":   r["lot"],
                     "WarehouseFrom": default_wh_from,
                 }
-                if orig_for_writeoff and orig_for_writeoff.get("Price") is not None:
-                    row["Price"] = orig_for_writeoff.get("Price")
+                if orig_sp:
+                    row["SellingPrice"] = orig_sp
                 api_rows.append(row)
                 continue
             orig              = orig_by_rownum.get(row_id)
@@ -648,12 +649,15 @@ class MinimaxClient:
         def _clean_row(row):
             """Ohrani samo nujna polja za vrstico."""
             KEEP = {"StockEntryRowId", "Item", "Quantity", "BatchNumber",
-                    "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note", "Price"}
+                    "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note"}
             cleaned = {}
             for k, v in row.items():
                 if k not in KEEP:
                     continue
                 if v is None:
+                    continue
+                # Ne pošiljaj 0 vrednosti za cene
+                if k in ("SellingPrice",) and v == 0.0:
                     continue
                 if isinstance(v, dict) and "ID" in v:
                     cleaned[k] = {"ID": v["ID"]}
@@ -682,8 +686,6 @@ class MinimaxClient:
             "StockEntryRows":    api_rows,
         }
 
-        import json
-        raise Exception(f"BODY: {json.dumps(body, ensure_ascii=False, default=str)[:2000]}")
         return self._put(f"/stockentry/{entry_id}", body)
 
 
