@@ -550,14 +550,18 @@ class MinimaxClient:
             orig              = orig_by_rownum.get(row_id)
             orig_for_writeoff = orig
 
-            # Vrstice brez lota — ohrani original nespremenjeno
-            if r.get("status") in ("no_match", "no_lots") and orig and row_id not in used_row_ids:
-                api_rows.append(orig)
-                used_row_ids.add(row_id)
+            if r.get("status") in ("no_lots", "no_match"):
+                # Ni lota, ni zamenjave — ohrani original nespremenjeno
+                if orig and row_id not in used_row_ids:
+                    api_rows.append(orig)
+                    used_row_ids.add(row_id)
                 continue
 
-            # Partial vrstice — original je že dodan z lotom, preskoči
             if r.get("status") == "partial":
+                # Delna zaloga — ohrani original nespremenjeno
+                if orig and row_id not in used_row_ids:
+                    api_rows.append(orig)
+                    used_row_ids.add(row_id)
                 continue
 
             if r.get("_writeoff"):
