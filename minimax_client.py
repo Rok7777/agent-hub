@@ -81,12 +81,6 @@ class MinimaxClient:
     # ── Journal (Temeljnice) ──────────────────────────────────────────────────
 
     def get_journal_drafts(self) -> list[dict]:
-        """
-        Vrne osnutke temeljnic tipa DI (dnevni iztržek iz Shopsy).
-        1. Pobere vse DI journale (JournalType=DI) — ~136 zapisov
-        2. Za vsak pokliče GetJournal ki vrne pravi Status
-        3. Obdrži samo Status=O (osnutek)
-        """
         di_ids = []
         page   = 1
         while True:
@@ -115,7 +109,6 @@ class MinimaxClient:
         return result
 
     def get_journal_drafts_debug(self) -> dict:
-        """Debug: cel tok iskanja osnutkov — 3 koraki."""
         try:
             osnutki = self.get_journal_drafts()
             k1 = {"najdeno": len(osnutki), "ids": [j.get("JournalId") for j in osnutki]}
@@ -137,7 +130,6 @@ class MinimaxClient:
             except Exception as e:
                 k2.append({"id": j.get("JournalId"), "napaka": str(e)})
 
-        # Pokaži cel entry (Account + Analytic) za prvi osnutek
         k3 = {}
         if osnutki:
             jid = osnutki[0].get("JournalId")
@@ -166,13 +158,6 @@ class MinimaxClient:
         return self._put(f"/journals/{journal_id}", journal_data)
 
     def parse_journal_placila(self, journal: dict) -> dict | None:
-        """
-        Iz temeljnice izvleče podatke za blagajno.
-        Vrne None če ni kontov 1000/1652.
-        Interni ID-ji za Oltre Con d.o.o.:
-          72537347 = konto 1000 (gotovina)
-          72537491 = konto 1652 (kartica)
-        """
         entries     = journal.get("JournalEntries", [])
         datum       = journal.get("JournalDate", "")[:10]
         journal_id  = journal.get("JournalId")
@@ -191,9 +176,9 @@ class MinimaxClient:
             return m.group(1) if m else ""
 
         def _analytic_sifra(entry):
-            an   = entry.get("Analytic") or {}
-            code = an.get("Code", "") or ""
-            desc = entry.get("Description", "") or ""
+            an    = entry.get("Analytic") or {}
+            code  = an.get("Code", "") or ""
+            desc  = entry.get("Description", "") or ""
             jdesc = journal.get("Description", "") or ""
             combined = f"{code} {desc} {jdesc}"
             m = re.search(r"(MPK\d+|MPOC)", combined)
@@ -204,7 +189,6 @@ class MinimaxClient:
             an_obj  = entry.get("Analytic") or {}
             an_id   = an_obj.get("ID")
             an_code = an_obj.get("Code", "") or ""
-            # Če Code ni na voljo, poišči po ID-ju
             if not an_code and an_id:
                 an_code = self._get_analytic_code(an_id)
             sifra = _analytic_sifra_from_code(an_code) or _analytic_sifra(entry)
@@ -244,11 +228,9 @@ class MinimaxClient:
         }
 
     def popravi_in_potrdi_journal(self, podatki: dict) -> bool:
-        """Popravi knjižbe 1652/1000 → 120000 in potrdi temeljnico."""
         ID_GOTOVINA = 72537347
         ID_KARTICA  = 72537491
 
-        # Svež GetJournal za pravilen RowVersion
         journal = self.get_journal(podatki["journal_id"])
         entries = journal.get("JournalEntries", [])
 
@@ -260,68 +242,47 @@ class MinimaxClient:
                 break
 
         if not stranka_obj:
-            try:
-                stranke = self._get("/customers", params={"Search": "Končni kupec", "PageSize": 10})
-                for s in stranke.get("Rows", []):
-                    if "končni kupec" in s.get("Name", "").lower():
-                        stranka_obj = {"ID": s["CustomerID"]}
-                        break
-            except Exception:
-                pass
+            stranka_obj = {"ID": 17414634}
 
-        # Odstrani 1652/1000 in morebitne obstoječe 120000 vrstice (cleanup duplikatov)
         nove_entries, entry_1652, entry_1000 = [], None, None
         for entry in entries:
             acc      = entry.get("Account") or {}
             acc_id   = acc.get("ID")
             acc_name = (acc.get("Name", "") or "").lower()
-            # Ujemanje po ID-ju IN imenu konta
             is_kartica  = (acc_id == ID_KARTICA)  or "1652" in acc_name
             is_gotovina = (acc_id == ID_GOTOVINA) or ("1000 -" in acc_name)
             is_120000   = (acc_id == 130744074)   or "120000" in acc_name
             if is_kartica and not entry_1652:    entry_1652 = entry
             elif is_gotovina and not entry_1000: entry_1000 = entry
-            elif is_120000:                      pass  # preskoči obstoječe 120000
+            elif is_120000:                      pass
             else:                                nove_entries.append(entry)
 
         ref_entry    = entry_1652 or entry_1000
         analitika_id = (ref_entry.get("Analytic") or {}).get("ID") if ref_entry else None
-
-        # Interni ID za konto 120000 — Oltre Con d.o.o.
         konto_120000_id = 130744074
-
-        # Datum iz journala, valuta EUR
         journal_date = journal.get("JournalDate", "")
         entry_date   = journal_date if journal_date else datetime.now().strftime("%Y-%m-%dT00:00:00")
         if ref_entry and ref_entry.get("EntryDate"):
             entry_date = ref_entry.get("EntryDate")
 
-        # Kopiraj strukturo iz prve obstoječe knjižbe
         template = dict(nove_entries[0]) if nove_entries else {}
-        journal_date = journal.get("JournalDate", "")
-
-        # Končni kupec - maloprodaja (Oltre Con d.o.o.) — hardkodirano
-        if not stranka_obj:
-            stranka_obj = {"ID": 17414634}
 
         nova = {
             **template,
-            "Account":                    {"ID": konto_120000_id},
-            "Analytic":                   {"ID": analitika_id} if analitika_id else None,
-            "Customer":                   stranka_obj,
-            "Debit":                      podatki["skupaj"],
-            "Credit":                     0,
-            "DebitInDomesticCurrency":    podatki["skupaj"],
-            "CreditInDomesticCurrency":   0,
-            "TransactionDate":            journal_date,
-            "DueDate":                    journal_date,
+            "Account":                  {"ID": konto_120000_id},
+            "Analytic":                 {"ID": analitika_id} if analitika_id else None,
+            "Customer":                 stranka_obj,
+            "Debit":                    podatki["skupaj"],
+            "Credit":                   0,
+            "DebitInDomesticCurrency":  podatki["skupaj"],
+            "CreditInDomesticCurrency": 0,
+            "TransactionDate":          journal_date,
+            "DueDate":                  journal_date,
         }
-        # Odstrani readonly polja
         for f in ["JournalEntryId", "RowVersion", "RecordDtModified", "ResourceUrl", "Journal"]:
             nova.pop(f, None)
         nove_entries.append(nova)
 
-        # En sam PUT — posodobi knjižbe IN potrdi
         self.update_journal(podatki["journal_id"], {
             **journal,
             "Status":         "P",
@@ -332,7 +293,6 @@ class MinimaxClient:
     # ── Analitike ─────────────────────────────────────────────────────────────
 
     def _get_analytic_code(self, analytic_id) -> str:
-        """Vrne kodo analitike (npr. 'MPK2') po internem ID-ju. Cachira rezultat."""
         if self._analytics_map is None:
             self._analytics_map = {}
             try:
@@ -346,7 +306,6 @@ class MinimaxClient:
         return self._analytics_map.get(analytic_id, "")
 
     def get_analytics(self) -> list[dict]:
-        """Vrne seznam analitik (za iskanje ID-jev MPK1, MPK2 ...)."""
         result = []
         page   = 1
         while True:
@@ -359,7 +318,6 @@ class MinimaxClient:
         return result
 
     def get_analytic_id(self, analytic_code: str) -> Optional[int]:
-        """Vrne ID analitike po kodi (npr. 'MPK2')."""
         for row in self.get_analytics():
             if row.get("Code", "").upper() == analytic_code.upper():
                 return row.get("AnalyticId")
@@ -370,10 +328,6 @@ class MinimaxClient:
     RETAIL_CUSTOMER = "končni kupec - maloprodaja"
 
     def get_draft_entries(self, analytic_id: int) -> list[dict]:
-        """
-        Vrne osnutke (Status=O) izdaj strank za dano analitiko.
-        Filtrira SAMO dokumente s stranko 'Končni kupec - maloprodaja'.
-        """
         result = []
         page   = 1
         while True:
@@ -420,14 +374,9 @@ class MinimaxClient:
         return result
 
     def get_stock_for_items(self, warehouse_id: int, item_ids: list[int]) -> list[dict]:
-        """
-        Izgradi lot zalogo iz prenosnih dokumentov (IL/IS) za dano skladišče.
-        Sešteje prejete lote (IL prejemi) in odšteje prodane (IS potrjeni).
-        """
         from collections import defaultdict
         from datetime import datetime, timedelta
 
-        # Razreši numerični warehouse ID (npr. "MP-K2" → 27421)
         numeric_wh_id = warehouse_id
         try:
             for wh in self.get_warehouses():
@@ -482,7 +431,7 @@ class MinimaxClient:
                                 item_id = (row.get("Item") or {}).get("ID")
                                 batch   = row.get("BatchNumber", "") or ""
                                 qty     = float(row.get("Quantity") or 0)
-                                price = float(row.get("Price") or 0)
+                                price   = float(row.get("Price") or 0)
                                 if item_id and batch and qty > 0:
                                     lot_qty[item_id][batch] += sign * qty
                                     if price > 0:
@@ -577,10 +526,12 @@ class MinimaxClient:
     def update_entry_with_lots(self, entry_id: int, entry_data: dict, new_rows: list[dict]) -> dict:
         """
         Posodobi dokument z dodelitvami lotov.
-        Originalne vrstice ohranimo z StockEntryRowId + dodamo BatchNumber.
-        Dodatne vrstice (drugi loti) pošljemo brez StockEntryRowId.
+        - Originalne vrstice: ohrani StockEntryRowId + dodaj BatchNumber
+        - Dodatne vrstice (drugi loti): brez StockEntryRowId
+        - no_match/no_lots: ohrani original nespremenjeno
+        - partial: preskoči (original je že dodan)
         """
-        fresh = self.get_entry_detail(entry_id)
+        fresh     = self.get_entry_detail(entry_id)
         orig_rows = fresh.get("StockEntryRows") or []
 
         # Indeks originalnih vrstic po RowNumber (1-based → 0-based)
@@ -591,12 +542,23 @@ class MinimaxClient:
         if orig_rows:
             default_wh_from = orig_rows[0].get("WarehouseFrom")
 
-        api_rows    = []
+        api_rows     = []
         used_row_ids = set()
 
         for r in new_rows:
             row_id            = r.get("row_id", 0)
-            orig_for_writeoff = orig_by_rownum.get(row_id)
+            orig              = orig_by_rownum.get(row_id)
+            orig_for_writeoff = orig
+
+            # Vrstice brez lota — ohrani original nespremenjeno
+            if r.get("status") in ("no_match", "no_lots") and orig and row_id not in used_row_ids:
+                api_rows.append(orig)
+                used_row_ids.add(row_id)
+                continue
+
+            # Partial vrstice — original je že dodan z lotom, preskoči
+            if r.get("status") == "partial":
+                continue
 
             if r.get("_writeoff"):
                 orig_sp = orig_for_writeoff.get("SellingPrice") if orig_for_writeoff else None
@@ -611,7 +573,7 @@ class MinimaxClient:
                     row["SellingPrice"] = orig_sp
                 api_rows.append(row)
                 continue
-            orig              = orig_by_rownum.get(row_id)
+
             orig_article_id   = (orig.get("Item") or {}).get("ID") if orig else None
             result_article_id = r.get("article_id")
 
@@ -635,7 +597,6 @@ class MinimaxClient:
                     row["BatchNumber"] = r["lot"]
                 if r.get("unit"):
                     row["UnitOfMeasurement"] = r["unit"]
-                # Vzemi Price in WarehouseFrom iz originalne vrstice istega row_id
                 orig_for_row = orig_by_rownum.get(row_id)
                 if orig_for_row:
                     if orig_for_row.get("Price") is not None:
@@ -656,10 +617,8 @@ class MinimaxClient:
                     continue
                 if v is None:
                     continue
-                # Ne pošiljaj praznega BatchNumber
                 if k == "BatchNumber" and not v:
                     continue
-                # Ne pošiljaj 0 vrednosti za cene
                 if k in ("SellingPrice",) and v == 0.0:
                     continue
                 if isinstance(v, dict) and "ID" in v:
@@ -686,16 +645,6 @@ class MinimaxClient:
                 merged_order.append(key)
         api_rows = [merged[k] for k in merged_order]
 
-        # Očisti fresh — readonly polja in ResourceUrl iz FK objektov
-        SKIP_KEYS = {"StockEntryId", "Number", "RowVersion", "RecordDtModified",
-                     "ResourceUrl", "StockEntryRows", "AssociationWithIssuedInvoice"}
-
-        def _clean_fk(v):
-            if isinstance(v, dict) and "ID" in v:
-                return {"ID": v["ID"]}
-            return v
-
-        # Pošlji cel fresh + zamenjane vrstice (vrstice so že očiščene z _clean_row)
         body = {**fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
@@ -716,7 +665,12 @@ def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
         if key not in result:
             result[key] = {"article_id": aid, "article_code": code, "article_name": name, "lots": []}
         if batch:
-            result[key]["lots"].append({"code": batch, "quantity": qty, "unit": unit, "price": float(row.get("Price") or 0)})
+            result[key]["lots"].append({
+                "code":     batch,
+                "quantity": qty,
+                "unit":     unit,
+                "price":    float(row.get("Price") or 0),
+            })
     return result
 
 
