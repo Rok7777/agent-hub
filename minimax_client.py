@@ -702,23 +702,11 @@ class MinimaxClient:
             "Customer":          {"ID": (fresh.get("Customer") or {}).get("ID")},
             "Analytic":          {"ID": (fresh.get("Analytic") or {}).get("ID")},
             "Status":            fresh.get("Status"),
-            "StockEntryRows":    api_rows,
-        }
-
-        body = {
-            "StockEntryType":    fresh.get("StockEntryType"),
-            "StockEntrySubtype": fresh.get("StockEntrySubtype"),
-            "Date":              fresh.get("Date"),
-            "Customer":          {"ID": (fresh.get("Customer") or {}).get("ID")},
-            "Analytic":          {"ID": (fresh.get("Analytic") or {}).get("ID")},
-            "Status":            fresh.get("Status"),
             "RowVersion":        fresh.get("RowVersion"),
             "StockEntryRows":    api_rows,
         }
         # Odstrani None vrednosti
         body = {k: v for k, v in body.items() if v is not None}
-        orig_only = [r for r in api_rows if r.get("StockEntryRowId")]
-        body["StockEntryRows"] = orig_only
         return self._put(f"/stockentry/{entry_id}", body)
 
 
