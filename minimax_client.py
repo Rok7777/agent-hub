@@ -633,7 +633,7 @@ class MinimaxClient:
                     continue
                 if k == "BatchNumber" and not v:
                     continue
-                if k in ("SellingPrice",) and v == 0.0:
+                if k in ("SellingPrice", "Price", "Value") and v == 0.0:
                     continue
                 if isinstance(v, dict) and "ID" in v:
                     cleaned[k] = {"ID": v["ID"]}
@@ -659,9 +659,18 @@ class MinimaxClient:
                 merged_order.append(key)
         api_rows = [merged[k] for k in merged_order]
 
-        body = {**fresh, "StockEntryRows": api_rows}
-        import json
-        raise Exception(f"BODY: {json.dumps(body, ensure_ascii=False, default=str)[:3000]}")
+        def _clean_fk(v):
+            if isinstance(v, dict) and "ID" in v:
+                return {"ID": v["ID"]}
+            return v
+
+        SKIP_TOP = {"StockEntryId", "Number", "ResourceUrl"}
+        clean_fresh = {
+            k: _clean_fk(v)
+            for k, v in fresh.items()
+            if k not in SKIP_TOP
+        }
+        body = {**clean_fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
