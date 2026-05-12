@@ -593,6 +593,11 @@ class MinimaxClient:
                 if r.get("lot"):
                     new_orig["BatchNumber"] = r["lot"]
                 new_orig["Quantity"] = r["quantity_assigned"]
+                # NC in NV iz prenosnega dokumenta
+                lp = float(r.get("lot_price") or 0)
+                if lp > 0:
+                    new_orig["Price"] = lp
+                    new_orig["Value"] = round(lp * r["quantity_assigned"], 4)
                 api_rows.append(new_orig)
                 used_row_ids.add(row_id)
             else:
@@ -659,8 +664,7 @@ class MinimaxClient:
                 merged_order.append(key)
         api_rows = [merged[k] for k in merged_order]
 
-        orig_only = [r for r in api_rows if r.get("StockEntryRowId")]
-        body = {**fresh, "StockEntryRows": orig_only}
+        body = {**fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
