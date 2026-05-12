@@ -659,17 +659,18 @@ class MinimaxClient:
                 merged_order.append(key)
         api_rows = [merged[k] for k in merged_order]
 
-        def _clean_fk(v):
-            if isinstance(v, dict) and "ID" in v:
-                return {"ID": v["ID"]}
-            return v
-
         SKIP_TOP = {"StockEntryId", "Number", "ResourceUrl"}
-        clean_fresh = {
-            k: _clean_fk(v)
-            for k, v in fresh.items()
-            if k not in SKIP_TOP
-        }
+        clean_fresh = {}
+        for k, v in fresh.items():
+            if k in SKIP_TOP:
+                continue
+            if k == "AssociationWithIssuedInvoice":
+                clean_fresh[k] = "N"  # Začasno odstrani povezavo za PUT
+                continue
+            if isinstance(v, dict) and "ID" in v:
+                clean_fresh[k] = {"ID": v["ID"]}
+            else:
+                clean_fresh[k] = v
         body = {**clean_fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
