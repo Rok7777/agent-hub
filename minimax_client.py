@@ -641,13 +641,15 @@ class MinimaxClient:
                 api_rows.append(row)
 
         def _clean_row(row):
-            """Odstrani readonly polja, null vrednosti in ResourceUrl iz FK objektov."""
+            """Ohrani samo nujna polja za vrstico."""
+            KEEP = {"StockEntryRowId", "Item", "Quantity", "BatchNumber",
+                    "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note", "Price"}
             cleaned = {}
             for k, v in row.items():
-                if k in ("StockEntry", "ItemName", "RowNumber", "RecordDtModified", "RowVersion"):
+                if k not in KEEP:
                     continue
                 if v is None:
-                    continue  # Odstrani null vrednosti
+                    continue
                 if isinstance(v, dict) and "ID" in v:
                     cleaned[k] = {"ID": v["ID"]}
                 else:
