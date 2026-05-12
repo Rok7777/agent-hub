@@ -695,18 +695,21 @@ class MinimaxClient:
                 return {"ID": v["ID"]}
             return v
 
-        body = {
-            "StockEntryType":    fresh.get("StockEntryType"),
-            "StockEntrySubtype": fresh.get("StockEntrySubtype"),
-            "Date":              fresh.get("Date"),
-            "Customer":          {"ID": (fresh.get("Customer") or {}).get("ID")},
-            "Analytic":          {"ID": (fresh.get("Analytic") or {}).get("ID")},
-            "Status":            fresh.get("Status"),
-            "RowVersion":        fresh.get("RowVersion"),
-            "StockEntryRows":    api_rows,
+        SKIP_KEYS = {"StockEntryId", "Number", "RecordDtModified",
+                     "ResourceUrl", "StockEntryRows"}
+
+        def _clean_fk(v):
+            if isinstance(v, dict) and "ID" in v:
+                return {"ID": v["ID"]}
+            return v
+
+        clean_fresh = {
+            k: _clean_fk(v)
+            for k, v in fresh.items()
+            if k not in SKIP_KEYS and v is not None
         }
-        # Odstrani None vrednosti
-        body = {k: v for k, v in body.items() if v is not None}
+
+        body = {**clean_fresh, "StockEntryRows": api_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
