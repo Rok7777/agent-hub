@@ -604,13 +604,14 @@ class MinimaxClient:
 
         final_rows.extend([_clean_row(r) for r in extra_rows])
 
-        # Test: samo spremenimo BatchNumber na prvi vrstici
+        # Test: samo posodobi BatchNumber, vse ostalo orig
         test_rows = []
-        for i, row in enumerate(orig_rows):
-            r = dict(row)
-            if i == 0:
-                r["BatchNumber"] = r.get("BatchNumber", "") + "_test"
-            test_rows.append(r)
+        for orig in orig_rows:
+            row = dict(orig)
+            row_id = orig.get("RowNumber", 1) - 1
+            if row_id in lot_by_rowid and lot_by_rowid[row_id]:
+                row["BatchNumber"] = lot_by_rowid[row_id]
+            test_rows.append(row)
         body = {**fresh, "StockEntryRows": test_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
