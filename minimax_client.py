@@ -542,150 +542,69 @@ class MinimaxClient:
         if orig_rows:
             default_wh_from = orig_rows[0].get("WarehouseFrom")
 
-        api_rows     = []
-        used_row_ids = set()
+        # Korak 1: Indeks new_rows po row_id
+        lot_by_rowid   = {}
+        qty_by_rowid   = {}
+        price_by_rowid = {}
+        extra_rows     = []
 
         for r in new_rows:
-            row_id            = r.get("row_id", 0)
-            orig              = orig_by_rownum.get(row_id)
-            orig_for_writeoff = orig
-
-            if r.get("status") in ("no_lots", "no_match"):
-                # Ni lota, ni zamenjave — ohrani original nespremenjeno
-                if orig and row_id not in used_row_ids:
-                    api_rows.append(orig)
-                    used_row_ids.add(row_id)
+            if r.get("_writeoff") or r.get("status") in ("no_lots", "no_match", "partial"):
                 continue
-
-            if r.get("status") == "partial":
-                # Dodaj novo vrstico z originalno količino brez lota (za ročno ureditev)
-                orig_qty = orig.get("Quantity") if orig else r.get("quantity_assigned", 0)
-                leftover = {
-                    "Item":          {"ID": r["article_id"]},
-                    "Quantity":      orig_qty,
-                    "SellingPrice":  r.get("selling_price"),
-                    "WarehouseFrom": default_wh_from,
-                    "Note":          "[rocna ureditev]",
-                }
-                api_rows.append(leftover)
-                continue
-
-            if r.get("_writeoff"):
-                orig_sp = orig_for_writeoff.get("SellingPrice") if orig_for_writeoff else None
+            rid = r.get("row_id", 0)
+            if rid not in lot_by_rowid:
+                lot_by_rowid[rid] = r.get("lot", "")
+                qty_by_rowid[rid] = r["quantity_assigned"]
+                lp = float(r.get("lot_price") or 0)
+                if lp > 0:
+                    price_by_rowid[rid] = (lp, round(lp * r["quantity_assigned"], 4))
+            else:
                 row = {
                     "Item":          {"ID": r["article_id"]},
                     "Quantity":      r["quantity_assigned"],
-                    "Note":          r.get("opis", "") or "",
-                    "BatchNumber":   r["lot"],
+                    "SellingPrice":  r.get("selling_price"),
                     "WarehouseFrom": default_wh_from,
+                    "Note":          r.get("opis", "") or "",
                 }
-                if orig_sp:
-                    row["SellingPrice"] = orig_sp
-                api_rows.append(row)
-                continue
-
-            orig_article_id   = (orig.get("Item") or {}).get("ID") if orig else None
-            result_article_id = r.get("article_id")
-
-            if orig and orig_article_id == result_article_id and row_id not in used_row_ids:
-                # Prva vrstica tega row_id — ohrani StockEntryRowId
-                new_orig = {**orig}
-                if r.get("lot"):
-                    new_orig["BatchNumber"] = r["lot"]
-                new_orig["Quantity"] = r["quantity_assigned"]
-                # NC in NV iz prenosnega dokumenta
-                lp = float(r.get("lot_price") or 0)
-                if lp > 0:
-                    new_orig["Price"] = lp
-                    new_orig["Value"] = round(lp * r["quantity_assigned"], 4)
-                api_rows.append(new_orig)
-                used_row_ids.add(row_id)
-            else:
-                # Dodatna vrstica (drugi lot) ali zamenjava — nova vrstica brez StockEntryRowId
-                row = {
-                    "Item":         {"ID": result_article_id},
-                    "Quantity":     r["quantity_assigned"],
-                    "SellingPrice": r.get("selling_price"),
-                    "Note":         r.get("opis", "") or "",
-                }
-                if r.get("lot"):
-                    row["BatchNumber"] = r["lot"]
-                if r.get("unit"):
-                    row["UnitOfMeasurement"] = r["unit"]
-                orig_for_row = orig_by_rownum.get(row_id)
-                if orig_for_row:
-                    if orig_for_row.get("WarehouseFrom"):
-                        row["WarehouseFrom"] = orig_for_row.get("WarehouseFrom")
-                elif default_wh_from:
-                    row["WarehouseFrom"] = default_wh_from
-                # Nabavna cena iz lot podatkov
+                if r.get("lot"):  row["BatchNumber"]       = r["lot"]
+                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
                 lp = float(r.get("lot_price") or 0)
                 if lp > 0:
                     row["Price"] = lp
-                    row["Value"] = round(lp * r.get("quantity_assigned", 0), 4)
-                api_rows.append(row)
+                    row["Value"] = round(lp * r["quantity_assigned"], 4)
+                extra_rows.append(row)
 
+        # Korak 2: Posodobi orig_rows z BatchNumber
+        final_rows = []
+        for orig in orig_rows:
+            row    = dict(orig)
+            row_id = orig.get("RowNumber", 1) - 1
+            if row_id in lot_by_rowid:
+                if lot_by_rowid[row_id]:
+                    row["BatchNumber"] = lot_by_rowid[row_id]
+                row["Quantity"] = qty_by_rowid[row_id]
+                if row_id in price_by_rowid:
+                    row["Price"] = price_by_rowid[row_id][0]
+                    row["Value"] = price_by_rowid[row_id][1]
+            final_rows.append(row)
+
+        # Korak 3: Dodaj nove vrstice
         def _clean_row(row):
-            """Ohrani samo nujna polja za vrstico."""
             KEEP = {"StockEntryRowId", "Item", "Quantity", "BatchNumber",
                     "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note",
                     "Price", "Value"}
             cleaned = {}
             for k, v in row.items():
-                if k not in KEEP:
-                    continue
-                if v is None:
-                    continue
-                if k == "BatchNumber" and not v:
-                    continue
-                if k in ("SellingPrice", "Price", "Value") and v == 0.0:
-                    continue
-                if isinstance(v, dict) and "ID" in v:
-                    cleaned[k] = {"ID": v["ID"]}
-                else:
-                    cleaned[k] = v
+                if k not in KEEP: continue
+                if v is None: continue
+                if k == "BatchNumber" and not v: continue
+                if k in ("SellingPrice", "Price", "Value") and v == 0.0: continue
+                cleaned[k] = {"ID": v["ID"]} if isinstance(v, dict) and "ID" in v else v
             return cleaned
 
-        final_rows = []
-        for row in api_rows:
-            if row.get("StockEntryRowId"):
-                # Originalna vrstica — vzemi direktno iz fresh (brez kakršnegakoli čiščenja)
-                row_num = row.get("RowNumber", 0) - 1 if row.get("RowNumber") else None
-                orig = orig_by_rownum.get(row_num) if row_num is not None else None
-                if orig:
-                    use_row = dict(orig)
-                    # Dodaj samo BatchNumber, Quantity, Price, Value iz naših sprememb
-                    if row.get("BatchNumber"):
-                        use_row["BatchNumber"] = row["BatchNumber"]
-                    use_row["Quantity"] = row["Quantity"]
-                    if row.get("Price") and row["Price"] > 0:
-                        use_row["Price"] = row["Price"]
-                        use_row["Value"] = row.get("Value", 0)
-                    final_rows.append(use_row)
-                else:
-                    final_rows.append(row)
-            else:
-                # Nova vrstica — minimalno čiščenje
-                final_rows.append(_clean_row(row))
-        api_rows = final_rows
+        final_rows.extend([_clean_row(r) for r in extra_rows])
 
-        # Združi vrstice z istim artiklom in lotom v eno
-        merged = {}
-        merged_order = []
-        for row in api_rows:
-            item_id = (row.get("Item") or {}).get("ID")
-            batch   = row.get("BatchNumber", "")
-            key     = (item_id, batch)
-            if key in merged:
-                merged[key]["Quantity"] = round(
-                    merged[key]["Quantity"] + row.get("Quantity", 0), 4
-                )
-            else:
-                merged[key] = dict(row)
-                merged_order.append(key)
-        api_rows = [merged[k] for k in merged_order]
-
-        body = {**fresh, "StockEntryRows": api_rows}
+        body = {**fresh, "StockEntryRows": final_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
