@@ -604,15 +604,24 @@ class MinimaxClient:
 
         final_rows.extend([_clean_row(r) for r in extra_rows])
 
-        # Test: samo posodobi BatchNumber, vse ostalo orig
-        test_rows = []
+        # Finalna verzija — posodobi orig_rows + dodaj nove vrstice
+        final_rows = []
         for orig in orig_rows:
             row = dict(orig)
             row_id = orig.get("RowNumber", 1) - 1
-            if row_id in lot_by_rowid and lot_by_rowid[row_id]:
-                row["BatchNumber"] = lot_by_rowid[row_id]
-            test_rows.append(row)
-        body = {**fresh, "StockEntryRows": test_rows}
+            if row_id in lot_by_rowid:
+                if lot_by_rowid[row_id]:
+                    row["BatchNumber"] = lot_by_rowid[row_id]
+                row["Quantity"] = qty_by_rowid[row_id]
+                if row_id in price_by_rowid:
+                    row["Price"] = price_by_rowid[row_id][0]
+                    row["Value"] = round(price_by_rowid[row_id][0] * qty_by_rowid[row_id], 4)
+            final_rows.append(row)
+
+        # Dodaj nove vrstice (drugi loti, zamenjave)
+        final_rows.extend(extra_rows)
+
+        body = {**fresh, "StockEntryRows": final_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
