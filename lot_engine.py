@@ -698,41 +698,58 @@ def assign_lots_with_virtual(
                     sname = stock[k].get('article_name', k)
                     avail_for_remainder[sname] = lots
             matched_rem, note_rem = smart_match(art_name, avail_for_remainder, unit)
-            if matched_rem and matched_rem != stock.get(stock_key, {}).get('article_name'):
-                rem_stock_key = by_name.get(matched_rem) or matched_rem
-                rem_eligible  = get_eligible_lots(virtual.get(rem_stock_key, []), matched_rem, today)
-                rem_remaining = remaining
-                for lot in rem_eligible:
-                    if rem_remaining <= 0:
-                        break
-                    avail = round(lot['quantity'], 4)
-                    if avail <= 0:
-                        continue
-                    use = round(min(avail, rem_remaining), 4)
-                    rem_stock_data = stock.get(rem_stock_key, {})
-                    output.append({**line,
-                        'article_id':   rem_stock_data.get('article_id', line.get('article_id')),
-                        'article_code': rem_stock_data.get('article_code', art_code),
-                        'article_name': rem_stock_data.get('article_name', art_name),
-                        'lot': lot['code'], 'quantity_assigned': use,
-                        'opis': (opis + f' {note_rem} [zamenjava za razliko]').strip(),
-                        'status': 'matched', '_writeoff': False,
-                    })
-                    rem_remaining = round(rem_remaining - use, 4)
-                    for vl in virtual[rem_stock_key]:
-                        if vl['code'] == lot['code']:
-                            vl['quantity'] = round(vl['quantity'] - use, 4)
+            rem_stock_key_candidate = by_name.get(matched_rem) or matched_rem
+            if matched_rem and rem_stock_key_candidate != stock_key:
+                rem_stock_key  = rem_stock_key_candidate
+                rem_eligible   = get_eligible_lots(virtual.get(rem_stock_key, []), matched_rem, today)
+                rem_stock_data = stock.get(rem_stock_key, {})
+                rem_remaining  = remaining
+                # Razpoložljiva zaloga zamenjave
+                rem_avail = sum(l['quantity'] for l in rem_eligible if l.get('quantity', 0) > 0)
+                rem_lot   = rem_eligible[0]['code'] if rem_eligible else None
+                if rem_lot:
+                    # Zamenjava: količina = polna preostala potreba (da Minimax zaustavi če lot ne pokrije)
+                    # lot = kar je na zalogi
+                    for lot in rem_eligible:
+                        avail = round(lot['quantity'], 4)
+                        if avail <= 0:
+                            continue
+                        use_lot = round(min(avail, rem_remaining), 4)
+                        use_qty = rem_remaining  # Polna preostala količina na vrstici
+                        lot_shortfall = round(rem_remaining - use_lot, 4)
+                        rem_opis = (opis + f' {note_rem} [zamenjava za razliko]').strip()
+                        if lot_shortfall > 0:
+                            rem_opis = (rem_opis + f' [lot pokrije {use_lot}{unit}, manjka {lot_shortfall}{unit}]').strip()
+                        output.append({**line,
+                            'article_id':        rem_stock_data.get('article_id', line.get('article_id')),
+                            'article_code':      rem_stock_data.get('article_code', art_code),
+                            'article_name':      rem_stock_data.get('article_name', art_name),
+                            'lot':               lot['code'],
+                            'quantity_assigned': use_qty,
+                            'opis':              rem_opis,
+                            'status':            'matched' if lot_shortfall == 0 else 'partial',
+                            '_writeoff':         False,
+                            'lot_price':         lot.get('lot_price', 0),
+                        })
+                        rem_remaining = round(rem_remaining - use_lot, 4)
+                        for vl in virtual[rem_stock_key]:
+                            if vl['code'] == lot['code']:
+                                vl['quantity'] = round(vl['quantity'] - use_lot, 4)
+                                break
+                        if rem_remaining <= 0:
                             break
-                if rem_remaining > 0:
+                if rem_remaining > 0 and not rem_lot:
+                    # Ni zamenjave — partial ostane
                     output.append({**line,
                         'article_id':   stock_data.get('article_id', line.get('article_id')),
                         'article_code': stock_data.get('article_code', art_code),
                         'article_name': stock_data.get('article_name', art_name),
-                        'lot': None, 'quantity_assigned': rem_remaining,
+                        'lot': None, 'quantity_assigned': remaining,
                         'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
                         'status': 'partial', '_writeoff': False,
                     })
             else:
+                # Ni zamenjave — ohrani original količino z razpoložljivim lotom
                 output.append({**line,
                     'article_id':   stock_data.get('article_id', line.get('article_id')),
                     'article_code': stock_data.get('article_code', art_code),
