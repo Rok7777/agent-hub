@@ -604,7 +604,14 @@ class MinimaxClient:
 
         final_rows.extend([_clean_row(r) for r in extra_rows])
 
-        body = {**fresh, "StockEntryRows": final_rows}
+        # Test: samo spremenimo BatchNumber na prvi vrstici
+        test_rows = []
+        for i, row in enumerate(orig_rows):
+            r = dict(row)
+            if i == 0:
+                r["BatchNumber"] = r.get("BatchNumber", "") + "_test"
+            test_rows.append(r)
+        body = {**fresh, "StockEntryRows": test_rows}
         return self._put(f"/stockentry/{entry_id}", body)
 
 
