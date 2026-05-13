@@ -649,12 +649,21 @@ class MinimaxClient:
         final_rows = []
         for row in api_rows:
             if row.get("StockEntryRowId"):
-                # Originalna vrstica — samo počisti nested FK objekte
-                cleaned = {k: ({"ID": v["ID"]} if isinstance(v, dict) and "ID" in v else v)
-                           for k, v in row.items()
-                           if k not in ("StockEntry", "ItemName", "RowNumber", "RecordDtModified", "RowVersion")
-                           and v is not None}
-                final_rows.append(cleaned)
+                # Originalna vrstica — vzemi direktno iz fresh (brez kakršnegakoli čiščenja)
+                row_num = row.get("RowNumber", 0) - 1 if row.get("RowNumber") else None
+                orig = orig_by_rownum.get(row_num) if row_num is not None else None
+                if orig:
+                    use_row = dict(orig)
+                    # Dodaj samo BatchNumber, Quantity, Price, Value iz naših sprememb
+                    if row.get("BatchNumber"):
+                        use_row["BatchNumber"] = row["BatchNumber"]
+                    use_row["Quantity"] = row["Quantity"]
+                    if row.get("Price") and row["Price"] > 0:
+                        use_row["Price"] = row["Price"]
+                        use_row["Value"] = row.get("Value", 0)
+                    final_rows.append(use_row)
+                else:
+                    final_rows.append(row)
             else:
                 # Nova vrstica — minimalno čiščenje
                 final_rows.append(_clean_row(row))
