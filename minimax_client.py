@@ -646,7 +646,19 @@ class MinimaxClient:
                     cleaned[k] = v
             return cleaned
 
-        api_rows = [_clean_row(r) for r in api_rows]
+        final_rows = []
+        for row in api_rows:
+            if row.get("StockEntryRowId"):
+                # Originalna vrstica — samo počisti nested FK objekte
+                cleaned = {k: ({"ID": v["ID"]} if isinstance(v, dict) and "ID" in v else v)
+                           for k, v in row.items()
+                           if k not in ("StockEntry", "ItemName", "RowNumber", "RecordDtModified", "RowVersion")
+                           and v is not None}
+                final_rows.append(cleaned)
+            else:
+                # Nova vrstica — minimalno čiščenje
+                final_rows.append(_clean_row(row))
+        api_rows = final_rows
 
         # Združi vrstice z istim artiklom in lotom v eno
         merged = {}
