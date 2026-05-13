@@ -526,41 +526,45 @@ class MinimaxClient:
     def update_entry_with_lots(self, entry_id: int, entry_data: dict, new_rows: list[dict]) -> dict:
         """
         Posodobi dokument z dodelitvami lotov.
-        - Originalne vrstice: ohrani StockEntryRowId + dodaj BatchNumber
-        - Dodatne vrstice (drugi loti): brez StockEntryRowId
-        - no_match/no_lots: ohrani original nespremenjeno
-        - partial: preskoči (original je že dodan)
+        - orig_rows posodobimo z BatchNumber/Quantity/Price
+        - Dodatne vrstice (drugi loti, zamenjave) dodamo kot nove
+        - no_match/no_lots/partial: original ostane nespremenjen
         """
         fresh     = self.get_entry_detail(entry_id)
         orig_rows = fresh.get("StockEntryRows") or []
 
-        # Indeks originalnih vrstic po RowNumber (1-based → 0-based)
         orig_by_rownum = {r.get("RowNumber", 0) - 1: r for r in orig_rows}
 
-        # Vzemi WarehouseFrom iz prve originalne vrstice
         default_wh_from = None
         if orig_rows:
             default_wh_from = orig_rows[0].get("WarehouseFrom")
 
-        # Korak 1: Indeks new_rows po row_id
-        lot_by_rowid   = {}
-        qty_by_rowid   = {}
-        price_by_rowid = {}
-        extra_rows     = []
+        lot_by_rowid     = {}
+        qty_by_rowid     = {}
+        price_by_rowid   = {}
+        extra_rows       = []
+        replaced_row_ids = set()
 
         for r in new_rows:
             if r.get("_writeoff") or r.get("status") in ("no_lots", "no_match", "partial"):
                 continue
-            rid = r.get("row_id", 0)
-            if rid not in lot_by_rowid:
+            rid        = r.get("row_id", 0)
+            orig_art   = (orig_by_rownum.get(rid, {}).get("Item") or {}).get("ID")
+            result_art = r.get("article_id")
+
+            if orig_art == result_art and rid not in lot_by_rowid:
+                # Isti artikel — posodobi original
                 lot_by_rowid[rid] = r.get("lot", "")
                 qty_by_rowid[rid] = r["quantity_assigned"]
                 lp = float(r.get("lot_price") or 0)
                 if lp > 0:
                     price_by_rowid[rid] = (lp, round(lp * r["quantity_assigned"], 4))
             else:
+                # Pametna zamenjava ali drugi lot — nova vrstica
+                if orig_art != result_art:
+                    replaced_row_ids.add(rid)
                 row = {
-                    "Item":          {"ID": r["article_id"]},
+                    "Item":          {"ID": result_art},
                     "Quantity":      r["quantity_assigned"],
                     "SellingPrice":  r.get("selling_price"),
                     "WarehouseFrom": default_wh_from,
@@ -574,11 +578,13 @@ class MinimaxClient:
                     row["Value"] = round(lp * r["quantity_assigned"], 4)
                 extra_rows.append(row)
 
-        # Korak 2: Posodobi orig_rows z BatchNumber
+        # Posodobi orig_rows — preskoči nadomeščene vrstice
         final_rows = []
         for orig in orig_rows:
-            row    = dict(orig)
             row_id = orig.get("RowNumber", 1) - 1
+            if row_id in replaced_row_ids:
+                continue
+            row = dict(orig)
             if row_id in lot_by_rowid:
                 if lot_by_rowid[row_id]:
                     row["BatchNumber"] = lot_by_rowid[row_id]
@@ -588,7 +594,7 @@ class MinimaxClient:
                     row["Value"] = price_by_rowid[row_id][1]
             final_rows.append(row)
 
-        # Korak 3: Dodaj nove vrstice
+        # Dodaj nove vrstice (očiščene)
         def _clean_row(row):
             KEEP = {"StockEntryRowId", "Item", "Quantity", "BatchNumber",
                     "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note",
@@ -603,23 +609,6 @@ class MinimaxClient:
             return cleaned
 
         final_rows.extend([_clean_row(r) for r in extra_rows])
-
-        # Finalna verzija — posodobi orig_rows + dodaj nove vrstice
-        final_rows = []
-        for orig in orig_rows:
-            row = dict(orig)
-            row_id = orig.get("RowNumber", 1) - 1
-            if row_id in lot_by_rowid:
-                if lot_by_rowid[row_id]:
-                    row["BatchNumber"] = lot_by_rowid[row_id]
-                row["Quantity"] = qty_by_rowid[row_id]
-                if row_id in price_by_rowid:
-                    row["Price"] = price_by_rowid[row_id][0]
-                    row["Value"] = round(price_by_rowid[row_id][0] * qty_by_rowid[row_id], 4)
-            final_rows.append(row)
-
-        # Dodaj nove vrstice (drugi loti, zamenjave)
-        final_rows.extend(extra_rows)
 
         body = {**fresh, "StockEntryRows": final_rows}
         return self._put(f"/stockentry/{entry_id}", body)
