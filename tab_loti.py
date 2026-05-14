@@ -18,7 +18,8 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
-    """Cachirana zaloga po lotih — velja 15 minut."""
+    """Cachirana zaloga po lotih z NC — velja 15 minut.
+    Vedno kliče get_stock_for_items ker /stocks endpoint nima NC (Price)."""
     from minimax_client import MinimaxClient
     from config import _secret
     cli = MinimaxClient(
@@ -28,10 +29,9 @@ def _get_stock_cached(username, org_id, wh_id):
         client_secret = _secret("MINIMAX_CLIENT_SECRET", ""),
         org_id        = int(org_id),
     )
-    stock_raw = cli.get_stock_by_lots(wh_id)
-    if not any(r.get("BatchNumber") for r in stock_raw):
-        stock_raw = cli.get_stock_for_items(wh_id, [])
-    return stock_raw
+    # get_stock_for_items bere NC iz prenosnih dokumentov
+    # get_stock_by_lots (/stocks) nima NC — zato vedno kličemo for_items
+    return cli.get_stock_for_items(wh_id, [])
 
 
 def render():
