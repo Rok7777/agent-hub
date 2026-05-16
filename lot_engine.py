@@ -35,16 +35,20 @@ _SEAFOOD_RE = re.compile(
     'som|brancin|lubin|romb|skuš|inčun|list|list|pic|mugilid',
     re.IGNORECASE
 )
-_MAQFINO_RE   = re.compile('maQfino', re.IGNORECASE)
-_TESTENINE_RE = re.compile('testenin', re.IGNORECASE)
+_MAQFINO_RE   = re.compile(r'maQfino', re.IGNORECASE)
+_TESTENINE_RE = re.compile(r'testenin', re.IGNORECASE)
+_V_OLJU_RE    = re.compile(r'v olju', re.IGNORECASE)
+_MARINIRAN_RE = re.compile(r'mariniran', re.IGNORECASE)
+_IZVLECEK_RE  = re.compile(r'izvle[cč]ek', re.IGNORECASE)
+_KAVIAR_RE    = re.compile(r'kaviar', re.IGNORECASE)
 
 def is_seafood(name: str) -> bool:
     """Vrne True če je artikel riba ali morska hrana."""
     return bool(_SEAFOOD_RE.search(name))
 
 def is_fresh_or_deli(name: str) -> bool:
-    """Vrne True če artikel zahteva 14-dnevno mejo lotov (sveže ribe)."""
-    return bool(_DELI_RE.search(name) or _FRESH_RE.search(name))
+    """Vrne True če artikel zahteva 14-dnevno mejo lotov (sveže ribe + kaviar)."""
+    return bool(_DELI_RE.search(name) or _FRESH_RE.search(name) or _KAVIAR_RE.search(name))
 
 def get_lot_warning_days(name: str) -> int:
     """
@@ -52,11 +56,17 @@ def get_lot_warning_days(name: str) -> int:
     0 = ni opozorila za to kategorijo.
     """
     if is_fresh_or_deli(name):
-        return 10
+        return 10    # sveže + kaviar
     if _FROZEN_RE.search(name):
         return 330   # 11 mesecev
     if _MAQFINO_RE.search(name):
-        return 150   # 5 mesecev
+        return 150   # 5 mesecev (maQfino)
+    if _MARINIRAN_RE.search(name):
+        return 180   # 6 mesecev
+    if _V_OLJU_RE.search(name):
+        return 365   # 1 leto
+    if _IZVLECEK_RE.search(name):
+        return 365   # 1 leto
     if _TESTENINE_RE.search(name):
         return 1095  # 3 leta
     return 0         # vse ostalo — brez opozorila
