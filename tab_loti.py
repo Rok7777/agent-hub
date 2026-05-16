@@ -172,10 +172,17 @@ def render():
             wh_id    = get_wh_id(loc_key)
             an_id    = get_an_id(loc_key)
 
-            col1, col2 = st.columns([2, 1])
+            col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
                 st.subheader(loc_name)
             with col2:
+                if st.button("🗑️ Počisti cache", key=f"clear_cache_{loc_key}", use_container_width=True):
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("stock_cache_") or k == "item_units_cache":
+                            del st.session_state[k]
+                    st.cache_data.clear()
+                    st.success("Cache počiščen!")
+            with col3:
                 find_btn = st.button("🔍 Poišči osnutke", key=f"find_{loc_key}", use_container_width=True)
 
             if find_btn:
