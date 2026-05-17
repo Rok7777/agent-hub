@@ -375,36 +375,11 @@ class MinimaxClient:
 
     def get_stock_for_items(self, warehouse_id: int, item_ids: list[int]) -> list[dict]:
         """
-        Dvostopenjski pristop:
-        1. /stocks = točna dejanska zaloga (ground truth)
-        2. P/L = samo za lote in NC naših artiklov
-        3. FIFO porazdelitev /stocks zaloge na P/L lote
+        Izgradi lot zalogo iz prenosnih dokumentov (IL/IS) za dano skladišče.
+        batch_item_map zagotavlja pravilno odštevanje pri smart match.
         """
         from collections import defaultdict
         from datetime import datetime, timedelta
-
-        # Korak 1: Dejanska zaloga iz /stocks
-        actual_qty  = defaultdict(float)
-        actual_info = {}
-        for row in self.get_stock_by_lots(warehouse_id):
-            aid = (row.get("Item") or {}).get("ID")
-            qty = float(row.get("Quantity") or 0)
-            if aid and qty > 0:
-                actual_qty[aid] += qty
-                if aid not in actual_info:
-                    actual_info[aid] = {
-                        "ItemName":          row.get("ItemName", ""),
-                        "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
-                    }
-
-        # Filtriramo samo artikle ki so v dokumentu
-        if item_ids:
-            actual_qty = {k: v for k, v in actual_qty.items() if k in item_ids}
-
-        # Korak 2: P/L prenosi — samo za naše artikle
-        item_ids_set = set(item_ids) if item_ids else set(actual_qty.keys())
-        lot_list  = defaultdict(list)
-        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
 
         numeric_wh_id = warehouse_id
         try:
@@ -417,73 +392,87 @@ class MinimaxClient:
         except Exception:
             pass
 
-        page = 1
-        while True:
-            try:
-                data = self._get("/stockentry", params={
-                    "StockEntryType": "P", "StockEntrySubtype": "L",
-                    "Status": "P", "DateFrom": date_from,
-                    "CurrentPage": page, "PageSize": 50,
-                })
-                rows = data.get("Rows", [])
-                for entry in rows:
-                    eid = entry.get("StockEntryId")
-                    if not eid: continue
-                    try:
-                        detail = self.get_entry_detail(eid)
-                        for row in (detail.get("StockEntryRows") or []):
-                            wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                            if str(wh_to) != str(numeric_wh_id): continue
-                            item_id = (row.get("Item") or {}).get("ID")
-                            if item_id not in item_ids_set: continue
-                            batch = row.get("BatchNumber", "") or ""
-                            qty   = float(row.get("Quantity") or 0)
-                            price = float(row.get("Price") or 0)
-                            if batch and qty > 0:
-                                lot_list[item_id].append({
-                                    "code": batch, "qty": qty, "price": price,
-                                })
-                                if item_id not in actual_info:
-                                    actual_info[item_id] = {
-                                        "ItemName":          row.get("ItemName") or "",
-                                        "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
-                                    }
-                    except Exception:
-                        continue
-                total   = data.get("TotalRows", 0)
-                fetched = (page - 1) * 50 + len(rows)
-                if fetched >= total: break
-                page += 1
-            except Exception:
-                break
+        item_info = {}
+        try:
+            base = self.get_stock_by_lots(warehouse_id)
+            for r in base:
+                aid = (r.get("Item") or {}).get("ID")
+                if aid:
+                    item_info[aid] = {
+                        "ItemName":          r.get("ItemName", ""),
+                        "UnitOfMeasurement": r.get("UnitOfMeasurement", "kg"),
+                    }
+        except Exception:
+            pass
 
-        # Korak 3: FIFO porazdelitev /stocks zaloge na P/L lote
-        from lot_engine import parse_lot_date
+        lot_qty        = defaultdict(lambda: defaultdict(float))
+        lot_price      = defaultdict(lambda: defaultdict(float))
+        batch_item_map = {}  # {batch_code: item_id iz P/L}
+        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+
+        for entry_type, subtype, sign in [("P", "L", 1.0), ("I", "S", -1.0)]:
+            page = 1
+            while True:
+                try:
+                    data = self._get("/stockentry", params={
+                        "StockEntryType":    entry_type,
+                        "StockEntrySubtype": subtype,
+                        "Status":            "P",
+                        "DateFrom":          date_from,
+                        "CurrentPage":       page,
+                        "PageSize":          50,
+                    })
+                    rows = data.get("Rows", [])
+                    for entry in rows:
+                        eid = entry.get("StockEntryId")
+                        if not eid: continue
+                        try:
+                            detail = self.get_entry_detail(eid)
+                            for row in (detail.get("StockEntryRows") or []):
+                                wh_from = (row.get("WarehouseFrom") or {}).get("ID")
+                                wh_to   = (row.get("WarehouseTo") or {}).get("ID")
+                                if entry_type == "P" and str(wh_to) != str(numeric_wh_id): continue
+                                if entry_type == "I" and str(wh_from) != str(numeric_wh_id): continue
+                                item_id = (row.get("Item") or {}).get("ID")
+                                batch   = row.get("BatchNumber", "") or ""
+                                qty     = float(row.get("Quantity") or 0)
+                                price   = float(row.get("Price") or 0)
+                                if item_id and batch and qty > 0:
+                                    if entry_type == "P":
+                                        lot_qty[item_id][batch] += qty
+                                        if batch not in batch_item_map:
+                                            batch_item_map[batch] = item_id
+                                        if price > 0:
+                                            lot_price[item_id][batch] = price
+                                    else:
+                                        real_item = batch_item_map.get(batch, item_id)
+                                        lot_qty[real_item][batch] -= qty
+                                    if item_id not in item_info:
+                                        item_info[item_id] = {
+                                            "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
+                                            "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
+                                        }
+                        except Exception: continue
+                    total   = data.get("TotalRows", 0)
+                    fetched = (page - 1) * 50 + len(rows)
+                    if fetched >= total: break
+                    page += 1
+                except Exception: break
+
         result = []
-        for item_id, total_qty in actual_qty.items():
-            lots = lot_list.get(item_id, [])
-            lots_sorted = sorted(
-                lots,
-                key=lambda x: parse_lot_date(x["code"]) or datetime(2099, 1, 1)
-            )
-            remaining    = total_qty
-            info         = actual_info.get(item_id, {})
-            seen_batches = set()
-            for lot in lots_sorted:
-                if remaining <= 0: break
-                if lot["code"] in seen_batches: continue
-                seen_batches.add(lot["code"])
-                use = round(min(lot["qty"], remaining), 4)
-                result.append({
-                    "Item":              {"ID": item_id},
-                    "ItemName":          info.get("ItemName", ""),
-                    "ItemCode":          "",
-                    "BatchNumber":       lot["code"],
-                    "Quantity":          use,
-                    "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
-                    "Price":             lot["price"],
-                })
-                remaining = round(remaining - use, 4)
+        for item_id, batches in lot_qty.items():
+            info = item_info.get(item_id, {})
+            for batch, qty in batches.items():
+                if qty > 0.001:
+                    result.append({
+                        "Item":              {"ID": item_id},
+                        "ItemName":          info.get("ItemName", ""),
+                        "ItemCode":          "",
+                        "BatchNumber":       batch,
+                        "Quantity":          round(qty, 4),
+                        "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
+                        "Price":             lot_price.get(item_id, {}).get(batch, 0),
+                    })
         return result
 
     def diagnose_lots(self, warehouse_id: int) -> dict:
