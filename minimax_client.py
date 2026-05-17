@@ -403,8 +403,8 @@ class MinimaxClient:
 
         lot_qty        = defaultdict(lambda: defaultdict(float))
         lot_price      = defaultdict(lambda: defaultdict(float))
-        batch_item_map = {}  # {batch: item_id} — kateri artikel je ta lot
-        date_from = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%dT00:00:00")
+        batch_item_map = {}  # {batch_code: item_id iz P/L}
+        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
 
         for entry_type, subtype, sign in [("P", "L", 1.0), ("I", "S", -1.0)]:
             page = 1
@@ -441,7 +441,7 @@ class MinimaxClient:
                                         if price > 0:
                                             lot_price[item_id][batch] = price
                                     else:
-                                        # IS: odštej od pravega artikla (iz prejemnega dokumenta)
+                                        # Odštej od pravega artikla (iz P/L, ne IS)
                                         real_item = batch_item_map.get(batch, item_id)
                                         lot_qty[real_item][batch] -= qty
                                     if item_id not in item_info:
@@ -474,7 +474,7 @@ class MinimaxClient:
 
     def diagnose_lots(self, warehouse_id: int) -> dict:
         from datetime import datetime, timedelta
-        date_from = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%dT00:00:00")
+        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
         found = []
         for etype in ["P", "I"]:
             for subtype in ["S", "L", "P", "R"]:
