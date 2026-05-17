@@ -375,10 +375,10 @@ class MinimaxClient:
 
     def get_stock_for_items(self, warehouse_id: int, item_ids: list[int]) -> list[dict]:
         """
-        Izgradi lot zalogo z dvostopenjskim pristopom:
+        Dvostopenjski pristop:
         1. /stocks = točna dejanska zaloga (ground truth)
-        2. P/L = samo za lote in NC
-        3. FIFO porazdelitev zaloge iz /stocks na lote iz P/L
+        2. P/L = samo za lote in NC naših artiklov
+        3. FIFO porazdelitev /stocks zaloge na P/L lote
         """
         from collections import defaultdict
         from datetime import datetime, timedelta
@@ -386,23 +386,25 @@ class MinimaxClient:
         # Korak 1: Dejanska zaloga iz /stocks
         actual_qty  = defaultdict(float)
         actual_info = {}
-        try:
-            for row in self.get_stock_by_lots(warehouse_id):
-                aid = (row.get("Item") or {}).get("ID")
-                qty = float(row.get("Quantity") or 0)
-                if aid and qty > 0:
-                    actual_qty[aid] += qty
-                    if aid not in actual_info:
-                        actual_info[aid] = {
-                            "ItemName":          row.get("ItemName", ""),
-                            "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
-                        }
-        except Exception:
-            pass
+        for row in self.get_stock_by_lots(warehouse_id):
+            aid = (row.get("Item") or {}).get("ID")
+            qty = float(row.get("Quantity") or 0)
+            if aid and qty > 0:
+                actual_qty[aid] += qty
+                if aid not in actual_info:
+                    actual_info[aid] = {
+                        "ItemName":          row.get("ItemName", ""),
+                        "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
+                    }
 
-        # Korak 2: Loti in NC iz P/L prenosnih dokumentov
+        # Filtriramo samo artikle ki so v dokumentu
+        if item_ids:
+            actual_qty = {k: v for k, v in actual_qty.items() if k in item_ids}
+
+        # Korak 2: P/L prenosi — samo za naše artikle
+        item_ids_set = set(item_ids) if item_ids else set(actual_qty.keys())
         lot_list  = defaultdict(list)
-        date_from = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%dT00:00:00")
+        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
 
         numeric_wh_id = warehouse_id
         try:
@@ -433,14 +435,13 @@ class MinimaxClient:
                             wh_to   = (row.get("WarehouseTo") or {}).get("ID")
                             if str(wh_to) != str(numeric_wh_id): continue
                             item_id = (row.get("Item") or {}).get("ID")
-                            batch   = row.get("BatchNumber", "") or ""
-                            qty     = float(row.get("Quantity") or 0)
-                            price   = float(row.get("Price") or 0)
-                            if item_id and batch and qty > 0:
+                            if item_id not in item_ids_set: continue
+                            batch = row.get("BatchNumber", "") or ""
+                            qty   = float(row.get("Quantity") or 0)
+                            price = float(row.get("Price") or 0)
+                            if batch and qty > 0:
                                 lot_list[item_id].append({
-                                    "code":  batch,
-                                    "qty":   qty,
-                                    "price": price,
+                                    "code": batch, "qty": qty, "price": price,
                                 })
                                 if item_id not in actual_info:
                                     actual_info[item_id] = {
@@ -456,16 +457,22 @@ class MinimaxClient:
             except Exception:
                 break
 
-        # Korak 3: FIFO porazdelitev dejanske zaloge na lote
+        # Korak 3: FIFO porazdelitev /stocks zaloge na P/L lote
         from lot_engine import parse_lot_date
         result = []
         for item_id, total_qty in actual_qty.items():
             lots = lot_list.get(item_id, [])
-            lots_sorted = sorted(lots, key=lambda x: parse_lot_date(x["code"]) or datetime(2099, 1, 1))
-            remaining = total_qty
-            info = actual_info.get(item_id, {})
+            lots_sorted = sorted(
+                lots,
+                key=lambda x: parse_lot_date(x["code"]) or datetime(2099, 1, 1)
+            )
+            remaining    = total_qty
+            info         = actual_info.get(item_id, {})
+            seen_batches = set()
             for lot in lots_sorted:
                 if remaining <= 0: break
+                if lot["code"] in seen_batches: continue
+                seen_batches.add(lot["code"])
                 use = round(min(lot["qty"], remaining), 4)
                 result.append({
                     "Item":              {"ID": item_id},
