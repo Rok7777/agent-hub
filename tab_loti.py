@@ -17,9 +17,9 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
-def _get_stock_cached(username, org_id, wh_id):
-    """Cachirana zaloga po lotih z NC — velja 15 minut.
-    Vedno kliče get_stock_for_items ker /stocks endpoint nima NC (Price)."""
+def _get_stock_cached(username, org_id, wh_id, item_ids_tuple=()):
+    """Cachirana zaloga — /stocks za količine + P/L za lote in NC.
+    item_ids_tuple: samo artikli iz dokumenta (hitrejše branje)."""
     from minimax_client import MinimaxClient
     from config import _secret
     cli = MinimaxClient(
@@ -29,9 +29,7 @@ def _get_stock_cached(username, org_id, wh_id):
         client_secret = _secret("MINIMAX_CLIENT_SECRET", ""),
         org_id        = int(org_id),
     )
-    # get_stock_for_items bere NC iz prenosnih dokumentov
-    # get_stock_by_lots (/stocks) nima NC — zato vedno kličemo for_items
-    return cli.get_stock_for_items(wh_id, [])
+    return cli.get_stock_for_items(wh_id, list(item_ids_tuple))
 
 
 def render():
@@ -269,7 +267,7 @@ def render():
                         # Cachirana zaloga (15 min) — get_stock_for_items se kliče samo enkrat
                         username = st.session_state.get("username", "")
                         org_id   = st.session_state.get("org_id", "171038")
-                        stock_raw = _get_stock_cached(username, org_id, wh_id)
+                        stock_raw = _get_stock_cached(username, org_id, wh_id, tuple(sorted(all_item_ids)))
                         stock = parse_stock_to_engine_format(stock_raw)
 
                         shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
