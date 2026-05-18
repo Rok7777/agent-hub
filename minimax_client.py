@@ -405,9 +405,8 @@ class MinimaxClient:
         except Exception:
             pass
 
-        lot_qty        = defaultdict(lambda: defaultdict(float))
-        lot_price      = defaultdict(lambda: defaultdict(float))
-        batch_item_map = {}  # {batch_code: item_id iz P/L}
+        lot_qty   = defaultdict(lambda: defaultdict(float))
+        lot_price = defaultdict(lambda: defaultdict(float))
         date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
 
         for entry_type, subtype, sign in [("P", "L", 1.0), ("I", "S", -1.0)]:
@@ -438,15 +437,9 @@ class MinimaxClient:
                                 qty     = float(row.get("Quantity") or 0)
                                 price   = float(row.get("Price") or 0)
                                 if item_id and batch and qty > 0:
-                                    if entry_type == "P":
-                                        lot_qty[item_id][batch] += qty
-                                        if batch not in batch_item_map:
-                                            batch_item_map[batch] = item_id
-                                        if price > 0:
-                                            lot_price[item_id][batch] = price
-                                    else:
-                                        real_item = batch_item_map.get(batch, item_id)
-                                        lot_qty[real_item][batch] -= qty
+                                    lot_qty[item_id][batch] += sign * qty
+                                    if entry_type == "P" and price > 0:
+                                        lot_price[item_id][batch] = price
                                     if item_id not in item_info:
                                         item_info[item_id] = {
                                             "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
