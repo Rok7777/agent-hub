@@ -374,10 +374,6 @@ class MinimaxClient:
         return result
 
     def get_stock_for_items(self, warehouse_id: int, item_ids: list[int]) -> list[dict]:
-        """
-        P/L minus IS za lote + /stocks kot korekcija skupnega totala.
-        Per-lot razmerja iz P/L-IS, skupna količina iz /stocks (ground truth).
-        """
         from collections import defaultdict
         from datetime import datetime, timedelta
 
@@ -394,9 +390,10 @@ class MinimaxClient:
 
         item_info = {}
         try:
-            for r in self.get_stock_by_lots(warehouse_id):
+            base = self.get_stock_by_lots(warehouse_id)
+            for r in base:
                 aid = (r.get("Item") or {}).get("ID")
-                if aid and aid not in item_info:
+                if aid:
                     item_info[aid] = {
                         "ItemName":          r.get("ItemName", ""),
                         "UnitOfMeasurement": r.get("UnitOfMeasurement", "kg"),
@@ -429,7 +426,7 @@ class MinimaxClient:
                             for row in (detail.get("StockEntryRows") or []):
                                 wh_from = (row.get("WarehouseFrom") or {}).get("ID")
                                 wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                                if entry_type == "P" and str(wh_to)   != str(numeric_wh_id): continue
+                                if entry_type == "P" and str(wh_to) != str(numeric_wh_id): continue
                                 if entry_type == "I" and str(wh_from) != str(numeric_wh_id): continue
                                 item_id = (row.get("Item") or {}).get("ID")
                                 batch   = row.get("BatchNumber", "") or ""
@@ -437,7 +434,7 @@ class MinimaxClient:
                                 price   = float(row.get("Price") or 0)
                                 if item_id and batch and qty > 0:
                                     lot_qty[item_id][batch] += sign * qty
-                                    if entry_type == "P" and price > 0:
+                                    if price > 0:
                                         lot_price[item_id][batch] = price
                                     if item_id not in item_info:
                                         item_info[item_id] = {
@@ -451,33 +448,17 @@ class MinimaxClient:
                     page += 1
                 except Exception: break
 
-        # Korekcija z /stocks — ground truth za skupni total
-        actual_qty = defaultdict(float)
-        try:
-            for row in self.get_stock_by_lots(warehouse_id):
-                aid = (row.get("Item") or {}).get("ID")
-                qty = float(row.get("Quantity") or 0)
-                if aid and qty > 0:
-                    actual_qty[aid] += qty
-        except Exception:
-            pass
-
-        # Skaliraj lote sorazmerno na /stocks total
         result = []
         for item_id, batches in lot_qty.items():
-            info        = item_info.get(item_id, {})
-            pl_is_total = sum(q for q in batches.values() if q > 0.001)
-            actual      = actual_qty.get(item_id, 0)
-            factor      = (actual / pl_is_total) if pl_is_total > 0 and actual > 0 else 1.0
+            info = item_info.get(item_id, {})
             for batch, qty in batches.items():
-                scaled = round(qty * factor, 4)
-                if scaled > 0.001:
+                if qty > 0.001:
                     result.append({
                         "Item":              {"ID": item_id},
                         "ItemName":          info.get("ItemName", ""),
                         "ItemCode":          "",
                         "BatchNumber":       batch,
-                        "Quantity":          scaled,
+                        "Quantity":          round(qty, 4),
                         "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
                         "Price":             lot_price.get(item_id, {}).get(batch, 0),
                     })
@@ -580,10 +561,8 @@ class MinimaxClient:
                     price_by_rowid[rid] = (lp, round(lp * r["quantity_assigned"], 4))
             else:
                 # Pametna zamenjava ali drugi lot — nova vrstica
-                if orig_art != result_art and rid not in lot_by_rowid:
-                    # Samo če original nima lota → zamenjava nadomesti original
+                if orig_art != result_art:
                     replaced_row_ids.add(rid)
-                # Sicer original ostane (delni lot) + zamenjava se doda kot nova vrstica
                 row = {
                     "Item":          {"ID": result_art},
                     "Quantity":      r["quantity_assigned"],
