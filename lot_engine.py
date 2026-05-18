@@ -460,11 +460,11 @@ def assign_lots(
                 if use_sale > 0:
                     assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
                     remaining = round(remaining - use_sale, 4)
-                # Odpis preostanka (ločena vrstica, oznaka _writeoff)
+                # Odpis preostanka — vedno (lot je zastarel)
                 writeoff = round(avail - use_sale, 4)
                 if writeoff > 0:
                     assignments.append((lot['code'], writeoff, days_old, True, lot.get('lot_price', 0)))
-                # Cel aged lot porabljen iz virtualne zaloge
+                # Počisti iz virtualne zaloge
                 for vl in virtual[stock_key]:
                     if vl['code'] == lot['code']:
                         vl['quantity'] = 0.0
@@ -655,9 +655,11 @@ def assign_lots_with_virtual(
                 if use_sale > 0:
                     assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
                     remaining = round(remaining - use_sale, 4)
+                # Odpis preostanka — vedno (lot je zastarel)
                 writeoff = round(avail - use_sale, 4)
                 if writeoff > 0:
                     assignments.append((lot['code'], writeoff, days_old, True, lot.get('lot_price', 0)))
+                # Počisti iz virtualne zaloge
                 for vl in virtual[stock_key]:
                     if vl['code'] == lot['code']:
                         vl['quantity'] = 0.0
