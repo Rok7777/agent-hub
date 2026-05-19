@@ -19,10 +19,15 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    Hybrid: /stocks za tocne kolicine (ground truth) + P/L za cene (NC).
-    /stocks = Minimax realna zaloga, native precision, vsi loti ne glede na starost.
-    P/L (365 dni) = cene lotov (NC). Pokriva tudi zamrznjene artikle.
-    Fallback: ce /stocks ne vraca BatchNumber -> stara metoda get_stock_for_items.
+    Popravljena metoda: batch->artikel mapiranje odpravlja korenski vzrok buga.
+
+    Problem: ko smart match dodeli lot artikla A dokumentu artikla B,
+    IS zapiše Item=B, BatchNumber=lot_A. Stara metoda je odštevala od B (napaka).
+
+    Rešitev:
+    - P/L (365 dni): zgradimo lot_qty IN batch_to_article {batch: original_article_id}
+    - IS (60 dni):   odštevamo od batch_to_article[batch], NE od Item na IS dokumentu
+    - Zamrznjeni artikli so pokriti z daljšim P/L oknom (365 dni).
     """
     from minimax_client import MinimaxClient
     from config import _secret
@@ -37,49 +42,21 @@ def _get_stock_cached(username, org_id, wh_id):
         org_id        = int(org_id),
     )
 
-    # Korak 1: /stocks -> realne kolicine po lotih (ground truth)
-    stocks_raw = cli.get_stock_by_lots(wh_id)
-    has_lots   = any(r.get("BatchNumber") for r in stocks_raw)
+    lot_qty          = defaultdict(lambda: defaultdict(float))  # {article_id: {batch: qty}}
+    lot_price        = defaultdict(lambda: defaultdict(float))  # {article_id: {batch: price}}
+    batch_to_article = {}   # {batch_code: article_id} — iz P/L dokumentov
+    item_info        = {}   # {article_id: {ItemName, ItemCode, UnitOfMeasurement}}
 
-    if not has_lots:
-        return cli.get_stock_for_items(wh_id, [])
-
-    lot_qty   = defaultdict(dict)
-    item_info = {}
-
-    for row in stocks_raw:
-        item_id = (row.get("Item") or {}).get("ID")
-        batch   = row.get("BatchNumber", "") or ""
-        qty     = float(row.get("Quantity") or 0)
-        if not item_id or not batch or qty <= 0.001:
-            continue
-        lot_qty[item_id][batch] = qty
-        if item_id not in item_info:
-            item_info[item_id] = {
-                "ItemName":          row.get("ItemName", "") or "",
-                "ItemCode":          row.get("ItemCode", "") or "",
-                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
-            }
-
-    if not lot_qty:
-        return []
-
-    # Korak 2: P/L -> cene (NC) za lote ki so v zalogi, okno 365 dni
-    needed_lots  = {(item_id, batch) for item_id, batches in lot_qty.items() for batch in batches}
-    lot_price    = defaultdict(dict)
-    found_prices = set()
-    date_from    = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
-
+    # ── Korak 1: P/L — 365 dni (pokrijemo zamrznjene artikle) ────────────────
+    date_from_pl = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
     page = 1
     while True:
-        if found_prices >= needed_lots:
-            break
         try:
             data = cli._get("/stockentry", params={
                 "StockEntryType":    "P",
                 "StockEntrySubtype": "L",
                 "Status":            "P",
-                "DateFrom":          date_from,
+                "DateFrom":          date_from_pl,
                 "CurrentPage":       page,
                 "PageSize":          50,
             })
@@ -98,15 +75,18 @@ def _get_stock_cached(username, org_id, wh_id):
                             continue
                         item_id = (row.get("Item") or {}).get("ID")
                         batch   = row.get("BatchNumber", "") or ""
+                        qty     = float(row.get("Quantity") or 0)
                         price   = float(row.get("Price") or 0)
-                        if not item_id or not batch:
+                        if not item_id or not batch or qty <= 0:
                             continue
+                        lot_qty[item_id][batch] += qty
+                        # Batch -> original artikel mapiranje (ključ za IS popravek)
+                        batch_to_article[batch] = item_id
                         if price > 0:
                             lot_price[item_id][batch] = price
-                            found_prices.add((item_id, batch))
-                        if item_id not in item_info or not item_info[item_id].get("ItemCode"):
+                        if item_id not in item_info:
                             item_info[item_id] = {
-                                "ItemName":          (row.get("ItemName") or (row.get("Item") or {}).get("Name", "")),
+                                "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
                                 "ItemCode":          row.get("ItemCode", "") or "",
                                 "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
                             }
@@ -120,21 +100,68 @@ def _get_stock_cached(username, org_id, wh_id):
         except Exception:
             break
 
-    # Korak 3: Merge -> format za parse_stock_to_engine_format
+    # ── Korak 2: IS — 60 dni, odštevamo od ORIGINALNEGA artikla (batch mapa) ─
+    date_from_is = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+    page = 1
+    while True:
+        try:
+            data = cli._get("/stockentry", params={
+                "StockEntryType":    "I",
+                "StockEntrySubtype": "S",
+                "Status":            "P",
+                "DateFrom":          date_from_is,
+                "CurrentPage":       page,
+                "PageSize":          50,
+            })
+            rows = data.get("Rows", [])
+            if not rows:
+                break
+            for entry in rows:
+                eid = entry.get("StockEntryId")
+                if not eid:
+                    continue
+                try:
+                    detail = cli.get_entry_detail(eid)
+                    for row in (detail.get("StockEntryRows") or []):
+                        wh_from = (row.get("WarehouseFrom") or {}).get("ID")
+                        if str(wh_from) != str(wh_id):
+                            continue
+                        item_id_on_is = (row.get("Item") or {}).get("ID")
+                        batch         = row.get("BatchNumber", "") or ""
+                        qty           = float(row.get("Quantity") or 0)
+                        if not batch or qty <= 0:
+                            continue
+                        # POPRAVEK: odštej od originalnega artikla (ne od IS artikla)
+                        original_article = batch_to_article.get(batch, item_id_on_is)
+                        lot_qty[original_article][batch] -= qty
+                except Exception:
+                    continue
+            total   = data.get("TotalRows", 0)
+            fetched = (page - 1) * 50 + len(rows)
+            if fetched >= total:
+                break
+            page += 1
+        except Exception:
+            break
+
+    # ── Korak 3: Sestavi rezultat ─────────────────────────────────────────────
     result = []
     for item_id, batches in lot_qty.items():
         info = item_info.get(item_id, {})
         for batch, qty in batches.items():
-            result.append({
-                "Item":              {"ID": item_id},
-                "ItemName":          info.get("ItemName", ""),
-                "ItemCode":          info.get("ItemCode", "") or "",
-                "BatchNumber":       batch,
-                "Quantity":          qty,
-                "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
-                "Price":             lot_price.get(item_id, {}).get(batch, 0),
-            })
+            if qty > 0.001:
+                result.append({
+                    "Item":              {"ID": item_id},
+                    "ItemName":          info.get("ItemName", ""),
+                    "ItemCode":          info.get("ItemCode", "") or "",
+                    "BatchNumber":       batch,
+                    "Quantity":          round(qty, 3),
+                    "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
+                    "Price":             lot_price.get(item_id, {}).get(batch, 0),
+                })
     return result
+
+
 
 def render():
     st.caption("Avtomatska FIFO dodelitev serij za maloprodajne dokumente v Minimaxu")
@@ -273,11 +300,22 @@ def render():
             wh_id    = get_wh_id(loc_key)
             an_id    = get_an_id(loc_key)
 
-            col1, col2 = st.columns([2, 1])
+            col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
                 st.subheader(loc_name)
             with col2:
                 find_btn = st.button("🔍 Poišči osnutke", key=f"find_{loc_key}", use_container_width=True)
+            with col3:
+                if st.button("🗑️ Počisti cache", key=f"clear_{loc_key}", use_container_width=True):
+                    try:
+                        _get_stock_cached.clear()
+                    except Exception:
+                        pass
+                    for k in list(st.session_state.keys()):
+                        if k.startswith("stock_cache_") or k == "item_units_cache":
+                            del st.session_state[k]
+                    st.session_state.pop(f"multi_result_{loc_key}", None)
+                    st.rerun()
 
             if find_btn:
                 if not check_config(): st.stop()
