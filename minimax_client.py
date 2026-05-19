@@ -36,7 +36,7 @@ class MinimaxClient:
         self.org_id        = org_id
         self._token          = None
         self._token_expiry   = datetime.min
-        self._analytics_map  = None  # cache: {analytic_id: code}
+        self._analytics_map  = None
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -561,7 +561,8 @@ class MinimaxClient:
                     price_by_rowid[rid] = (lp, round(lp * r["quantity_assigned"], 4))
             else:
                 # Pametna zamenjava ali drugi lot — nova vrstica
-                if orig_art != result_art:
+                # Popravek: ne preskoči originala če je že obdelan (delni lot + zamenjava)
+                if orig_art != result_art and rid not in lot_by_rowid:
                     replaced_row_ids.add(rid)
                 row = {
                     "Item":          {"ID": result_art},
