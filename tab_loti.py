@@ -5,8 +5,7 @@ Ureja: chat "Zapiranje LOT"
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-from collections import defaultdict
+from datetime import datetime
 import traceback
 
 from minimax_client import (
@@ -19,19 +18,10 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
-    """
-    Hybrid pristop: /stocks za točne količine (ground truth) + P/L za cene (NC).
-
-    Zakaj hybrid:
-    - /stocks = Minimax-ova lastna evidenca zaloge. Točne količine, native precision
-      (2-3 dec.), pravilno ne glede na smart match cross-artikel dodelitve.
-    - P/L (365 dni) = edini vir za nabavne cene (NC) po lotih.
-      Daljše okno pokriva tudi zamrznjene artikle (do 11 mesecev starost).
-
-    Fallback: če /stocks ne vrača BatchNumber → stara metoda (get_stock_for_items).
-    """
+    """Cachirana zaloga po lotih z NC — velja 15 minut.
+    Vedno kliče get_stock_for_items ker /stocks endpoint nima NC (Price)."""
+    from minimax_client import MinimaxClient
     from config import _secret
-
     cli = MinimaxClient(
         username      = username,
         password      = _secret("MINIMAX_PASSWORD", ""),
@@ -39,121 +29,9 @@ def _get_stock_cached(username, org_id, wh_id):
         client_secret = _secret("MINIMAX_CLIENT_SECRET", ""),
         org_id        = int(org_id),
     )
-
-    # ── Korak 1: /stocks → realne količine po lotih (ground truth) ───────────
-    stocks_raw = cli.get_stock_by_lots(wh_id)
-
-    has_lots = any(r.get("BatchNumber") for r in stocks_raw)
-
-    if not has_lots:
-        # Fallback: /stocks ne vrača lotov za to skladišče → stara metoda
-        return cli.get_stock_for_items(wh_id, [])
-
-    lot_qty   = defaultdict(dict)  # {item_id: {batch: qty}}
-    item_info = {}                 # {item_id: {ItemName, ItemCode, UnitOfMeasurement}}
-
-    for row in stocks_raw:
-        item_id = (row.get("Item") or {}).get("ID")
-        batch   = row.get("BatchNumber", "") or ""
-        qty     = float(row.get("Quantity") or 0)
-        if not item_id or not batch or qty <= 0.001:
-            continue
-        # Native Minimax precision — ne zaokrožujemo
-        lot_qty[item_id][batch] = qty
-        if item_id not in item_info:
-            item_info[item_id] = {
-                "ItemName":          row.get("ItemName", "") or "",
-                "ItemCode":          row.get("ItemCode", "") or "",
-                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
-            }
-
-    if not lot_qty:
-        return []
-
-    # ── Korak 2: P/L dokumenti → cene (NC) samo za lote ki so v zalogi ──────
-    # Iščemo cene samo za (item_id, batch) kombinacije ki jih /stocks vrača.
-    # Zgodnja prekinitev ko imamo cene za vse → minimalno število API klicev.
-    needed_lots  = {
-        (item_id, batch)
-        for item_id, batches in lot_qty.items()
-        for batch in batches
-    }
-    lot_price    = defaultdict(dict)  # {item_id: {batch: price}}
-    found_prices = set()              # {(item_id, batch)} za katere smo že našli ceno
-
-    # 365 dni: pokrijemo zamrznjene artikle (meja 330 dni)
-    date_from = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
-
-    page = 1
-    while True:
-        # Zgodnja prekinitev: vse cene najdene
-        if found_prices >= needed_lots:
-            break
-        try:
-            data = cli._get("/stockentry", params={
-                "StockEntryType":    "P",
-                "StockEntrySubtype": "L",
-                "Status":            "P",
-                "DateFrom":          date_from,
-                "CurrentPage":       page,
-                "PageSize":          50,
-            })
-            rows = data.get("Rows", [])
-            if not rows:
-                break
-            for entry in rows:
-                eid = entry.get("StockEntryId")
-                if not eid:
-                    continue
-                try:
-                    detail = cli.get_entry_detail(eid)
-                    for row in (detail.get("StockEntryRows") or []):
-                        wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                        if str(wh_to) != str(wh_id):
-                            continue
-                        item_id = (row.get("Item") or {}).get("ID")
-                        batch   = row.get("BatchNumber", "") or ""
-                        price   = float(row.get("Price") or 0)
-                        if not item_id or not batch:
-                            continue
-                        if price > 0:
-                            lot_price[item_id][batch] = price
-                            found_prices.add((item_id, batch))
-                        # Dopolni item_info iz P/L če manjka (ItemCode, ItemName)
-                        if item_id in item_info and not item_info[item_id].get("ItemCode"):
-                            item_info[item_id]["ItemCode"] = row.get("ItemCode", "") or ""
-                        if item_id not in item_info:
-                            item_info[item_id] = {
-                                "ItemName":          (row.get("ItemName") or
-                                                      (row.get("Item") or {}).get("Name", "")),
-                                "ItemCode":          row.get("ItemCode", "") or "",
-                                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
-                            }
-                except Exception:
-                    continue
-            total   = data.get("TotalRows", 0)
-            fetched = (page - 1) * 50 + len(rows)
-            if fetched >= total:
-                break
-            page += 1
-        except Exception:
-            break
-
-    # ── Korak 3: Merge → format ki ga pričakuje parse_stock_to_engine_format ─
-    result = []
-    for item_id, batches in lot_qty.items():
-        info = item_info.get(item_id, {})
-        for batch, qty in batches.items():
-            result.append({
-                "Item":              {"ID": item_id},
-                "ItemName":          info.get("ItemName", ""),
-                "ItemCode":          info.get("ItemCode", "") or "",
-                "BatchNumber":       batch,
-                "Quantity":          qty,   # Native Minimax precision (2-3 dec.)
-                "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
-                "Price":             lot_price.get(item_id, {}).get(batch, 0),
-            })
-    return result
+    # get_stock_for_items bere NC iz prenosnih dokumentov
+    # get_stock_by_lots (/stocks) nima NC — zato vedno kličemo for_items
+    return cli.get_stock_for_items(wh_id, [])
 
 
 def render():
@@ -208,10 +86,6 @@ def render():
             for k in list(st.session_state.keys()):
                 if k.startswith("stock_cache_") or k == "item_units_cache":
                     del st.session_state[k]
-            try:
-                _get_stock_cached.clear()
-            except Exception:
-                pass
             st.sidebar.success("Cache počiščen!")
 
     # ── Sidebar akcije ────────────────────────────────────────────────────────
@@ -259,6 +133,7 @@ def render():
                     for s in sample:
                         st.sidebar.write(f"  {s.get('ItemName','')} | lot={s.get('BatchNumber')} | qty={s.get('Quantity')}")
                     if not items:
+                        # Show raw P/L docs
                         try:
                             from datetime import timedelta
                             date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
@@ -271,11 +146,6 @@ def render():
                                 st.sidebar.write(f"Prva vrstica: wh_from={((r0.get('WarehouseFrom') or {}).get('ID'))}, wh_to={((r0.get('WarehouseTo') or {}).get('ID'))}")
                         except Exception as ex:
                             st.sidebar.error(f"P/L debug napaka: {ex}")
-                else:
-                    # Prikaži vzorec lotov
-                    sample = [r for r in raw if r.get("BatchNumber")][:5]
-                    for s in sample:
-                        st.sidebar.write(f"  {s.get('ItemName','')} | lot={s.get('BatchNumber')} | qty={s.get('Quantity')} | price={s.get('Price',0)}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
@@ -359,6 +229,7 @@ def render():
                     st.stop()
                 with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ⏳"):
                     try:
+                        # Cache client v session (izognemo se novemu token requestu)
                         if "cached_client" not in st.session_state:
                             st.session_state["cached_client"] = get_client()
                         cli = st.session_state["cached_client"]
@@ -376,6 +247,7 @@ def render():
                             for l in dl:
                                 if l.get("article_id"): all_item_ids.add(l["article_id"])
 
+                        # Cache item_units v session da ne kličemo API vsakič
                         if "item_units_cache" not in st.session_state:
                             st.session_state["item_units_cache"] = {}
                         missing = [i for i in all_item_ids if i not in st.session_state["item_units_cache"]]
@@ -386,17 +258,19 @@ def render():
                         for eid in sorted_ids:
                             all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
-                        username  = st.session_state.get("username", "")
-                        org_id    = st.session_state.get("org_id", "171038")
+                        # Razreši numerični warehouse ID (koda "MP-K2" → numerični 27421)
+                        # Cachirana zaloga (15 min) — get_stock_for_items se kliče samo enkrat
+                        username = st.session_state.get("username", "")
+                        org_id   = st.session_state.get("org_id", "171038")
                         stock_raw = _get_stock_cached(username, org_id, wh_id)
-                        stock     = parse_stock_to_engine_format(stock_raw)
+                        stock = parse_stock_to_engine_format(stock_raw)
 
-                        shared_virtual = {
-                            key: [lot.copy() for lot in data["lots"]]
-                            for key, data in stock.items()
-                        }
-                        all_results   = {}
-                        article_dates = {}
+                        shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
+                        all_results    = {}
+
+                        # Za vsak artikel shrani datum ZADNJEGA dokumenta kjer se pojavi
+                        # article_dates: {article_id: datetime}
+                        article_dates   = {}
                         doc_article_ids = set()
 
                         for eid in sorted_ids:
@@ -415,6 +289,7 @@ def render():
                                 aid = l.get("article_id")
                                 if aid:
                                     doc_article_ids.add(aid)
+                                    # Posodobi na najnovejši datum za ta artikel
                                     if aid not in article_dates or doc_date > article_dates[aid]:
                                         article_dates[aid] = doc_date
 
@@ -425,11 +300,9 @@ def render():
                         )
 
                         st.session_state[f"multi_result_{loc_key}"] = {
-                            "sorted_ids":      sorted_ids,
-                            "all_results":     all_results,
-                            "all_entry_data":  all_entry_data,
-                            "old_lot_warnings": old_lot_warnings,
-                            "drafts":          drafts,
+                            "sorted_ids": sorted_ids, "all_results": all_results,
+                            "all_entry_data": all_entry_data,
+                            "old_lot_warnings": old_lot_warnings, "drafts": drafts,
                         }
                     except Exception as e:
                         st.error(f"Napaka pri obdelavi: {e}")
@@ -457,23 +330,24 @@ def render():
                 c3.metric("⚠️ Delno pokrito",     total_partial)
                 c4.metric("❌ Brez lota",          total_none)
 
+                # Pripravi Excel za vse dodeljene lote
                 all_lots_rows = []
                 for eid in sorted_ids:
-                    lines    = all_results[eid]
-                    d        = drafts_map.get(eid, {})
+                    lines = all_results[eid]
+                    d     = drafts_map.get(eid, {})
                     doc_num  = f"IS-{d.get('Number','?')}"
                     doc_date = str(d.get('Date',''))[:10]
                     for l in lines:
                         all_lots_rows.append({
-                            "Analitika": loc_key,
-                            "Dokument":  doc_num,
-                            "Datum":     doc_date,
-                            "Artikel":   l["article_name"],
-                            "Kol.":      l["quantity_assigned"],
-                            "ME":        l.get("unit",""),
-                            "Lot":       l.get("lot") or "—",
-                            "Status":    l["status"],
-                            "Opis":      l.get("opis") or "",
+                            "Analitika":  loc_key,
+                            "Dokument":   doc_num,
+                            "Datum":      doc_date,
+                            "Artikel":    l["article_name"],
+                            "Kol.":       l["quantity_assigned"],
+                            "ME":         l.get("unit",""),
+                            "Lot":        l.get("lot") or "—",
+                            "Status":     l["status"],
+                            "Opis":       l.get("opis") or "",
                         })
 
                 if all_lots_rows:
@@ -502,6 +376,7 @@ def render():
                         } for l in lines])
                         st.dataframe(df_r, use_container_width=True, hide_index=True)
 
+                # Poročilo napak
                 error_rows = []
                 for eid in sorted_ids:
                     lines_e  = all_results[eid]
@@ -586,16 +461,19 @@ def render():
                                     saved += 1
                                     st.write(f"✅ {doc_label} shranjen")
                                 except Exception as e:
+                                    import traceback
                                     errors.append(f"{doc_label}: {e}")
                                     st.error(f"Napaka {doc_label}: {e}")
                                     st.code(traceback.format_exc())
                         except Exception as e:
+                            import traceback
                             st.error(f"Napaka pri povezavi: {e}")
                             st.code(traceback.format_exc())
                         if saved > 0:
                             st.success(f"✅ {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
                         for err in errors:
                             st.error(err)
+                        # Rerun samo če ni napak
                         if saved > 0 and not errors:
                             del st.session_state[f"multi_result_{loc_key}"]
                             st.session_state.pop(f"drafts_{loc_key}", None)
