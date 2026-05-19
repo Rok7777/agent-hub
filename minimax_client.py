@@ -1,3 +1,4 @@
+"""
 Minimax API odjemalec.
 Dokumentacija: https://moj.minimax.si/SI/API
 """
