@@ -1,12 +1,11 @@
 """
-Tab: Loti — dodelitev serij
+Tab: Loti ? dodelitev serij
 Ureja: chat "Zapiranje LOT"
 """
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-from collections import defaultdict
+from datetime import datetime
 import traceback
 
 from minimax_client import (
@@ -20,17 +19,16 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    Hybrid pristop: /stocks za točne količine (ground truth) + P/L za cene (NC).
+    Hybrid: /stocks za to?ne koli?ine (ground truth) + P/L za cene (NC).
 
-    Zakaj hybrid:
-    - /stocks = Minimax-ova lastna evidenca zaloge. Točne količine, native precision
-      (2-3 dec.), pravilno ne glede na smart match cross-artikel dodelitve.
-    - P/L (365 dni) = edini vir za nabavne cene (NC) po lotih.
-      Daljše okno pokriva tudi zamrznjene artikle (do 11 mesecev starost).
-
-    Fallback: če /stocks ne vrača BatchNumber → stara metoda (get_stock_for_items).
+    /stocks = Minimax realna zaloga, native precision, vsi loti ne glede na starost.
+    P/L (365 dni) = cene lotov (NC). Dalj?e okno pokriva zamrznjene artikle.
+    Fallback: ce /stocks ne vraca BatchNumber -> stara metoda get_stock_for_items.
     """
+    from minimax_client import MinimaxClient
     from config import _secret
+    from datetime import datetime, timedelta
+    from collections import defaultdict
 
     cli = MinimaxClient(
         username      = username,
@@ -40,17 +38,16 @@ def _get_stock_cached(username, org_id, wh_id):
         org_id        = int(org_id),
     )
 
-    # ── Korak 1: /stocks → realne količine po lotih (ground truth) ───────────
+    # Korak 1: /stocks -> realne kolicine po lotih (ground truth)
     stocks_raw = cli.get_stock_by_lots(wh_id)
-
-    has_lots = any(r.get("BatchNumber") for r in stocks_raw)
+    has_lots   = any(r.get("BatchNumber") for r in stocks_raw)
 
     if not has_lots:
-        # Fallback: /stocks ne vrača lotov za to skladišče → stara metoda
+        # Fallback: /stocks ne vraca lotov -> stara metoda
         return cli.get_stock_for_items(wh_id, [])
 
-    lot_qty   = defaultdict(dict)  # {item_id: {batch: qty}}
-    item_info = {}                 # {item_id: {ItemName, ItemCode, UnitOfMeasurement}}
+    lot_qty   = defaultdict(dict)
+    item_info = {}
 
     for row in stocks_raw:
         item_id = (row.get("Item") or {}).get("ID")
@@ -58,7 +55,6 @@ def _get_stock_cached(username, org_id, wh_id):
         qty     = float(row.get("Quantity") or 0)
         if not item_id or not batch or qty <= 0.001:
             continue
-        # Native Minimax precision — ne zaokrožujemo
         lot_qty[item_id][batch] = qty
         if item_id not in item_info:
             item_info[item_id] = {
@@ -70,23 +66,19 @@ def _get_stock_cached(username, org_id, wh_id):
     if not lot_qty:
         return []
 
-    # ── Korak 2: P/L dokumenti → cene (NC) samo za lote ki so v zalogi ──────
-    # Iščemo cene samo za (item_id, batch) kombinacije ki jih /stocks vrača.
-    # Zgodnja prekinitev ko imamo cene za vse → minimalno število API klicev.
+    # Korak 2: P/L -> cene (NC) za lote ki so v zalogi
     needed_lots  = {
         (item_id, batch)
         for item_id, batches in lot_qty.items()
         for batch in batches
     }
-    lot_price    = defaultdict(dict)  # {item_id: {batch: price}}
-    found_prices = set()              # {(item_id, batch)} za katere smo že našli ceno
+    lot_price    = defaultdict(dict)
+    found_prices = set()
 
-    # 365 dni: pokrijemo zamrznjene artikle (meja 330 dni)
     date_from = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
 
     page = 1
     while True:
-        # Zgodnja prekinitev: vse cene najdene
         if found_prices >= needed_lots:
             break
         try:
@@ -119,10 +111,7 @@ def _get_stock_cached(username, org_id, wh_id):
                         if price > 0:
                             lot_price[item_id][batch] = price
                             found_prices.add((item_id, batch))
-                        # Dopolni item_info iz P/L če manjka (ItemCode, ItemName)
-                        if item_id in item_info and not item_info[item_id].get("ItemCode"):
-                            item_info[item_id]["ItemCode"] = row.get("ItemCode", "") or ""
-                        if item_id not in item_info:
+                        if item_id not in item_info or not item_info[item_id].get("ItemCode"):
                             item_info[item_id] = {
                                 "ItemName":          (row.get("ItemName") or
                                                       (row.get("Item") or {}).get("Name", "")),
@@ -139,7 +128,7 @@ def _get_stock_cached(username, org_id, wh_id):
         except Exception:
             break
 
-    # ── Korak 3: Merge → format ki ga pričakuje parse_stock_to_engine_format ─
+    # Korak 3: Merge -> format za parse_stock_to_engine_format
     result = []
     for item_id, batches in lot_qty.items():
         info = item_info.get(item_id, {})
@@ -149,7 +138,7 @@ def _get_stock_cached(username, org_id, wh_id):
                 "ItemName":          info.get("ItemName", ""),
                 "ItemCode":          info.get("ItemCode", "") or "",
                 "BatchNumber":       batch,
-                "Quantity":          qty,   # Native Minimax precision (2-3 dec.)
+                "Quantity":          qty,
                 "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
                 "Price":             lot_price.get(item_id, {}).get(batch, 0),
             })
@@ -159,9 +148,9 @@ def _get_stock_cached(username, org_id, wh_id):
 def render():
     st.caption("Avtomatska FIFO dodelitev serij za maloprodajne dokumente v Minimaxu")
 
-    # ── Stranska vrstica ──────────────────────────────────────────────────────
+    # ?? Stranska vrstica ??????????????????????????????????????????????????????
     with st.sidebar:
-        st.header("⚙️ Nastavitve API")
+        st.header("?? Nastavitve API")
 
         def _secret(key, default=""):
             try:
@@ -174,18 +163,18 @@ def render():
             st.session_state["client_id"]     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID", "OltreCon"))
             st.session_state["client_secret"] = st.text_input("Client Secret",    value=_secret("MINIMAX_CLIENT_SECRET", ""), type="password")
             st.caption("Podatki uporabnika:")
-            st.session_state["username"]      = st.text_input("Uporabniško ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
+            st.session_state["username"]      = st.text_input("Uporabni?ko ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
             st.session_state["password"]      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD", ""), type="password")
             st.caption("Organizacija:")
             st.session_state["org_id"]        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID", "171038"))
 
         st.divider()
 
-        with st.expander("Kode skladišč", expanded=True):
-            st.session_state["wh_mpk1"] = st.text_input("MPK1 — Potujoča 1",  value=_secret("WH_MPK1", "MP-K1"))
-            st.session_state["wh_mpk2"] = st.text_input("MPK2 — Potujoča 2",  value=_secret("WH_MPK2", "MP-K2"))
-            st.session_state["wh_mpk3"] = st.text_input("MPK3 — Potujoča 3",  value=_secret("WH_MPK3", "MP-K3"))
-            st.session_state["wh_mpoc"] = st.text_input("MPOC — Rib. Domžale", value=_secret("WH_MPOC", "MP-RD"))
+        with st.expander("Kode skladi??", expanded=True):
+            st.session_state["wh_mpk1"] = st.text_input("MPK1 ? Potujo?a 1",  value=_secret("WH_MPK1", "MP-K1"))
+            st.session_state["wh_mpk2"] = st.text_input("MPK2 ? Potujo?a 2",  value=_secret("WH_MPK2", "MP-K2"))
+            st.session_state["wh_mpk3"] = st.text_input("MPK3 ? Potujo?a 3",  value=_secret("WH_MPK3", "MP-K3"))
+            st.session_state["wh_mpoc"] = st.text_input("MPOC ? Rib. Dom?ale", value=_secret("WH_MPOC", "MP-RD"))
 
         st.divider()
 
@@ -196,31 +185,27 @@ def render():
             st.session_state["an_mpoc"] = st.text_input("Analytic koda MPOC", value=_secret("AN_MPOC", "MPOC"))
 
         st.divider()
-        if st.button("🔍 Poišči ID-je analitik avtomatsko"):
+        if st.button("? Poi??i ID-je analitik avtomatsko"):
             st.session_state["auto_find_analytics"] = True
-        if st.button("🔍 Poišči ID-je skladišč avtomatsko"):
+        if st.button("? Poi??i ID-je skladi?? avtomatsko"):
             st.session_state["auto_find_warehouses"] = True
-        if st.button("🔧 Diagnostika lotov (MPK2)"):
+        if st.button("? Diagnostika lotov (MPK2)"):
             st.session_state["diagnose_lots"] = True
-        if st.button("🔍 Debug zaloge (MPK2)"):
+        if st.button("? Debug zaloge (MPK2)"):
             st.session_state["debug_stock"] = True
-        if st.button("🗑️ Počisti cache zaloge"):
+        if st.button("?? Po?isti cache zaloge"):
             for k in list(st.session_state.keys()):
                 if k.startswith("stock_cache_") or k == "item_units_cache":
                     del st.session_state[k]
-            try:
-                _get_stock_cached.clear()
-            except Exception:
-                pass
-            st.sidebar.success("Cache počiščen!")
+            st.sidebar.success("Cache po?i??en!")
 
-    # ── Sidebar akcije ────────────────────────────────────────────────────────
+    # ?? Sidebar akcije ????????????????????????????????????????????????????????
     if st.session_state.get("auto_find_analytics") and check_config():
         st.session_state.pop("auto_find_analytics")
-        with st.spinner("Iščem analitike ..."):
+        with st.spinner("I??em analitike ..."):
             try:
                 rows = get_client().get_analytics()
-                st.sidebar.success("✅ Analitike najdene!")
+                st.sidebar.success("? Analitike najdene!")
                 st.sidebar.dataframe(pd.DataFrame([{
                     "Koda": r.get("Code",""), "Naziv": r.get("Name",""), "Analytic ID": r.get("AnalyticId","")
                 } for r in rows]), use_container_width=True)
@@ -233,7 +218,7 @@ def render():
         with st.spinner("Diagnostika ..."):
             try:
                 diag = get_client().diagnose_lots(get_wh_id("MPK2"))
-                st.sidebar.success(f"✅ WH ID: {diag['warehouse_id']}")
+                st.sidebar.success(f"? WH ID: {diag['warehouse_id']}")
                 if diag['found']:
                     for f in diag['found']:
                         st.sidebar.write(f"Tip {f['type']}: lot={f['batch']}, wh_from={f['wh_from']}, wh_to={f['wh_to']}")
@@ -271,29 +256,24 @@ def render():
                                 st.sidebar.write(f"Prva vrstica: wh_from={((r0.get('WarehouseFrom') or {}).get('ID'))}, wh_to={((r0.get('WarehouseTo') or {}).get('ID'))}")
                         except Exception as ex:
                             st.sidebar.error(f"P/L debug napaka: {ex}")
-                else:
-                    # Prikaži vzorec lotov
-                    sample = [r for r in raw if r.get("BatchNumber")][:5]
-                    for s in sample:
-                        st.sidebar.write(f"  {s.get('ItemName','')} | lot={s.get('BatchNumber')} | qty={s.get('Quantity')} | price={s.get('Price',0)}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
     if st.session_state.get("auto_find_warehouses") and check_config():
         st.session_state.pop("auto_find_warehouses")
-        with st.spinner("Iščem skladišča ..."):
+        with st.spinner("I??em skladi??a ..."):
             try:
                 rows = get_client().get_warehouses()
-                st.sidebar.success("✅ Skladišča najdena!")
+                st.sidebar.success("? Skladi??a najdena!")
                 st.sidebar.dataframe(pd.DataFrame([{
                     "Naziv": r.get("Name",""), "Koda": r.get("Code",""), "Warehouse ID": r.get("WarehouseId") or r.get("ID","")
                 } for r in rows]), use_container_width=True)
-                st.sidebar.caption("Poiščite MPK1/MPK2/MPK3/MPOC in prekopirajte ID-je v polja zgoraj.")
+                st.sidebar.caption("Poi??ite MPK1/MPK2/MPK3/MPOC in prekopirajte ID-je v polja zgoraj.")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
-    # ── Tabs za lokacije ──────────────────────────────────────────────────────
-    tabs     = st.tabs(["🚐 MPK1 — Potujoča 1", "🚐 MPK2 — Potujoča 2", "🚐 MPK3 — Potujoča 3", "🏪 MPOC — Ribarnica Domžale"])
+    # ?? Tabs za lokacije ??????????????????????????????????????????????????????
+    tabs     = st.tabs(["? MPK1 ? Potujo?a 1", "? MPK2 ? Potujo?a 2", "? MPK3 ? Potujo?a 3", "? MPOC ? Ribarnica Dom?ale"])
     LOC_KEYS = ["MPK1", "MPK2", "MPK3", "MPOC"]
 
     for tab, loc_key in zip(tabs, LOC_KEYS):
@@ -306,12 +286,12 @@ def render():
             with col1:
                 st.subheader(loc_name)
             with col2:
-                find_btn = st.button("🔍 Poišči osnutke", key=f"find_{loc_key}", use_container_width=True)
+                find_btn = st.button("? Poi??i osnutke", key=f"find_{loc_key}", use_container_width=True)
 
             if find_btn:
                 if not check_config(): st.stop()
                 if an_id == 0:
-                    with st.spinner("Iščem analitike..."):
+                    with st.spinner("I??em analitike..."):
                         try:
                             resolve_ids.clear()
                             an_id = get_an_id(loc_key)
@@ -319,7 +299,7 @@ def render():
                 if an_id == 0:
                     st.error("Ne najdem analitike. Preverite kodo v nastavitvah.")
                     st.stop()
-                with st.spinner("Iščem osnutke dokumentov ..."):
+                with st.spinner("I??em osnutke dokumentov ..."):
                     try:
                         drafts = get_client().get_draft_entries(an_id)
                         st.session_state[f"drafts_{loc_key}"] = drafts
@@ -329,26 +309,26 @@ def render():
 
             drafts = st.session_state.get(f"drafts_{loc_key}", None)
             if drafts is None:
-                st.info("Kliknite 'Poišči osnutke' za prikaz čakajočih dokumentov.")
+                st.info("Kliknite 'Poi??i osnutke' za prikaz ?akajo?ih dokumentov.")
                 continue
             if not drafts:
-                st.success("✅ Ni čakajočih osnutkov za to lokacijo.")
+                st.success("? Ni ?akajo?ih osnutkov za to lokacijo.")
                 continue
 
             st.write(f"Najdenih **{len(drafts)}** osnutkov:")
-            st.caption("Izberite dokumente za obdelavo (kronološki vrstni red):")
-            select_all = st.checkbox("☑ Izberi vse", key=f"sel_all_{loc_key}", value=True)
+            st.caption("Izberite dokumente za obdelavo (kronolo?ki vrstni red):")
+            select_all = st.checkbox("? Izberi vse", key=f"sel_all_{loc_key}", value=True)
 
             selected_ids = []
             for d in sorted(drafts, key=lambda x: str(x.get("Date",""))):
-                label  = f"IS-{d.get('Number','?')} — {str(d.get('Date',''))[:10]}"
+                label  = f"IS-{d.get('Number','?')} ? {str(d.get('Date',''))[:10]}"
                 cb_key = f"cb_{loc_key}_{d.get('StockEntryId')}"
                 if st.checkbox(label, key=cb_key, value=select_all):
                     selected_ids.append(d.get("StockEntryId"))
 
             st.divider()
             run_btn = st.button(
-                f"⚡ Obdelaj vse označene osnutke ({len(selected_ids)})",
+                f"? Obdelaj vse ozna?ene osnutke ({len(selected_ids)})",
                 key=f"run_{loc_key}", type="primary",
                 use_container_width=True, disabled=len(selected_ids) == 0,
             )
@@ -357,8 +337,9 @@ def render():
                 if wh_id == 0:
                     st.error("Vnesite Warehouse kodo za to lokacijo v nastavitvah.")
                     st.stop()
-                with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ⏳"):
+                with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ?"):
                     try:
+                        # Cache client v session (izognemo se novemu token requestu)
                         if "cached_client" not in st.session_state:
                             st.session_state["cached_client"] = get_client()
                         cli = st.session_state["cached_client"]
@@ -376,6 +357,7 @@ def render():
                             for l in dl:
                                 if l.get("article_id"): all_item_ids.add(l["article_id"])
 
+                        # Cache item_units v session da ne kli?emo API vsaki?
                         if "item_units_cache" not in st.session_state:
                             st.session_state["item_units_cache"] = {}
                         missing = [i for i in all_item_ids if i not in st.session_state["item_units_cache"]]
@@ -391,12 +373,11 @@ def render():
                         stock_raw = _get_stock_cached(username, org_id, wh_id)
                         stock     = parse_stock_to_engine_format(stock_raw)
 
-                        shared_virtual = {
-                            key: [lot.copy() for lot in data["lots"]]
-                            for key, data in stock.items()
-                        }
-                        all_results   = {}
-                        article_dates = {}
+                        shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
+                        all_results    = {}
+
+                        # Za vsak artikel shrani datum ZADNJEGA dokumenta kjer se pojavi
+                        article_dates   = {}
                         doc_article_ids = set()
 
                         for eid in sorted_ids:
@@ -425,11 +406,9 @@ def render():
                         )
 
                         st.session_state[f"multi_result_{loc_key}"] = {
-                            "sorted_ids":      sorted_ids,
-                            "all_results":     all_results,
-                            "all_entry_data":  all_entry_data,
-                            "old_lot_warnings": old_lot_warnings,
-                            "drafts":          drafts,
+                            "sorted_ids": sorted_ids, "all_results": all_results,
+                            "all_entry_data": all_entry_data,
+                            "old_lot_warnings": old_lot_warnings, "drafts": drafts,
                         }
                     except Exception as e:
                         st.error(f"Napaka pri obdelavi: {e}")
@@ -444,7 +423,7 @@ def render():
                 drafts_map     = {d.get("StockEntryId"): d for d in multi_res["drafts"]}
 
                 def row_color(s):
-                    return {"ok":"🟢","matched":"🟡","partial":"🟠","no_match":"🔴","no_lots":"🔴","writeoff":"📤"}.get(s,"⚪")
+                    return {"ok":"?","matched":"?","partial":"?","no_match":"?","no_lots":"?","writeoff":"?"}.get(s,"?")
 
                 total_ok      = sum(len([l for l in r if l["status"]=="ok"])                    for r in all_results.values())
                 total_matched = sum(len([l for l in r if l["status"]=="matched"])                for r in all_results.values())
@@ -452,28 +431,29 @@ def render():
                 total_none    = sum(len([l for l in r if l["status"] in ("no_match","no_lots")]) for r in all_results.values())
 
                 c1,c2,c3,c4 = st.columns(4)
-                c1.metric("✅ Točno ujemanje",    total_ok)
-                c2.metric("🔄 Pametna zamenjava", total_matched)
-                c3.metric("⚠️ Delno pokrito",     total_partial)
-                c4.metric("❌ Brez lota",          total_none)
+                c1.metric("? To?no ujemanje",    total_ok)
+                c2.metric("? Pametna zamenjava", total_matched)
+                c3.metric("?? Delno pokrito",     total_partial)
+                c4.metric("? Brez lota",          total_none)
 
+                # Pripravi Excel za vse dodeljene lote
                 all_lots_rows = []
                 for eid in sorted_ids:
-                    lines    = all_results[eid]
-                    d        = drafts_map.get(eid, {})
+                    lines = all_results[eid]
+                    d     = drafts_map.get(eid, {})
                     doc_num  = f"IS-{d.get('Number','?')}"
                     doc_date = str(d.get('Date',''))[:10]
                     for l in lines:
                         all_lots_rows.append({
-                            "Analitika": loc_key,
-                            "Dokument":  doc_num,
-                            "Datum":     doc_date,
-                            "Artikel":   l["article_name"],
-                            "Kol.":      l["quantity_assigned"],
-                            "ME":        l.get("unit",""),
-                            "Lot":       l.get("lot") or "—",
-                            "Status":    l["status"],
-                            "Opis":      l.get("opis") or "",
+                            "Analitika":  loc_key,
+                            "Dokument":   doc_num,
+                            "Datum":      doc_date,
+                            "Artikel":    l["article_name"],
+                            "Kol.":       l["quantity_assigned"],
+                            "ME":         l.get("unit",""),
+                            "Lot":        l.get("lot") or "?",
+                            "Status":     l["status"],
+                            "Opis":       l.get("opis") or "",
                         })
 
                 if all_lots_rows:
@@ -481,7 +461,7 @@ def render():
                     buf_lots = io.BytesIO()
                     pd.DataFrame(all_lots_rows).to_excel(buf_lots, index=False, engine="openpyxl")
                     st.download_button(
-                        label="⬇️ Prenesi seznam lotov (Excel)",
+                        label="?? Prenesi seznam lotov (Excel)",
                         data=buf_lots.getvalue(),
                         file_name=f"loti_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -491,17 +471,18 @@ def render():
                 for eid in sorted_ids:
                     lines = all_results[eid]
                     d     = drafts_map.get(eid, {})
-                    label = f"IS-{d.get('Number','?')} — {str(d.get('Date',''))[:10]}"
+                    label = f"IS-{d.get('Number','?')} ? {str(d.get('Date',''))[:10]}"
                     no_lot_count = len([l for l in lines if l["status"] in ("no_match","no_lots","partial")])
-                    icon = "✅" if no_lot_count == 0 else "⚠️"
+                    icon = "?" if no_lot_count == 0 else "??"
                     with st.expander(f"{icon} {label}  ({len(lines)} vrstic)", expanded=(no_lot_count > 0)):
                         df_r = pd.DataFrame([{
                             "": row_color(l["status"]), "Artikel": l["article_name"],
                             "Kol.": l["quantity_assigned"], "ME": l["unit"],
-                            "Lot": l.get("lot") or "—", "Opis": l.get("opis") or "",
+                            "Lot": l.get("lot") or "?", "Opis": l.get("opis") or "",
                         } for l in lines])
                         st.dataframe(df_r, use_container_width=True, hide_index=True)
 
+                # Porocilo napak
                 error_rows = []
                 for eid in sorted_ids:
                     lines_e  = all_results[eid]
@@ -526,14 +507,14 @@ def render():
                             })
 
                 if error_rows:
-                    with st.expander(f"📋 Poročilo napak ({len(error_rows)} vrstic)", expanded=True):
+                    with st.expander(f"? Porocilo napak ({len(error_rows)} vrstic)", expanded=True):
                         df_err = pd.DataFrame(error_rows)
                         st.dataframe(df_err, use_container_width=True, hide_index=True)
                         import io
                         buf = io.BytesIO()
                         df_err.to_excel(buf, index=False, engine="openpyxl")
                         st.download_button(
-                            label="⬇️ Prenesi poročilo (Excel)",
+                            label="?? Prenesi porocilo (Excel)",
                             data=buf.getvalue(),
                             file_name=f"napake_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -541,7 +522,7 @@ def render():
 
                 old_lots = multi_res.get("old_lot_warnings", [])
                 if old_lots:
-                    with st.expander(f"⏰ Stari loti na zalogi ({len(old_lots)} opozoril)"):
+                    with st.expander(f"? Stari loti na zalogi ({len(old_lots)} opozoril)"):
                         df_old = pd.DataFrame([{
                             "Artikel":   w["article"],
                             "Lot":       w["lot"],
@@ -550,20 +531,20 @@ def render():
                             "Opozorilo": w["warning"],
                         } for w in old_lots])
                         st.dataframe(df_old, use_container_width=True, hide_index=True)
-                        st.caption("Starost lota je računana na datum zadnjega dokumenta kjer se artikel pojavi.")
+                        st.caption("Starost lota je racunana na datum zadnjega dokumenta kjer se artikel pojavi.")
 
                 if total_partial + total_none > 0:
-                    st.warning(f"⚠️ {total_partial + total_none} vrstic(a) brez lota. Preverite ročno pred potrditvijo.")
+                    st.warning(f"?? {total_partial + total_none} vrstic(a) brez lota. Preverite rocno pred potrditvijo.")
 
                 st.divider()
                 col_save, col_cancel = st.columns(2)
                 with col_save:
                     save_all_btn = st.button(
-                        f"💾 Shrani vse v Minimax ({len(sorted_ids)} dokumentov)",
+                        f"? Shrani vse v Minimax ({len(sorted_ids)} dokumentov)",
                         key=f"save_all_{loc_key}", type="primary", use_container_width=True,
                     )
                 with col_cancel:
-                    cancel_btn = st.button("✖ Zavrzi rezultate", key=f"cancel_multi_{loc_key}", use_container_width=True)
+                    cancel_btn = st.button("? Zavrzi rezultate", key=f"cancel_multi_{loc_key}", use_container_width=True)
 
                 if cancel_btn:
                     del st.session_state[f"multi_result_{loc_key}"]
@@ -584,21 +565,24 @@ def render():
                                         new_rows=rows,
                                     )
                                     saved += 1
-                                    st.write(f"✅ {doc_label} shranjen")
+                                    st.write(f"? {doc_label} shranjen")
                                 except Exception as e:
+                                    import traceback
                                     errors.append(f"{doc_label}: {e}")
                                     st.error(f"Napaka {doc_label}: {e}")
                                     st.code(traceback.format_exc())
                         except Exception as e:
+                            import traceback
                             st.error(f"Napaka pri povezavi: {e}")
                             st.code(traceback.format_exc())
                         if saved > 0:
-                            st.success(f"✅ {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
+                            st.success(f"? {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
                         for err in errors:
                             st.error(err)
+                        # Rerun samo ce ni napak
                         if saved > 0 and not errors:
                             del st.session_state[f"multi_result_{loc_key}"]
                             st.session_state.pop(f"drafts_{loc_key}", None)
                             st.rerun()
                         elif errors:
-                            st.warning("⚠️ Napake pri shranjevanju — rezultati ostanejo prikazani.")
+                            st.warning("?? Napake pri shranjevanju ? rezultati ostanejo prikazani.")
