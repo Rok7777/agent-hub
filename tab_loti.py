@@ -19,15 +19,9 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    Popravljena metoda: batch->artikel mapiranje odpravlja korenski vzrok buga.
-
-    Problem: ko smart match dodeli lot artikla A dokumentu artikla B,
-    IS zapiše Item=B, BatchNumber=lot_A. Stara metoda je odštevala od B (napaka).
-
-    Rešitev:
-    - P/L (365 dni): zgradimo lot_qty IN batch_to_article {batch: original_article_id}
-    - IS (60 dni):   odštevamo od batch_to_article[batch], NE od Item na IS dokumentu
-    - Zamrznjeni artikli so pokriti z daljšim P/L oknom (365 dni).
+    /stocks?ResultsByBatchNumber=Y kot ground truth za kolicine (Minimax realno stanje).
+    P/L (365 dni) samo za cene (NC).
+    Fallback na batch->artikel P/L-IS ce /stocks ne vraca lotov.
     """
     from minimax_client import MinimaxClient
     from config import _secret
@@ -42,23 +36,119 @@ def _get_stock_cached(username, org_id, wh_id):
         org_id        = int(org_id),
     )
 
-    lot_qty          = defaultdict(lambda: defaultdict(float))  # {article_id: {batch: qty}}
-    lot_price        = defaultdict(lambda: defaultdict(float))  # {article_id: {batch: price}}
-    batch_to_article = {}   # {batch_code: article_id} — iz P/L dokumentov
-    item_info        = {}   # {article_id: {ItemName, ItemCode, UnitOfMeasurement}}
+    # ── Korak 1: /stocks -> realno stanje zalog (ground truth) ───────────────
+    stocks_raw = cli.get_stock_by_lots(wh_id)
+    has_lots   = any(r.get("BatchNumber") for r in stocks_raw)
 
-    # ── Korak 1: P/L — 365 dni (pokrijemo zamrznjene artikle) ────────────────
+    if not has_lots:
+        # /stocks ne vraca lotov -> fallback: P/L-IS z batch->artikel popravkom
+        return _fallback_pl_is(cli, wh_id)
+
+    lot_qty   = defaultdict(dict)
+    item_info = {}
+
+    for row in stocks_raw:
+        item_id = (row.get("Item") or {}).get("ID")
+        batch   = row.get("BatchNumber", "") or ""
+        qty     = float(row.get("Quantity") or 0)
+        if not item_id or not batch or qty <= 0.001:
+            continue
+        lot_qty[item_id][batch] = qty
+        if item_id not in item_info:
+            item_info[item_id] = {
+                "ItemName":          row.get("ItemName", "") or "",
+                "ItemCode":          row.get("ItemCode", "") or "",
+                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
+            }
+
+    if not lot_qty:
+        return []
+
+    # ── Korak 2: P/L (365 dni) -> samo cene (NC) ─────────────────────────────
+    needed = {(iid, b) for iid, bs in lot_qty.items() for b in bs}
+    lot_price    = defaultdict(dict)
+    found_prices = set()
+    date_from    = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
+
+    page = 1
+    while True:
+        if found_prices >= needed:
+            break
+        try:
+            data = cli._get("/stockentry", params={
+                "StockEntryType": "P", "StockEntrySubtype": "L",
+                "Status": "P", "DateFrom": date_from,
+                "CurrentPage": page, "PageSize": 50,
+            })
+            rows = data.get("Rows", [])
+            if not rows:
+                break
+            for entry in rows:
+                eid = entry.get("StockEntryId")
+                if not eid:
+                    continue
+                try:
+                    detail = cli.get_entry_detail(eid)
+                    for row in (detail.get("StockEntryRows") or []):
+                        wh_to   = (row.get("WarehouseTo") or {}).get("ID")
+                        if str(wh_to) != str(wh_id):
+                            continue
+                        item_id = (row.get("Item") or {}).get("ID")
+                        batch   = row.get("BatchNumber", "") or ""
+                        price   = float(row.get("Price") or 0)
+                        if item_id and batch and price > 0:
+                            lot_price[item_id][batch] = price
+                            found_prices.add((item_id, batch))
+                        if item_id and item_id not in item_info:
+                            item_info[item_id] = {
+                                "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
+                                "ItemCode":          row.get("ItemCode", "") or "",
+                                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
+                            }
+                except Exception:
+                    continue
+            total   = data.get("TotalRows", 0)
+            fetched = (page - 1) * 50 + len(rows)
+            if fetched >= total:
+                break
+            page += 1
+        except Exception:
+            break
+
+    result = []
+    for item_id, batches in lot_qty.items():
+        info = item_info.get(item_id, {})
+        for batch, qty in batches.items():
+            result.append({
+                "Item":              {"ID": item_id},
+                "ItemName":          info.get("ItemName", ""),
+                "ItemCode":          info.get("ItemCode", "") or "",
+                "BatchNumber":       batch,
+                "Quantity":          qty,
+                "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
+                "Price":             lot_price.get(item_id, {}).get(batch, 0),
+            })
+    return result
+
+
+def _fallback_pl_is(cli, wh_id):
+    """Fallback: P/L-IS z batch->artikel popravkom (ce /stocks ne vraca lotov)."""
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+
+    lot_qty          = defaultdict(lambda: defaultdict(float))
+    lot_price        = defaultdict(lambda: defaultdict(float))
+    batch_to_article = {}
+    item_info        = {}
+
     date_from_pl = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
     page = 1
     while True:
         try:
             data = cli._get("/stockentry", params={
-                "StockEntryType":    "P",
-                "StockEntrySubtype": "L",
-                "Status":            "P",
-                "DateFrom":          date_from_pl,
-                "CurrentPage":       page,
-                "PageSize":          50,
+                "StockEntryType": "P", "StockEntrySubtype": "L",
+                "Status": "P", "DateFrom": date_from_pl,
+                "CurrentPage": page, "PageSize": 50,
             })
             rows = data.get("Rows", [])
             if not rows:
@@ -80,7 +170,6 @@ def _get_stock_cached(username, org_id, wh_id):
                         if not item_id or not batch or qty <= 0:
                             continue
                         lot_qty[item_id][batch] += qty
-                        # Batch -> original artikel mapiranje (ključ za IS popravek)
                         batch_to_article[batch] = item_id
                         if price > 0:
                             lot_price[item_id][batch] = price
@@ -100,18 +189,14 @@ def _get_stock_cached(username, org_id, wh_id):
         except Exception:
             break
 
-    # ── Korak 2: IS — 60 dni, odštevamo od ORIGINALNEGA artikla (batch mapa) ─
     date_from_is = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
     page = 1
     while True:
         try:
             data = cli._get("/stockentry", params={
-                "StockEntryType":    "I",
-                "StockEntrySubtype": "S",
-                "Status":            "P",
-                "DateFrom":          date_from_is,
-                "CurrentPage":       page,
-                "PageSize":          50,
+                "StockEntryType": "I", "StockEntrySubtype": "S",
+                "Status": "P", "DateFrom": date_from_is,
+                "CurrentPage": page, "PageSize": 50,
             })
             rows = data.get("Rows", [])
             if not rows:
@@ -131,9 +216,8 @@ def _get_stock_cached(username, org_id, wh_id):
                         qty           = float(row.get("Quantity") or 0)
                         if not batch or qty <= 0:
                             continue
-                        # POPRAVEK: odštej od originalnega artikla (ne od IS artikla)
-                        original_article = batch_to_article.get(batch, item_id_on_is)
-                        lot_qty[original_article][batch] -= qty
+                        original = batch_to_article.get(batch, item_id_on_is)
+                        lot_qty[original][batch] -= qty
                 except Exception:
                     continue
             total   = data.get("TotalRows", 0)
@@ -144,7 +228,6 @@ def _get_stock_cached(username, org_id, wh_id):
         except Exception:
             break
 
-    # ── Korak 3: Sestavi rezultat ─────────────────────────────────────────────
     result = []
     for item_id, batches in lot_qty.items():
         info = item_info.get(item_id, {})
@@ -209,7 +292,8 @@ def render():
             st.session_state["auto_find_warehouses"] = True
         if st.button("🔧 Diagnostika lotov (MPK2)"):
             st.session_state["diagnose_lots"] = True
-        if st.button("🔍 Debug zaloge (MPK2)"):
+        debug_loc = st.selectbox("Debug zaloge za:", ["MPK1","MPK2","MPK3","MPOC"], index=1, key="debug_loc_sel")
+        if st.button("🔍 Debug zaloge"):
             st.session_state["debug_stock"] = True
         if st.button("🗑️ Počisti cache zaloge"):
             for k in list(st.session_state.keys()):
@@ -247,14 +331,22 @@ def render():
 
     if st.session_state.get("debug_stock") and check_config():
         st.session_state.pop("debug_stock")
-        with st.spinner("Berem zalogo ..."):
+        _dloc = st.session_state.get("debug_loc_sel", "MPK2")
+        with st.spinner(f"Berem zalogo {_dloc} ..."):
             try:
                 cli   = get_client()
-                wh    = get_wh_id("MPK2")
+                wh    = get_wh_id(_dloc)
                 raw   = cli.get_stock_by_lots(wh)
                 has_lots = any(r.get("BatchNumber") for r in raw)
-                st.sidebar.write(f"WH ID: `{wh}` (tip: {type(wh).__name__})")
-                st.sidebar.write(f"get_stock_by_lots: {len(raw)} vrstic, loti: {has_lots}")
+                st.sidebar.write(f"Lokacija: {_dloc} | WH ID: `{wh}`")
+                st.sidebar.write(f"/stocks vraca: {len(raw)} vrstic, loti (BatchNumber): {has_lots}")
+                if has_lots:
+                    sample = [r for r in raw if r.get("BatchNumber")][:8]
+                    for s in sample:
+                        st.sidebar.write(f"  {s.get('ItemName','')[:30]} | {s.get('BatchNumber')} | {s.get('Quantity')} {s.get('UnitOfMeasurement','')} | NC={s.get('Price',0)}")
+                    st.sidebar.info("✅ /stocks vraca lote — ground truth deluje!")
+                else:
+                    st.sidebar.warning("⚠️ /stocks ne vraca BatchNumber — bo aktiviran fallback P/L-IS")
                 if not has_lots:
                     items = cli.get_stock_for_items(wh, [])
                     st.sidebar.write(f"get_stock_for_items: {len(items)} vrstic")
@@ -315,7 +407,7 @@ def render():
                         if k.startswith("stock_cache_") or k == "item_units_cache":
                             del st.session_state[k]
                     st.session_state.pop(f"multi_result_{loc_key}", None)
-                    st.rerun()
+                    st.success("Cache počiščen!")
 
             if find_btn:
                 if not check_config(): st.stop()
