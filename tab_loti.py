@@ -19,9 +19,11 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    /stocks?ResultsByBatchNumber=Y kot ground truth za kolicine (Minimax realno stanje).
-    P/L (365 dni) samo za cene (NC).
-    Fallback na batch->artikel P/L-IS ce /stocks ne vraca lotov.
+    FIFO REBALANCING:
+    1. /stocks per artikel -> skupna realna zaloga (ground truth, brez BatchNumber)
+    2. P/L (365 dni) -> kateri loti obstajajo + cene
+    3. FIFO: najstarejsi loti so prodani prvi -> preostala zaloga = najnovejsi loti
+    Ne rabi IS dokumentov, ne rabi BatchNumber v /stocks.
     """
     from minimax_client import MinimaxClient
     from config import _secret
@@ -36,24 +38,26 @@ def _get_stock_cached(username, org_id, wh_id):
         org_id        = int(org_id),
     )
 
-    # ── Korak 1: /stocks -> realno stanje zalog (ground truth) ───────────────
-    stocks_raw = cli.get_stock_by_lots(wh_id)
-    has_lots   = any(r.get("BatchNumber") for r in stocks_raw)
+    def _parse_lot_date(code):
+        """Zadnjih 6 znakov = DDMMYY."""
+        if not code or len(code) < 6:
+            return datetime.min
+        try:
+            return datetime.strptime(code[-6:], "%d%m%y")
+        except ValueError:
+            return datetime.min
 
-    if not has_lots:
-        # /stocks ne vraca lotov -> fallback: P/L-IS z batch->artikel popravkom
-        return _fallback_pl_is(cli, wh_id)
-
-    lot_qty   = defaultdict(dict)
-    item_info = {}
+    # ── Korak 1: /stocks -> skupna realna zaloga per artikel ─────────────────
+    stocks_raw  = cli.get_stock_by_lots(wh_id)
+    total_stock = {}   # {article_id: total_qty}
+    item_info   = {}   # {article_id: {name, code, unit}}
 
     for row in stocks_raw:
         item_id = (row.get("Item") or {}).get("ID")
-        batch   = row.get("BatchNumber", "") or ""
         qty     = float(row.get("Quantity") or 0)
-        if not item_id or not batch or qty <= 0.001:
+        if not item_id or qty <= 0:
             continue
-        lot_qty[item_id][batch] = qty
+        total_stock[item_id] = total_stock.get(item_id, 0) + qty
         if item_id not in item_info:
             item_info[item_id] = {
                 "ItemName":          row.get("ItemName", "") or "",
@@ -61,24 +65,23 @@ def _get_stock_cached(username, org_id, wh_id):
                 "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
             }
 
-    if not lot_qty:
+    if not total_stock:
         return []
 
-    # ── Korak 2: P/L (365 dni) -> samo cene (NC) ─────────────────────────────
-    needed = {(iid, b) for iid, bs in lot_qty.items() for b in bs}
-    lot_price    = defaultdict(dict)
-    found_prices = set()
-    date_from    = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
+    # ── Korak 2: P/L (365 dni) -> loti in cene ───────────────────────────────
+    lots_by_article = defaultdict(dict)  # {article_id: {batch: {qty, price}}}
+    date_from = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
 
     page = 1
     while True:
-        if found_prices >= needed:
-            break
         try:
             data = cli._get("/stockentry", params={
-                "StockEntryType": "P", "StockEntrySubtype": "L",
-                "Status": "P", "DateFrom": date_from,
-                "CurrentPage": page, "PageSize": 50,
+                "StockEntryType":    "P",
+                "StockEntrySubtype": "L",
+                "Status":            "P",
+                "DateFrom":          date_from,
+                "CurrentPage":       page,
+                "PageSize":          50,
             })
             rows = data.get("Rows", [])
             if not rows:
@@ -95,11 +98,17 @@ def _get_stock_cached(username, org_id, wh_id):
                             continue
                         item_id = (row.get("Item") or {}).get("ID")
                         batch   = row.get("BatchNumber", "") or ""
+                        qty     = float(row.get("Quantity") or 0)
                         price   = float(row.get("Price") or 0)
-                        if item_id and batch and price > 0:
-                            lot_price[item_id][batch] = price
-                            found_prices.add((item_id, batch))
-                        if item_id and item_id not in item_info:
+                        if not item_id or not batch or qty <= 0:
+                            continue
+                        # Istemu lotu sestej kolicino (ce je bil prejet veckat)
+                        if batch not in lots_by_article[item_id]:
+                            lots_by_article[item_id][batch] = {"qty": 0, "price": 0}
+                        lots_by_article[item_id][batch]["qty"]   += qty
+                        if price > 0:
+                            lots_by_article[item_id][batch]["price"] = price
+                        if item_id not in item_info:
                             item_info[item_id] = {
                                 "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
                                 "ItemCode":          row.get("ItemCode", "") or "",
@@ -115,20 +124,53 @@ def _get_stock_cached(username, org_id, wh_id):
         except Exception:
             break
 
+    # ── Korak 3: FIFO rebalancing ─────────────────────────────────────────────
+    # Za vsak artikel: skupna zaloga iz /stocks, loti iz P/L.
+    # Polni od NAJNOVEJSEGA lota naprej (FIFO = stari so ven prvi).
     result = []
-    for item_id, batches in lot_qty.items():
+
+    for item_id, total_qty in total_stock.items():
+        lots = lots_by_article.get(item_id)
         info = item_info.get(item_id, {})
-        for batch, qty in batches.items():
+
+        if not lots:
+            # Artikel je v zalogi ampak ni P/L lotov v 365 dneh
+            # Pustimo brez lotov (engine bo javil no_lots)
+            continue
+
+        # Sortiraj: najnovejsi lot prvi (ostane v zalogi)
+        lots_sorted = sorted(
+            lots.items(),
+            key=lambda kv: _parse_lot_date(kv[0]),
+            reverse=True
+        )
+
+        remaining = round(float(total_qty), 3)
+
+        for batch, lot_data in lots_sorted:
+            if remaining <= 0:
+                break
+            assigned = round(min(lot_data["qty"], remaining), 3)
+            if assigned <= 0.001:
+                continue
+            remaining = round(remaining - assigned, 3)
             result.append({
                 "Item":              {"ID": item_id},
                 "ItemName":          info.get("ItemName", ""),
                 "ItemCode":          info.get("ItemCode", "") or "",
                 "BatchNumber":       batch,
-                "Quantity":          qty,
+                "Quantity":          assigned,
                 "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
-                "Price":             lot_price.get(item_id, {}).get(batch, 0),
+                "Price":             lot_data.get("price", 0),
             })
+
     return result
+
+
+def _fallback_pl_is(cli, wh_id):
+    """Ni vec potreben - FIFO rebalancing pokriva vse primere."""
+    return []
+
 
 
 def _fallback_pl_is(cli, wh_id):
