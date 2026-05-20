@@ -16,44 +16,23 @@ from lot_engine import assign_lots_with_virtual, check_old_lots
 from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
-@st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
-def _get_stock_cached(username, org_id, wh_id):
+def _scan_pl(cli, wh_id, date_from, date_to=None):
     """
-    Scaling faktor pristop (prava resitev):
-    1. P/L (365 dni): per-lot prejeto + cene + batch->artikel mapa
-    2. IS  ( 60 dni): per-lot poraba z batch->artikel popravkom
-    3. /stocks: skupna realna zaloga per artikel (ground truth)
-    4. Scale: lot_qty * (stocks_total / pl_is_total) za vsak artikel
-       - popravi napako zaradi IS dokumentov brez BatchNumber
-       - ko bo minimax_client.py bug popravljen -> scale -> 1.0 samodejno
+    Skenira P/L dokumente in vrne (pl_received, batch_to_article, lot_price, item_info).
+    date_to: ce podan, zaustavi skeniranje ko dokumenti presezejo ta datum.
     """
-    from minimax_client import MinimaxClient
-    from config import _secret
-    from datetime import datetime, timedelta
     from collections import defaultdict
+    pl_received      = defaultdict(lambda: defaultdict(float))
+    batch_to_article = {}
+    lot_price        = defaultdict(lambda: defaultdict(float))
+    item_info        = {}
 
-    cli = MinimaxClient(
-        username      = username,
-        password      = _secret("MINIMAX_PASSWORD", ""),
-        client_id     = _secret("MINIMAX_CLIENT_ID", ""),
-        client_secret = _secret("MINIMAX_CLIENT_SECRET", ""),
-        org_id        = int(org_id),
-    )
-
-    pl_received      = defaultdict(lambda: defaultdict(float))  # {art: {batch: prejeto}}
-    is_consumed      = defaultdict(lambda: defaultdict(float))  # {art: {batch: porabljeno}}
-    lot_price        = defaultdict(lambda: defaultdict(float))  # {art: {batch: cena}}
-    batch_to_article = {}   # {batch: original_art_id} iz P/L
-    item_info        = {}   # {art: {name, code, unit}}
-
-    # ── Korak 1: P/L (365 dni) ───────────────────────────────────────────────
-    date_from_pl = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
     page = 1
     while True:
         try:
             data = cli._get("/stockentry", params={
                 "StockEntryType": "P", "StockEntrySubtype": "L",
-                "Status": "P", "DateFrom": date_from_pl,
+                "Status": "P", "DateFrom": date_from,
                 "CurrentPage": page, "PageSize": 50,
             })
             rows = data.get("Rows", [])
@@ -63,6 +42,11 @@ def _get_stock_cached(username, org_id, wh_id):
                 eid = entry.get("StockEntryId")
                 if not eid:
                     continue
+                # Preskoči dokumente ki so novejši od date_to (za historical scan)
+                if date_to:
+                    entry_date = str(entry.get("Date", "") or "")[:10]
+                    if entry_date and entry_date >= date_to:
+                        continue
                 try:
                     detail = cli.get_entry_detail(eid)
                     for row in (detail.get("StockEntryRows") or []):
@@ -95,7 +79,80 @@ def _get_stock_cached(username, org_id, wh_id):
         except Exception:
             break
 
-    # ── Korak 2: IS (60 dni) z batch->artikel popravkom ──────────────────────
+    return {
+        "pl_received":      {k: dict(v) for k, v in pl_received.items()},
+        "batch_to_article": batch_to_article,
+        "lot_price":        {k: dict(v) for k, v in lot_price.items()},
+        "item_info":        item_info,
+    }
+
+
+@st.cache_data(ttl=86400, show_spinner=False)  # 24h — stari P/L se ne spremenijo
+def _get_pl_historical_cached(username, org_id, wh_id):
+    """P/L dokumenti 61-365 dni nazaj. Cachet 24h ker se ne spremenijo."""
+    from minimax_client import MinimaxClient
+    from config import _secret
+    from datetime import datetime, timedelta
+    cli = MinimaxClient(
+        username=username, password=_secret("MINIMAX_PASSWORD", ""),
+        client_id=_secret("MINIMAX_CLIENT_ID", ""),
+        client_secret=_secret("MINIMAX_CLIENT_SECRET", ""),
+        org_id=int(org_id),
+    )
+    now       = datetime.now()
+    date_from = (now - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
+    date_to   = (now - timedelta(days=60)).strftime("%Y-%m-%d")
+    return _scan_pl(cli, wh_id, date_from, date_to)
+
+
+@st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
+def _get_stock_cached(username, org_id, wh_id):
+    """
+    Scaling faktor pristop:
+    1. P/L historical (61-365 dni, 24h cache) + P/L recent (0-60 dni, 15 min)
+    2. IS (60 dni) z batch->artikel popravkom
+    3. /stocks per artikel = ground truth za skupno zalogo
+    4. Scale lot kolicine da skupaj = /stocks total
+    """
+    from minimax_client import MinimaxClient
+    from config import _secret
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+
+    cli = MinimaxClient(
+        username=username, password=_secret("MINIMAX_PASSWORD", ""),
+        client_id=_secret("MINIMAX_CLIENT_ID", ""),
+        client_secret=_secret("MINIMAX_CLIENT_SECRET", ""),
+        org_id=int(org_id),
+    )
+
+    # ── P/L: historical (24h cache) + recent (svez) ───────────────────────────
+    hist = _get_pl_historical_cached(username, org_id, wh_id)
+
+    date_from_recent = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+    recent = _scan_pl(cli, wh_id, date_from_recent)
+
+    # Merge historical + recent
+    pl_received      = defaultdict(lambda: defaultdict(float))
+    batch_to_article = {}
+    lot_price        = defaultdict(lambda: defaultdict(float))
+    item_info        = {}
+
+    for src_data in [hist, recent]:
+        for item_id, batches in src_data["pl_received"].items():
+            for batch, qty in batches.items():
+                pl_received[item_id][batch] += qty
+        batch_to_article.update(src_data["batch_to_article"])
+        for item_id, batches in src_data["lot_price"].items():
+            for batch, price in batches.items():
+                if price > 0:
+                    lot_price[item_id][batch] = price
+        for item_id, info in src_data["item_info"].items():
+            if item_id not in item_info:
+                item_info[item_id] = info
+
+    # ── IS (60 dni) z batch->artikel popravkom ────────────────────────────────
+    is_consumed  = defaultdict(lambda: defaultdict(float))
     date_from_is = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
     page = 1
     while True:
@@ -123,7 +180,6 @@ def _get_stock_cached(username, org_id, wh_id):
                         qty        = float(row.get("Quantity") or 0)
                         if not batch or qty <= 0:
                             continue
-                        # Odsti od originalnega artikla (ne od IS artikla)
                         orig = batch_to_article.get(batch, item_id_is)
                         is_consumed[orig][batch] += qty
                 except Exception:
@@ -136,15 +192,14 @@ def _get_stock_cached(username, org_id, wh_id):
         except Exception:
             break
 
-    # ── Korak 3: /stocks -> skupna realna zaloga per artikel (ground truth) ──
-    stocks_raw    = cli.get_stock_by_lots(wh_id)
-    stocks_total  = {}  # {art: total_qty}
+    # ── /stocks: skupna realna zaloga per artikel ─────────────────────────────
+    stocks_raw   = cli.get_stock_by_lots(wh_id)
+    stocks_total = {}
     for row in stocks_raw:
         item_id = (row.get("Item") or {}).get("ID")
         qty     = float(row.get("Quantity") or 0)
         if item_id and qty > 0:
             stocks_total[item_id] = stocks_total.get(item_id, 0) + qty
-        # Dopolni item_info ce manjka
         if item_id and item_id not in item_info:
             item_info[item_id] = {
                 "ItemName":          row.get("ItemName", "") or "",
@@ -152,14 +207,12 @@ def _get_stock_cached(username, org_id, wh_id):
                 "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
             }
 
-    # ── Korak 4: Scaling + sestavi rezultat ──────────────────────────────────
+    # ── Scaling + sestavi rezultat ─────────────────────────────────────────────
     result = []
-
     for item_id in pl_received:
-        # Izracunaj P/L-IS per lot
         lot_remaining = {}
         for batch, recv in pl_received[item_id].items():
-            consumed = is_consumed[item_id].get(batch, 0)
+            consumed  = is_consumed[item_id].get(batch, 0)
             remaining = round(recv - consumed, 3)
             if remaining > 0.001:
                 lot_remaining[batch] = {"remaining": remaining, "received": recv}
@@ -167,22 +220,16 @@ def _get_stock_cached(username, org_id, wh_id):
         if not lot_remaining:
             continue
 
-        # Skupni P/L-IS sestavek za ta artikel
-        pl_is_total = sum(v["remaining"] for v in lot_remaining.values())
-
-        # Scaling faktor: /stocks je ground truth, P/L-IS je ocena
         true_total = stocks_total.get(item_id, 0)
         if true_total <= 0:
-            # Artikel ni na zalogi po /stocks -> preskoči
             continue
 
-        scale = true_total / pl_is_total if pl_is_total > 0 else 1.0
+        pl_is_total = sum(v["remaining"] for v in lot_remaining.values())
+        scale       = (true_total / pl_is_total) if pl_is_total > 0 else 1.0
 
         info = item_info.get(item_id, {})
-
         for batch, data in lot_remaining.items():
             scaled = round(data["remaining"] * scale, 3)
-            # Ne more biti vec kot dejansko prejeto iz P/L
             scaled = min(scaled, round(data["received"], 3))
             if scaled <= 0.001:
                 continue
@@ -195,8 +242,12 @@ def _get_stock_cached(username, org_id, wh_id):
                 "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
                 "Price":             lot_price.get(item_id, {}).get(batch, 0),
             })
-
     return result
+
+
+def _fallback_pl_is(cli, wh_id):
+    return []
+
 
 
 def _fallback_pl_is(cli, wh_id):
@@ -379,6 +430,11 @@ def render():
             for k in list(st.session_state.keys()):
                 if k.startswith("stock_cache_") or k == "item_units_cache":
                     del st.session_state[k]
+            try:
+                _get_stock_cached.clear()
+                _get_pl_historical_cached.clear()
+            except Exception:
+                pass
             st.sidebar.success("Cache počiščen!")
 
     # ── Sidebar akcije ────────────────────────────────────────────────────────────────────────────
@@ -481,6 +537,7 @@ def render():
                 if st.button("🗑️ Počisti cache", key=f"clear_{loc_key}", use_container_width=True):
                     try:
                         _get_stock_cached.clear()
+                        _get_pl_historical_cached.clear()
                     except Exception:
                         pass
                     for k in list(st.session_state.keys()):
