@@ -1,5 +1,5 @@
 """
-Tab: Loti — dodelitev serij
+Tab: Loti -- dodelitev serij
 Ureja: chat "Zapiranje LOT"
 """
 
@@ -17,11 +17,11 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
 def _scan_pl_for_lots(cli, wh_id, date_from, date_to_str=None):
-    """P/L skeniranje - samo za cene (NC) kot fallback."""
+    """P/L skeniranje - za lote in cene."""
     from collections import defaultdict
-    lots   = defaultdict(lambda: defaultdict(lambda: {"qty": 0.0, "price": 0.0}))
-    info   = {}
-    page   = 1
+    lots = defaultdict(lambda: defaultdict(lambda: {"qty": 0.0, "price": 0.0}))
+    info = {}
+    page = 1
     while True:
         try:
             data = cli._get("/stockentry", params={
@@ -78,7 +78,7 @@ def _scan_pl_for_lots(cli, wh_id, date_from, date_to_str=None):
 
 @st.cache_data(ttl=86400, show_spinner=False)  # 24h
 def _get_pl_historical_cached(username, org_id, wh_id):
-    """P/L 61-365 dni - samo za cene. 24h cache."""
+    """P/L 61-365 dni. 24h cache."""
     from minimax_client import MinimaxClient
     from config import _secret
     from datetime import datetime, timedelta
@@ -97,15 +97,18 @@ def _get_pl_historical_cached(username, org_id, wh_id):
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    DEFINITIVEN PRISTOP: /stocks/{itemId} za tocne per-lot podatke.
-    Minimax podpora potrjuje: GET /api/orgs/{orgId}/stocks/{itemId}
-    vraca serije/lote z dejanskimi kolicinami.
+    /stocks/{itemId} za tocne per-lot podatke (Minimax podpora potrjuje).
 
-    Fallback: ce endpoint ne vraca lotov -> FIFO rebalancing.
+    Pametni fallback:
+    - Ce vecina artiklov nima lot podatkov iz /stocks/{itemId}
+      -> FIFO rebalancing z /stocks totali + P/L 60 dni (hitro, brez 365-dnevnega scana)
+    - Ce samo manjsina nima lotov
+      -> P/L 365 dni fallback samo za tiste artikle
     """
     from minimax_client import MinimaxClient
     from config import _secret
     from datetime import datetime, timedelta
+    import concurrent.futures
 
     cli = MinimaxClient(
         username=username, password=_secret("MINIMAX_PASSWORD", ""),
@@ -122,17 +125,13 @@ def _get_stock_cached(username, org_id, wh_id):
         except ValueError:
             return datetime.min
 
-    # ── Korak 1: /stocks -> seznam artiklov na zalogi ─────────────────────────
+    # Korak 1: /stocks -> seznam artiklov na zalogi
     items_raw = cli.get_stock_by_lots(wh_id)
     if not items_raw:
         return []
 
-    # ── Korak 2: /stocks/{itemId} -> per-lot podatki (vzporedni klici) ─────────
-    result        = []
-    items_no_lots = []
-
+    # Korak 2: /stocks/{itemId} -> per-lot podatki (5 vzporednih klicev)
     def _fetch_item_lots(item_row):
-        """Pokliče /stocks/{itemId} za en artikel. Vrne (lots, item_row_or_None)."""
         item_id   = (item_row.get("Item") or {}).get("ID")
         item_name = item_row.get("ItemName", "") or ""
         item_code = item_row.get("ItemCode", "") or ""
@@ -171,13 +170,13 @@ def _get_stock_cached(username, org_id, wh_id):
                         "UnitOfMeasurement": item_unit,
                         "Price":             price,
                     })
-            if found:
-                return found, None
-            return [], item_row
+            return found, (None if found else item_row)
         except Exception:
             return [], item_row
 
-    import concurrent.futures
+    result        = []
+    items_no_lots = []
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(_fetch_item_lots, row) for row in items_raw]
         for future in concurrent.futures.as_completed(futures):
@@ -187,196 +186,102 @@ def _get_stock_cached(username, org_id, wh_id):
             elif fallback_row is not None:
                 items_no_lots.append(fallback_row)
 
-    # ── Fallback za artikle brez lotov: FIFO rebalancing ─────────────────────
+    # Korak 3: Pametni fallback
     if items_no_lots:
-        # Pridobi lot info iz P/L (historical + recent)
-        hist   = _get_pl_historical_cached(username, org_id, wh_id)
-        d_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
-        recent = _scan_pl_for_lots(cli, wh_id, d_from)
+        total_items = len(items_raw)
+        no_lots_pct = len(items_no_lots) / total_items if total_items > 0 else 1.0
 
-        lots_by_art = {}
-        for src in [hist, recent]:
-            for aid, batches in src["lots"].items():
-                if aid not in lots_by_art:
-                    lots_by_art[aid] = {}
-                for batch, data in batches.items():
-                    if batch not in lots_by_art[aid]:
-                        lots_by_art[aid][batch] = {"qty": 0.0, "price": 0.0}
-                    lots_by_art[aid][batch]["qty"] += data["qty"]
-                    if data["price"] > 0:
-                        lots_by_art[aid][batch]["price"] = data["price"]
+        if no_lots_pct > 0.5:
+            # /stocks/{itemId} ne podpira lotov -> FIFO rebalancing (hitro)
+            stocks_total  = {
+                (r.get("Item") or {}).get("ID"): float(r.get("Quantity") or 0)
+                for r in items_raw if (r.get("Item") or {}).get("ID")
+            }
+            item_info_map = {(r.get("Item") or {}).get("ID"): r for r in items_raw}
 
-        for item_row in items_no_lots:
-            item_id   = (item_row.get("Item") or {}).get("ID")
-            item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
-            item_name = item_row.get("ItemName", "") or ""
-            item_code = item_row.get("ItemCode", "") or ""
-            total_qty = float(item_row.get("Quantity") or 0)
-            lots      = lots_by_art.get(item_id)
-            if not lots or not item_id:
-                continue
-            lots_sorted = sorted(lots.items(), key=lambda kv: _lot_date(kv[0]), reverse=True)
-            remaining   = round(float(total_qty), 3)
-            for batch, data in lots_sorted:
-                if remaining <= 0:
-                    break
-                assigned = round(min(data["qty"], remaining), 3)
-                if assigned <= 0.001:
+            d_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+            recent = _scan_pl_for_lots(cli, wh_id, d_from)
+            lots_by_art = {aid: dict(batches) for aid, batches in recent["lots"].items()}
+
+            result = []
+            for item_id, total_qty in stocks_total.items():
+                if total_qty <= 0:
                     continue
-                remaining = round(remaining - assigned, 3)
-                result.append({
-                    "Item":              {"ID": item_id},
-                    "ItemName":          item_name,
-                    "ItemCode":          item_code,
-                    "BatchNumber":       batch,
-                    "Quantity":          assigned,
-                    "UnitOfMeasurement": item_unit,
-                    "Price":             data.get("price", 0),
-                })
+                lots = lots_by_art.get(item_id)
+                ir   = item_info_map.get(item_id, {})
+                if not lots:
+                    continue
+                lots_sorted = sorted(lots.items(), key=lambda kv: _lot_date(kv[0]), reverse=True)
+                remaining   = round(float(total_qty), 3)
+                for batch, data in lots_sorted:
+                    if remaining <= 0:
+                        break
+                    assigned = round(min(data["qty"], remaining), 3)
+                    if assigned <= 0.001:
+                        continue
+                    remaining = round(remaining - assigned, 3)
+                    result.append({
+                        "Item":              {"ID": item_id},
+                        "ItemName":          ir.get("ItemName", "") or "",
+                        "ItemCode":          ir.get("ItemCode", "") or "",
+                        "BatchNumber":       batch,
+                        "Quantity":          assigned,
+                        "UnitOfMeasurement": ir.get("UnitOfMeasurement", "kg") or "kg",
+                        "Price":             data.get("price", 0),
+                    })
+        else:
+            # Manjsina nima lotov -> P/L 365 dni samo za tiste
+            hist   = _get_pl_historical_cached(username, org_id, wh_id)
+            d_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+            recent = _scan_pl_for_lots(cli, wh_id, d_from)
+            lots_by_art = {}
+            for src in [hist, recent]:
+                for aid, batches in src["lots"].items():
+                    if aid not in lots_by_art:
+                        lots_by_art[aid] = {}
+                    for batch, data in batches.items():
+                        if batch not in lots_by_art[aid]:
+                            lots_by_art[aid][batch] = {"qty": 0.0, "price": 0.0}
+                        lots_by_art[aid][batch]["qty"] += data["qty"]
+                        if data["price"] > 0:
+                            lots_by_art[aid][batch]["price"] = data["price"]
 
+            for item_row in items_no_lots:
+                item_id   = (item_row.get("Item") or {}).get("ID")
+                item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
+                item_name = item_row.get("ItemName", "") or ""
+                item_code = item_row.get("ItemCode", "") or ""
+                total_qty = float(item_row.get("Quantity") or 0)
+                lots      = lots_by_art.get(item_id)
+                if not lots or not item_id:
+                    continue
+                lots_sorted = sorted(lots.items(), key=lambda kv: _lot_date(kv[0]), reverse=True)
+                remaining   = round(float(total_qty), 3)
+                for batch, data in lots_sorted:
+                    if remaining <= 0:
+                        break
+                    assigned = round(min(data["qty"], remaining), 3)
+                    if assigned <= 0.001:
+                        continue
+                    remaining = round(remaining - assigned, 3)
+                    result.append({
+                        "Item":              {"ID": item_id},
+                        "ItemName":          item_name,
+                        "ItemCode":          item_code,
+                        "BatchNumber":       batch,
+                        "Quantity":          assigned,
+                        "UnitOfMeasurement": item_unit,
+                        "Price":             data.get("price", 0),
+                    })
     return result
-
-
-def _fallback_pl_is(cli, wh_id):
-    return []
-
-
-
-
-
-def _fallback_pl_is(cli, wh_id):
-    """Ni vec potreben."""
-    return []
-
-
-
-def _fallback_pl_is(cli, wh_id):
-    """Ni vec potreben - FIFO rebalancing pokriva vse primere."""
-    return []
-
-
-
-def _fallback_pl_is(cli, wh_id):
-    """Fallback: P/L-IS z batch->artikel popravkom (ce /stocks ne vraca lotov)."""
-    from datetime import datetime, timedelta
-    from collections import defaultdict
-
-    lot_qty          = defaultdict(lambda: defaultdict(float))
-    lot_price        = defaultdict(lambda: defaultdict(float))
-    batch_to_article = {}
-    item_info        = {}
-
-    date_from_pl = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
-    page = 1
-    while True:
-        try:
-            data = cli._get("/stockentry", params={
-                "StockEntryType": "P", "StockEntrySubtype": "L",
-                "Status": "P", "DateFrom": date_from_pl,
-                "CurrentPage": page, "PageSize": 50,
-            })
-            rows = data.get("Rows", [])
-            if not rows:
-                break
-            for entry in rows:
-                eid = entry.get("StockEntryId")
-                if not eid:
-                    continue
-                try:
-                    detail = cli.get_entry_detail(eid)
-                    for row in (detail.get("StockEntryRows") or []):
-                        wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                        if str(wh_to) != str(wh_id):
-                            continue
-                        item_id = (row.get("Item") or {}).get("ID")
-                        batch   = row.get("BatchNumber", "") or ""
-                        qty     = float(row.get("Quantity") or 0)
-                        price   = float(row.get("Price") or 0)
-                        if not item_id or not batch or qty <= 0:
-                            continue
-                        lot_qty[item_id][batch] += qty
-                        batch_to_article[batch] = item_id
-                        if price > 0:
-                            lot_price[item_id][batch] = price
-                        if item_id not in item_info:
-                            item_info[item_id] = {
-                                "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
-                                "ItemCode":          row.get("ItemCode", "") or "",
-                                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
-                            }
-                except Exception:
-                    continue
-            total   = data.get("TotalRows", 0)
-            fetched = (page - 1) * 50 + len(rows)
-            if fetched >= total:
-                break
-            page += 1
-        except Exception:
-            break
-
-    date_from_is = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
-    page = 1
-    while True:
-        try:
-            data = cli._get("/stockentry", params={
-                "StockEntryType": "I", "StockEntrySubtype": "S",
-                "Status": "P", "DateFrom": date_from_is,
-                "CurrentPage": page, "PageSize": 50,
-            })
-            rows = data.get("Rows", [])
-            if not rows:
-                break
-            for entry in rows:
-                eid = entry.get("StockEntryId")
-                if not eid:
-                    continue
-                try:
-                    detail = cli.get_entry_detail(eid)
-                    for row in (detail.get("StockEntryRows") or []):
-                        wh_from = (row.get("WarehouseFrom") or {}).get("ID")
-                        if str(wh_from) != str(wh_id):
-                            continue
-                        item_id_on_is = (row.get("Item") or {}).get("ID")
-                        batch         = row.get("BatchNumber", "") or ""
-                        qty           = float(row.get("Quantity") or 0)
-                        if not batch or qty <= 0:
-                            continue
-                        original = batch_to_article.get(batch, item_id_on_is)
-                        lot_qty[original][batch] -= qty
-                except Exception:
-                    continue
-            total   = data.get("TotalRows", 0)
-            fetched = (page - 1) * 50 + len(rows)
-            if fetched >= total:
-                break
-            page += 1
-        except Exception:
-            break
-
-    result = []
-    for item_id, batches in lot_qty.items():
-        info = item_info.get(item_id, {})
-        for batch, qty in batches.items():
-            if qty > 0.001:
-                result.append({
-                    "Item":              {"ID": item_id},
-                    "ItemName":          info.get("ItemName", ""),
-                    "ItemCode":          info.get("ItemCode", "") or "",
-                    "BatchNumber":       batch,
-                    "Quantity":          round(qty, 3),
-                    "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
-                    "Price":             lot_price.get(item_id, {}).get(batch, 0),
-                })
-    return result
-
 
 
 def render():
     st.caption("Avtomatska FIFO dodelitev serij za maloprodajne dokumente v Minimaxu")
 
-    # ── Stranska vrstica ──────────────────────────────────────────────────────────────────────────────
+    # Stranska vrstica
     with st.sidebar:
-        st.header("⚙️ Nastavitve API")
+        st.header("\u2699\ufe0f Nastavitve API")
 
         def _secret(key, default=""):
             try:
@@ -389,18 +294,18 @@ def render():
             st.session_state["client_id"]     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID", "OltreCon"))
             st.session_state["client_secret"] = st.text_input("Client Secret",    value=_secret("MINIMAX_CLIENT_SECRET", ""), type="password")
             st.caption("Podatki uporabnika:")
-            st.session_state["username"]      = st.text_input("Uporabniško ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
+            st.session_state["username"]      = st.text_input("Uporabni\u0161ko ime",  value=_secret("MINIMAX_USERNAME", "Agent-hub"))
             st.session_state["password"]      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD", ""), type="password")
             st.caption("Organizacija:")
             st.session_state["org_id"]        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID", "171038"))
 
         st.divider()
 
-        with st.expander("Kode skladišč", expanded=True):
-            st.session_state["wh_mpk1"] = st.text_input("MPK1 — Potujоča 1",  value=_secret("WH_MPK1", "MP-K1"))
-            st.session_state["wh_mpk2"] = st.text_input("MPK2 — Potujоča 2",  value=_secret("WH_MPK2", "MP-K2"))
-            st.session_state["wh_mpk3"] = st.text_input("MPK3 — Potujоča 3",  value=_secret("WH_MPK3", "MP-K3"))
-            st.session_state["wh_mpoc"] = st.text_input("MPOC — Ribarnica Domžale", value=_secret("WH_MPOC", "MP-RD"))
+        with st.expander("Kode skladi\u0161\u010d", expanded=True):
+            st.session_state["wh_mpk1"] = st.text_input("MPK1 \u2014 Potujо\u010da 1",  value=_secret("WH_MPK1", "MP-K1"))
+            st.session_state["wh_mpk2"] = st.text_input("MPK2 \u2014 Potujо\u010da 2",  value=_secret("WH_MPK2", "MP-K2"))
+            st.session_state["wh_mpk3"] = st.text_input("MPK3 \u2014 Potujо\u010da 3",  value=_secret("WH_MPK3", "MP-K3"))
+            st.session_state["wh_mpoc"] = st.text_input("MPOC \u2014 Ribarnica Dom\u017eale", value=_secret("WH_MPOC", "MP-RD"))
 
         st.divider()
 
@@ -411,16 +316,16 @@ def render():
             st.session_state["an_mpoc"] = st.text_input("Analytic koda MPOC", value=_secret("AN_MPOC", "MPOC"))
 
         st.divider()
-        if st.button("🔍 Poišči ID-je analitik avtomatsko"):
+        if st.button("\U0001f50d Poi\u0161\u010di ID-je analitik avtomatsko"):
             st.session_state["auto_find_analytics"] = True
-        if st.button("🔍 Poišči ID-je skladišč avtomatsko"):
+        if st.button("\U0001f50d Poi\u0161\u010di ID-je skladi\u0161\u010d avtomatsko"):
             st.session_state["auto_find_warehouses"] = True
-        if st.button("🔧 Diagnostika lotov (MPK2)"):
+        if st.button("\U0001f527 Diagnostika lotov (MPK2)"):
             st.session_state["diagnose_lots"] = True
         debug_loc = st.selectbox("Debug zaloge za:", ["MPK1","MPK2","MPK3","MPOC"], index=1, key="debug_loc_sel")
-        if st.button("🔍 Debug zaloge"):
+        if st.button("\U0001f50d Debug zaloge"):
             st.session_state["debug_stock"] = True
-        if st.button("🗑️ Počisti cache zaloge"):
+        if st.button("\U0001f5d1\ufe0f Po\u010disti cache zaloge"):
             for k in list(st.session_state.keys()):
                 if k.startswith("stock_cache_") or k == "item_units_cache":
                     del st.session_state[k]
@@ -429,15 +334,15 @@ def render():
                 _get_pl_historical_cached.clear()
             except Exception:
                 pass
-            st.sidebar.success("Cache počiščen!")
+            st.sidebar.success("Cache po\u010di\u0161\u010den!")
 
-    # ── Sidebar akcije ────────────────────────────────────────────────────────────────────────────
+    # Sidebar akcije
     if st.session_state.get("auto_find_analytics") and check_config():
         st.session_state.pop("auto_find_analytics")
-        with st.spinner("Iščem analitike ..."):
+        with st.spinner("I\u0161\u010dem analitike ..."):
             try:
                 rows = get_client().get_analytics()
-                st.sidebar.success("✅ Analitike najdene!")
+                st.sidebar.success("\u2705 Analitike najdene!")
                 st.sidebar.dataframe(pd.DataFrame([{
                     "Koda": r.get("Code",""), "Naziv": r.get("Name",""), "Analytic ID": r.get("AnalyticId","")
                 } for r in rows]), use_container_width=True)
@@ -450,7 +355,7 @@ def render():
         with st.spinner("Diagnostika ..."):
             try:
                 diag = get_client().diagnose_lots(get_wh_id("MPK2"))
-                st.sidebar.success(f"✅ WH ID: {diag['warehouse_id']}")
+                st.sidebar.success(f"\u2705 WH ID: {diag['warehouse_id']}")
                 if diag['found']:
                     for f in diag['found']:
                         st.sidebar.write(f"Tip {f['type']}: lot={f['batch']}, wh_from={f['wh_from']}, wh_to={f['wh_to']}")
@@ -464,56 +369,47 @@ def render():
         _dloc = st.session_state.get("debug_loc_sel", "MPK2")
         with st.spinner(f"Berem zalogo {_dloc} ..."):
             try:
-                cli   = get_client()
-                wh    = get_wh_id(_dloc)
-                raw   = cli.get_stock_by_lots(wh)
-                has_lots = any(r.get("BatchNumber") for r in raw)
+                cli      = get_client()
+                wh       = get_wh_id(_dloc)
+                raw      = cli.get_stock_by_lots(wh)
                 st.sidebar.write(f"Lokacija: {_dloc} | WH ID: `{wh}`")
-                st.sidebar.write(f"/stocks vraca: {len(raw)} vrstic, loti (BatchNumber): {has_lots}")
-                if has_lots:
-                    sample = [r for r in raw if r.get("BatchNumber")][:8]
-                    for s in sample:
-                        st.sidebar.write(f"  {s.get('ItemName','')[:30]} | {s.get('BatchNumber')} | {s.get('Quantity')} {s.get('UnitOfMeasurement','')} | NC={s.get('Price',0)}")
-                    st.sidebar.info("✅ /stocks vraca lote — ground truth deluje!")
-                else:
-                    st.sidebar.warning("⚠️ /stocks ne vraca BatchNumber — bo aktiviran fallback P/L-IS")
-                if not has_lots:
-                    items = cli.get_stock_for_items(wh, [])
-                    st.sidebar.write(f"get_stock_for_items: {len(items)} vrstic")
-                    sample = items[:5]
-                    for s in sample:
-                        st.sidebar.write(f"  {s.get('ItemName','')} | lot={s.get('BatchNumber')} | qty={s.get('Quantity')}")
-                    if not items:
-                        try:
-                            from datetime import timedelta
-                            date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
-                            data = cli._get("/stockentry", params={"StockEntryType":"P","StockEntrySubtype":"L","Status":"P","DateFrom":date_from,"CurrentPage":1,"PageSize":5})
-                            docs = data.get("Rows",[])
-                            st.sidebar.write(f"P/L dokumenti (60 dni): {data.get('TotalRows',0)}")
-                            if docs:
-                                d0 = cli.get_entry_detail(docs[0].get("StockEntryId"))
-                                r0 = (d0.get("StockEntryRows") or [{}])[0]
-                                st.sidebar.write(f"Prva vrstica: wh_from={((r0.get('WarehouseFrom') or {}).get('ID'))}, wh_to={((r0.get('WarehouseTo') or {}).get('ID'))}")
-                        except Exception as ex:
-                            st.sidebar.error(f"P/L debug napaka: {ex}")
+                st.sidebar.write(f"/stocks: {len(raw)} artiklov")
+                if raw:
+                    first = raw[0]
+                    fid   = (first.get("Item") or {}).get("ID")
+                    fname = first.get("ItemName", "")
+                    try:
+                        test  = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh})
+                        trows = test.get("Rows", []) if isinstance(test, dict) else (test if isinstance(test, list) else [])
+                        has_b = any(
+                            r.get("BatchNumber") or r.get("Serija") or r.get("SerialNumber")
+                            for r in (trows if trows else ([test] if isinstance(test, dict) else []))
+                        )
+                        st.sidebar.write(f"/stocks/{fid} ({fname[:25]}): {len(trows)} vrstic, loti: {has_b}")
+                        if trows:
+                            st.sidebar.json(trows[0])
+                        elif isinstance(test, dict):
+                            st.sidebar.json(test)
+                    except Exception as ex:
+                        st.sidebar.error(f"/stocks/itemId napaka: {ex}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
     if st.session_state.get("auto_find_warehouses") and check_config():
         st.session_state.pop("auto_find_warehouses")
-        with st.spinner("Iščem skladišča ..."):
+        with st.spinner("I\u0161\u010dem skladi\u0161\u010da ..."):
             try:
                 rows = get_client().get_warehouses()
-                st.sidebar.success("✅ Skladišča najdena!")
+                st.sidebar.success("\u2705 Skladi\u0161\u010da najdena!")
                 st.sidebar.dataframe(pd.DataFrame([{
                     "Naziv": r.get("Name",""), "Koda": r.get("Code",""), "Warehouse ID": r.get("WarehouseId") or r.get("ID","")
                 } for r in rows]), use_container_width=True)
-                st.sidebar.caption("Poiščite MPK1/MPK2/MPK3/MPOC in prekopirajte ID-je v polja zgoraj.")
+                st.sidebar.caption("Poi\u0161\u010dite MPK1/MPK2/MPK3/MPOC in prekopirajte ID-je v polja zgoraj.")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
-    # ── Tabs za lokacije ────────────────────────────────────────────────────────────────────────
-    tabs     = st.tabs(["🚐 MPK1 — Potujоča 1", "🚐 MPK2 — Potujоča 2", "🚐 MPK3 — Potujоča 3", "🏪 MPOC — Ribarnica Domžale"])
+    # Tabs za lokacije
+    tabs     = st.tabs(["\U0001f690 MPK1 \u2014 Potujо\u010da 1", "\U0001f690 MPK2 \u2014 Potujо\u010da 2", "\U0001f690 MPK3 \u2014 Potujо\u010da 3", "\U0001f3ea MPOC \u2014 Ribarnica Dom\u017eale"])
     LOC_KEYS = ["MPK1", "MPK2", "MPK3", "MPOC"]
 
     for tab, loc_key in zip(tabs, LOC_KEYS):
@@ -526,9 +422,9 @@ def render():
             with col1:
                 st.subheader(loc_name)
             with col2:
-                find_btn = st.button("🔍 Poišči osnutke", key=f"find_{loc_key}", use_container_width=True)
+                find_btn = st.button("\U0001f50d Poi\u0161\u010di osnutke", key=f"find_{loc_key}", use_container_width=True)
             with col3:
-                if st.button("🗑️ Počisti cache", key=f"clear_{loc_key}", use_container_width=True):
+                if st.button("\U0001f5d1\ufe0f Po\u010disti cache", key=f"clear_{loc_key}", use_container_width=True):
                     try:
                         _get_stock_cached.clear()
                         _get_pl_historical_cached.clear()
@@ -538,12 +434,12 @@ def render():
                         if k.startswith("stock_cache_") or k == "item_units_cache":
                             del st.session_state[k]
                     st.session_state.pop(f"multi_result_{loc_key}", None)
-                    st.success("Cache počiščen!")
+                    st.success("Cache po\u010di\u0161\u010den!")
 
             if find_btn:
                 if not check_config(): st.stop()
                 if an_id == 0:
-                    with st.spinner("Iščem analitike..."):
+                    with st.spinner("I\u0161\u010dem analitike..."):
                         try:
                             resolve_ids.clear()
                             an_id = get_an_id(loc_key)
@@ -551,7 +447,7 @@ def render():
                 if an_id == 0:
                     st.error("Ne najdem analitike. Preverite kodo v nastavitvah.")
                     st.stop()
-                with st.spinner("Iščem osnutke dokumentov ..."):
+                with st.spinner("I\u0161\u010dem osnutke dokumentov ..."):
                     try:
                         drafts = get_client().get_draft_entries(an_id)
                         st.session_state[f"drafts_{loc_key}"] = drafts
@@ -561,26 +457,26 @@ def render():
 
             drafts = st.session_state.get(f"drafts_{loc_key}", None)
             if drafts is None:
-                st.info("Kliknite 'Poišči osnutke' za prikaz čakajočih dokumentov.")
+                st.info("Kliknite 'Poi\u0161\u010di osnutke' za prikaz \u010dakajo\u010dih dokumentov.")
                 continue
             if not drafts:
-                st.success("✅ Ni čakajočih osnutkov za to lokacijo.")
+                st.success("\u2705 Ni \u010dakajo\u010dih osnutkov za to lokacijo.")
                 continue
 
             st.write(f"Najdenih **{len(drafts)}** osnutkov:")
-            st.caption("Izberite dokumente za obdelavo (kronološki vrstni red):")
-            select_all = st.checkbox("☑ Izberi vse", key=f"sel_all_{loc_key}", value=True)
+            st.caption("Izberite dokumente za obdelavo (kronolo\u0161ki vrstni red):")
+            select_all = st.checkbox("\u2611 Izberi vse", key=f"sel_all_{loc_key}", value=True)
 
             selected_ids = []
             for d in sorted(drafts, key=lambda x: str(x.get("Date",""))):
-                label  = f"IS-{d.get('Number','?')}"+" — "+str(d.get('Date',''))[:10]
+                label  = f"IS-{d.get('Number','?')} \u2014 {str(d.get('Date',''))[:10]}"
                 cb_key = f"cb_{loc_key}_{d.get('StockEntryId')}"
                 if st.checkbox(label, key=cb_key, value=select_all):
                     selected_ids.append(d.get("StockEntryId"))
 
             st.divider()
             run_btn = st.button(
-                f"⚡ Obdelaj vse označene osnutke ({len(selected_ids)})",
+                f"\u26a1 Obdelaj vse ozna\u010dene osnutke ({len(selected_ids)})",
                 key=f"run_{loc_key}", type="primary",
                 use_container_width=True, disabled=len(selected_ids) == 0,
             )
@@ -589,9 +485,8 @@ def render():
                 if wh_id == 0:
                     st.error("Vnesite Warehouse kodo za to lokacijo v nastavitvah.")
                     st.stop()
-                with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... ⏳"):
+                with st.spinner(f"Berem zalogo in obdelujem {len(selected_ids)} dokumentov ... \u23f3"):
                     try:
-                        # Cache client v session (izognemo se novemu token requestu)
                         if "cached_client" not in st.session_state:
                             st.session_state["cached_client"] = get_client()
                         cli = st.session_state["cached_client"]
@@ -609,7 +504,6 @@ def render():
                             for l in dl:
                                 if l.get("article_id"): all_item_ids.add(l["article_id"])
 
-                        # Cache item_units v session da ne kličemo API vsakič
                         if "item_units_cache" not in st.session_state:
                             st.session_state["item_units_cache"] = {}
                         missing = [i for i in all_item_ids if i not in st.session_state["item_units_cache"]]
@@ -620,19 +514,14 @@ def render():
                         for eid in sorted_ids:
                             all_doc_lines[eid] = parse_entry_to_lines(all_entry_data[eid], item_units)
 
-                        # Razreši numerični warehouse ID (koda "MP-K2" → numerični 27421)
-                        # Cachirana zaloga (15 min) — get_stock_for_items se kliče samo enkrat
-                        username = st.session_state.get("username", "")
-                        org_id   = st.session_state.get("org_id", "171038")
+                        username  = st.session_state.get("username", "")
+                        org_id    = st.session_state.get("org_id", "171038")
                         stock_raw = _get_stock_cached(username, org_id, wh_id)
-                        stock = parse_stock_to_engine_format(stock_raw)
+                        stock     = parse_stock_to_engine_format(stock_raw)
 
                         shared_virtual = {key: [lot.copy() for lot in data["lots"]] for key, data in stock.items()}
                         all_results    = {}
-
-                        # Za vsak artikel shrani datum ZADNJEGA dokumenta kjer se pojavi
-                        # article_dates: {article_id: datetime}
-                        article_dates   = {}
+                        article_dates  = {}
                         doc_article_ids = set()
 
                         for eid in sorted_ids:
@@ -651,7 +540,6 @@ def render():
                                 aid = l.get("article_id")
                                 if aid:
                                     doc_article_ids.add(aid)
-                                    # Posodobi na najnovejši datum za ta artikel
                                     if aid not in article_dates or doc_date > article_dates[aid]:
                                         article_dates[aid] = doc_date
 
@@ -662,9 +550,11 @@ def render():
                         )
 
                         st.session_state[f"multi_result_{loc_key}"] = {
-                            "sorted_ids": sorted_ids, "all_results": all_results,
-                            "all_entry_data": all_entry_data,
-                            "old_lot_warnings": old_lot_warnings, "drafts": drafts,
+                            "sorted_ids":       sorted_ids,
+                            "all_results":      all_results,
+                            "all_entry_data":   all_entry_data,
+                            "old_lot_warnings": old_lot_warnings,
+                            "drafts":           drafts,
                         }
                     except Exception as e:
                         st.error(f"Napaka pri obdelavi: {e}")
@@ -679,7 +569,8 @@ def render():
                 drafts_map     = {d.get("StockEntryId"): d for d in multi_res["drafts"]}
 
                 def row_color(s):
-                    return {"ok":"🟢","matched":"🟡","partial":"🟠","no_match":"🔴","no_lots":"🔴","writeoff":"📤"}.get(s,"⚪")
+                    return {"ok":"\U0001f7e2","matched":"\U0001f7e1","partial":"\U0001f7e0",
+                            "no_match":"\U0001f534","no_lots":"\U0001f534","writeoff":"\U0001f4e4"}.get(s,"\u26aa")
 
                 total_ok      = sum(len([l for l in r if l["status"]=="ok"])                    for r in all_results.values())
                 total_matched = sum(len([l for l in r if l["status"]=="matched"])                for r in all_results.values())
@@ -687,29 +578,23 @@ def render():
                 total_none    = sum(len([l for l in r if l["status"] in ("no_match","no_lots")]) for r in all_results.values())
 
                 c1,c2,c3,c4 = st.columns(4)
-                c1.metric("✅ Točno ujemanje",    total_ok)
-                c2.metric("🔄 Pametna zamenjava", total_matched)
-                c3.metric("⚠️ Delno pokrito",     total_partial)
-                c4.metric("❌ Brez lota",          total_none)
+                c1.metric("\u2705 To\u010dno ujemanje",    total_ok)
+                c2.metric("\U0001f504 Pametna zamenjava", total_matched)
+                c3.metric("\u26a0\ufe0f Delno pokrito",   total_partial)
+                c4.metric("\u274c Brez lota",             total_none)
 
-                # Pripravi Excel za vse dodeljene lote
                 all_lots_rows = []
                 for eid in sorted_ids:
-                    lines = all_results[eid]
-                    d     = drafts_map.get(eid, {})
+                    lines    = all_results[eid]
+                    d        = drafts_map.get(eid, {})
                     doc_num  = f"IS-{d.get('Number','?')}"
                     doc_date = str(d.get('Date',''))[:10]
                     for l in lines:
                         all_lots_rows.append({
-                            "Analitika":  loc_key,
-                            "Dokument":   doc_num,
-                            "Datum":      doc_date,
-                            "Artikel":    l["article_name"],
-                            "Kol.":       l["quantity_assigned"],
-                            "ME":         l.get("unit",""),
-                            "Lot":        l.get("lot") or "—",
-                            "Status":     l["status"],
-                            "Opis":       l.get("opis") or "",
+                            "Analitika": loc_key, "Dokument": doc_num, "Datum": doc_date,
+                            "Artikel":   l["article_name"], "Kol.": l["quantity_assigned"],
+                            "ME":        l.get("unit",""), "Lot": l.get("lot") or "\u2014",
+                            "Status":    l["status"], "Opis": l.get("opis") or "",
                         })
 
                 if all_lots_rows:
@@ -717,7 +602,7 @@ def render():
                     buf_lots = io.BytesIO()
                     pd.DataFrame(all_lots_rows).to_excel(buf_lots, index=False, engine="openpyxl")
                     st.download_button(
-                        label="⬇️ Prenesi seznam lotov (Excel)",
+                        label="\u2b07\ufe0f Prenesi seznam lotov (Excel)",
                         data=buf_lots.getvalue(),
                         file_name=f"loti_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -727,18 +612,17 @@ def render():
                 for eid in sorted_ids:
                     lines = all_results[eid]
                     d     = drafts_map.get(eid, {})
-                    label = f"IS-{d.get('Number','?')}"+" — "+str(d.get('Date',''))[:10]
+                    label = f"IS-{d.get('Number','?')} \u2014 {str(d.get('Date',''))[:10]}"
                     no_lot_count = len([l for l in lines if l["status"] in ("no_match","no_lots","partial")])
-                    icon = "✅" if no_lot_count == 0 else "⚠️"
+                    icon = "\u2705" if no_lot_count == 0 else "\u26a0\ufe0f"
                     with st.expander(f"{icon} {label}  ({len(lines)} vrstic)", expanded=(no_lot_count > 0)):
                         df_r = pd.DataFrame([{
                             "": row_color(l["status"]), "Artikel": l["article_name"],
                             "Kol.": l["quantity_assigned"], "ME": l["unit"],
-                            "Lot": l.get("lot") or "—", "Opis": l.get("opis") or "",
+                            "Lot": l.get("lot") or "\u2014", "Opis": l.get("opis") or "",
                         } for l in lines])
                         st.dataframe(df_r, use_container_width=True, hide_index=True)
 
-                # Poročilo napak
                 error_rows = []
                 for eid in sorted_ids:
                     lines_e  = all_results[eid]
@@ -763,14 +647,14 @@ def render():
                             })
 
                 if error_rows:
-                    with st.expander(f"📋 Poročilo napak ({len(error_rows)} vrstic)", expanded=True):
+                    with st.expander(f"\U0001f4cb Poro\u010dilo napak ({len(error_rows)} vrstic)", expanded=True):
                         df_err = pd.DataFrame(error_rows)
                         st.dataframe(df_err, use_container_width=True, hide_index=True)
                         import io
                         buf = io.BytesIO()
                         df_err.to_excel(buf, index=False, engine="openpyxl")
                         st.download_button(
-                            label="⬇️ Prenesi poročilo (Excel)",
+                            label="\u2b07\ufe0f Prenesi poro\u010dilo (Excel)",
                             data=buf.getvalue(),
                             file_name=f"napake_{loc_key}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -778,29 +662,28 @@ def render():
 
                 old_lots = multi_res.get("old_lot_warnings", [])
                 if old_lots:
-                    with st.expander(f"⏰ Stari loti na zalogi ({len(old_lots)} opozoril)"):
+                    with st.expander(f"\u23f0 Stari loti na zalogi ({len(old_lots)} opozoril)"):
                         df_old = pd.DataFrame([{
-                            "Artikel":   w["article"],
-                            "Lot":       w["lot"],
+                            "Artikel":   w["article"], "Lot": w["lot"],
                             "Dni star":  w["days_old"],
                             "Qty":       f"{w['qty']} {w['unit']}",
                             "Opozorilo": w["warning"],
                         } for w in old_lots])
                         st.dataframe(df_old, use_container_width=True, hide_index=True)
-                        st.caption("Starost lota je računana na datum zadnjega dokumenta kjer se artikel pojavi.")
+                        st.caption("Starost lota je ra\u010dunana na datum zadnjega dokumenta kjer se artikel pojavi.")
 
                 if total_partial + total_none > 0:
-                    st.warning(f"⚠️ {total_partial + total_none} vrstic(a) brez lota. Preverite ročno pred potrditvijo.")
+                    st.warning(f"\u26a0\ufe0f {total_partial + total_none} vrstic(a) brez lota. Preverite ro\u010dno pred potrditvijo.")
 
                 st.divider()
                 col_save, col_cancel = st.columns(2)
                 with col_save:
                     save_all_btn = st.button(
-                        f"💾 Shrani vse v Minimax ({len(sorted_ids)} dokumentov)",
+                        f"\U0001f4be Shrani vse v Minimax ({len(sorted_ids)} dokumentov)",
                         key=f"save_all_{loc_key}", type="primary", use_container_width=True,
                     )
                 with col_cancel:
-                    cancel_btn = st.button("✖ Zavrzi rezultate", key=f"cancel_multi_{loc_key}", use_container_width=True)
+                    cancel_btn = st.button("\u2716 Zavrzi rezultate", key=f"cancel_multi_{loc_key}", use_container_width=True)
 
                 if cancel_btn:
                     del st.session_state[f"multi_result_{loc_key}"]
@@ -821,24 +704,21 @@ def render():
                                         new_rows=rows,
                                     )
                                     saved += 1
-                                    st.write(f"✅ {doc_label} shranjen")
+                                    st.write(f"\u2705 {doc_label} shranjen")
                                 except Exception as e:
-                                    import traceback
                                     errors.append(f"{doc_label}: {e}")
                                     st.error(f"Napaka {doc_label}: {e}")
                                     st.code(traceback.format_exc())
                         except Exception as e:
-                            import traceback
                             st.error(f"Napaka pri povezavi: {e}")
                             st.code(traceback.format_exc())
                         if saved > 0:
-                            st.success(f"✅ {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
+                            st.success(f"\u2705 {saved}/{len(sorted_ids)} dokumentov shranjenih v Minimax!")
                         for err in errors:
                             st.error(err)
-                        # Rerun samo če ni napak
                         if saved > 0 and not errors:
                             del st.session_state[f"multi_result_{loc_key}"]
                             st.session_state.pop(f"drafts_{loc_key}", None)
                             st.rerun()
                         elif errors:
-                            st.warning("⚠️ Napake pri shranjevanju — rezultati ostanejo prikazani.")
+                            st.warning("\u26a0\ufe0f Napake pri shranjevanju \u2014 rezultati ostanejo prikazani.")
