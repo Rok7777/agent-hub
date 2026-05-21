@@ -127,24 +127,20 @@ def _get_stock_cached(username, org_id, wh_id):
     if not items_raw:
         return []
 
-    # ── Korak 2: /stocks/{itemId} -> per-lot podatki ──────────────────────────
-    result         = []
-    items_no_lots  = []  # artikli brez lot podatkov -> fallback
+    # ── Korak 2: /stocks/{itemId} -> per-lot podatki (vzporedni klici) ─────────
+    result        = []
+    items_no_lots = []
 
-    for item_row in items_raw:
+    def _fetch_item_lots(item_row):
+        """Pokliče /stocks/{itemId} za en artikel. Vrne (lots, item_row_or_None)."""
         item_id   = (item_row.get("Item") or {}).get("ID")
         item_name = item_row.get("ItemName", "") or ""
         item_code = item_row.get("ItemCode", "") or ""
         item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
-        item_qty  = float(item_row.get("Quantity") or 0)
-
         if not item_id:
-            continue
-
+            return [], None
         try:
             lot_data = cli._get(f"/stocks/{item_id}", params={"WarehouseId": wh_id})
-
-            # Parsaj odgovor - razlicni mozni formati
             rows = []
             if isinstance(lot_data, list):
                 rows = lot_data
@@ -153,25 +149,20 @@ def _get_stock_cached(username, org_id, wh_id):
                         lot_data.get("Items") or [])
                 if not rows:
                     rows = [lot_data]
-
-            item_lots_found = []
+            found = []
             for row in rows:
-                # Filtriraj po skladiscu (ce response vsebuje warehouse info)
                 row_wh = ((row.get("Warehouse") or {}).get("ID") or
                           (row.get("Skladisce") or {}).get("ID"))
                 if row_wh and str(row_wh) != str(wh_id):
                     continue
-
-                # Batch/lot koda - poskusi vsa mozna polja
                 batch = (row.get("BatchNumber") or row.get("Serija") or
                          row.get("SerialNumber") or row.get("LotNumber") or
                          row.get("BatchNo") or "")
                 qty   = float(row.get("Quantity") or row.get("Kolicina") or 0)
                 price = float(row.get("Price") or row.get("AveragePrice") or
                               row.get("Cena") or 0)
-
                 if batch and qty > 0.001:
-                    item_lots_found.append({
+                    found.append({
                         "Item":              {"ID": item_id},
                         "ItemName":          item_name,
                         "ItemCode":          item_code,
@@ -180,15 +171,21 @@ def _get_stock_cached(username, org_id, wh_id):
                         "UnitOfMeasurement": item_unit,
                         "Price":             price,
                     })
-
-            if item_lots_found:
-                result.extend(item_lots_found)
-            else:
-                # /stocks/{itemId} ni vrnil lotov za ta artikel
-                items_no_lots.append(item_row)
-
+            if found:
+                return found, None
+            return [], item_row
         except Exception:
-            items_no_lots.append(item_row)
+            return [], item_row
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(_fetch_item_lots, row) for row in items_raw]
+        for future in concurrent.futures.as_completed(futures):
+            lots, fallback_row = future.result()
+            if lots:
+                result.extend(lots)
+            elif fallback_row is not None:
+                items_no_lots.append(fallback_row)
 
     # ── Fallback za artikle brez lotov: FIFO rebalancing ─────────────────────
     if items_no_lots:
