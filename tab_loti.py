@@ -165,9 +165,16 @@ def _get_stock_cached(username, org_id, wh_id):
                 })
         return found
 
-    # Quick test na 3 artiklih z krajsim timeoutom
+    # Sortiraj kandidate: ribe/morski artikli najprej (ti imajo lote)
+    LOT_KEYWORDS = ["LOSOS","SARD","BRANC","ORADA","POSTRV","LIGNJI","OSLIČ",
+                    "OSLIC","TUNA","KOZICE","ŠKAMPI","HOBOTNICA","SKAMPI"]
+    sorted_candidates = sorted(
+        items_raw,
+        key=lambda r: 0 if any(kw in (r.get("ItemName","") or "").upper() for kw in LOT_KEYWORDS) else 1
+    )
+
     endpoint_works = False
-    for test_row in items_raw[:3]:
+    for test_row in sorted_candidates[:5]:
         test_id = (test_row.get("Item") or {}).get("ID")
         if not test_id:
             continue
@@ -405,23 +412,39 @@ def render():
                 st.sidebar.write(f"Lokacija: {_dloc} | WH ID: `{wh}`")
                 st.sidebar.write(f"/stocks: {len(raw)} artiklov")
                 if raw:
-                    first = raw[0]
-                    fid   = (first.get("Item") or {}).get("ID")
-                    fname = first.get("ItemName", "")
-                    try:
-                        test  = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh})
-                        trows = test.get("Rows", []) if isinstance(test, dict) else (test if isinstance(test, list) else [])
-                        has_b = any(
-                            r.get("BatchNumber") or r.get("Serija") or r.get("SerialNumber")
-                            for r in (trows if trows else ([test] if isinstance(test, dict) else []))
-                        )
-                        st.sidebar.write(f"/stocks/{fid} ({fname[:25]}): {len(trows)} vrstic, loti: {has_b}")
-                        if trows:
-                            st.sidebar.json(trows[0])
-                        elif isinstance(test, dict):
-                            st.sidebar.json(test)
-                    except Exception as ex:
-                        st.sidebar.error(f"/stocks/itemId napaka: {ex}")
+                    # Testiraj vec artiklov - najprej tisti ki bi morali imeti lote
+                    test_candidates = [r for r in raw if any(
+                        kw in (r.get("ItemName","") or "").upper()
+                        for kw in ["LOSOS","SARD","BRANC","ORADA","POSTRV","LIGNJI"]
+                    )] or raw
+                    for test_row in test_candidates[:3]:
+                        fid   = (test_row.get("Item") or {}).get("ID")
+                        fname = test_row.get("ItemName", "")
+                        if not fid:
+                            continue
+                        try:
+                            test  = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh})
+                            # Razlicni mozni formati odgovora
+                            if isinstance(test, list):
+                                trows = test
+                            elif isinstance(test, dict):
+                                trows = (test.get("Rows") or test.get("rows") or
+                                         test.get("Items") or [])
+                                if not trows:
+                                    trows = [test]
+                            else:
+                                trows = []
+                            has_b = any(
+                                r.get("BatchNumber") or r.get("Serija") or r.get("SerialNumber")
+                                for r in trows
+                            )
+                            st.sidebar.write(f"/stocks/{fid} ({fname[:30]}): {len(trows)} vrstic, loti: {has_b}")
+                            st.sidebar.json(trows[0] if trows else test)
+                            if has_b:
+                                st.sidebar.success("Endpoint vraca lote!")
+                                break
+                        except Exception as ex:
+                            st.sidebar.error(f"/stocks/{fid} napaka: {ex}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
