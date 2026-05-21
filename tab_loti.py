@@ -130,61 +130,91 @@ def _get_stock_cached(username, org_id, wh_id):
     if not items_raw:
         return []
 
-    # Korak 2: /stocks/{itemId} -> per-lot podatki (5 vzporednih klicev)
-    def _fetch_item_lots(item_row):
-        item_id   = (item_row.get("Item") or {}).get("ID")
-        item_name = item_row.get("ItemName", "") or ""
-        item_code = item_row.get("ItemCode", "") or ""
-        item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
-        if not item_id:
-            return [], None
+    # Korak 2: Quick test - ali /stocks/{itemId} sploh vraca lote?
+    # Preizkusimo 3 artikle. Ce nobeden ne vrne lotov -> preskoci 209 klicev.
+    def _parse_lots_from_response(lot_data, item_id, item_name, item_code, item_unit):
+        rows = []
+        if isinstance(lot_data, list):
+            rows = lot_data
+        elif isinstance(lot_data, dict):
+            rows = (lot_data.get("Rows") or lot_data.get("rows") or
+                    lot_data.get("Items") or [])
+            if not rows:
+                rows = [lot_data]
+        found = []
+        for row in rows:
+            row_wh = ((row.get("Warehouse") or {}).get("ID") or
+                      (row.get("Skladisce") or {}).get("ID"))
+            if row_wh and str(row_wh) != str(wh_id):
+                continue
+            batch = (row.get("BatchNumber") or row.get("Serija") or
+                     row.get("SerialNumber") or row.get("LotNumber") or
+                     row.get("BatchNo") or "")
+            qty   = float(row.get("Quantity") or row.get("Kolicina") or 0)
+            price = float(row.get("Price") or row.get("AveragePrice") or
+                          row.get("Cena") or 0)
+            if batch and qty > 0.001:
+                found.append({
+                    "Item":              {"ID": item_id},
+                    "ItemName":          item_name,
+                    "ItemCode":          item_code,
+                    "BatchNumber":       batch,
+                    "Quantity":          qty,
+                    "UnitOfMeasurement": item_unit,
+                    "Price":             price,
+                })
+        return found
+
+    # Quick test na 3 artiklih z krajsim timeoutom
+    endpoint_works = False
+    for test_row in items_raw[:3]:
+        test_id = (test_row.get("Item") or {}).get("ID")
+        if not test_id:
+            continue
         try:
-            lot_data = cli._get(f"/stocks/{item_id}", params={"WarehouseId": wh_id})
-            rows = []
-            if isinstance(lot_data, list):
-                rows = lot_data
-            elif isinstance(lot_data, dict):
-                rows = (lot_data.get("Rows") or lot_data.get("rows") or
-                        lot_data.get("Items") or [])
-                if not rows:
-                    rows = [lot_data]
-            found = []
-            for row in rows:
-                row_wh = ((row.get("Warehouse") or {}).get("ID") or
-                          (row.get("Skladisce") or {}).get("ID"))
-                if row_wh and str(row_wh) != str(wh_id):
-                    continue
-                batch = (row.get("BatchNumber") or row.get("Serija") or
-                         row.get("SerialNumber") or row.get("LotNumber") or
-                         row.get("BatchNo") or "")
-                qty   = float(row.get("Quantity") or row.get("Kolicina") or 0)
-                price = float(row.get("Price") or row.get("AveragePrice") or
-                              row.get("Cena") or 0)
-                if batch and qty > 0.001:
-                    found.append({
-                        "Item":              {"ID": item_id},
-                        "ItemName":          item_name,
-                        "ItemCode":          item_code,
-                        "BatchNumber":       batch,
-                        "Quantity":          qty,
-                        "UnitOfMeasurement": item_unit,
-                        "Price":             price,
-                    })
-            return found, (None if found else item_row)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as tex:
+                fut = tex.submit(cli._get, f"/stocks/{test_id}", {"WarehouseId": wh_id})
+                test_data = fut.result(timeout=8)
+            test_lots = _parse_lots_from_response(
+                test_data, test_id,
+                test_row.get("ItemName",""), test_row.get("ItemCode",""),
+                test_row.get("UnitOfMeasurement","kg")
+            )
+            if test_lots:
+                endpoint_works = True
+                break
         except Exception:
-            return [], item_row
+            pass
 
     result        = []
-    items_no_lots = []
+    items_no_lots = list(items_raw)  # default: vse v fallback
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(_fetch_item_lots, row) for row in items_raw]
-        for future in concurrent.futures.as_completed(futures):
-            lots, fallback_row = future.result()
-            if lots:
-                result.extend(lots)
-            elif fallback_row is not None:
-                items_no_lots.append(fallback_row)
+    if endpoint_works:
+        # Endpoint dela -> klici za vse artikle
+        def _fetch_item_lots(item_row):
+            item_id   = (item_row.get("Item") or {}).get("ID")
+            item_name = item_row.get("ItemName", "") or ""
+            item_code = item_row.get("ItemCode", "") or ""
+            item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
+            if not item_id:
+                return [], None
+            try:
+                lot_data = cli._get(f"/stocks/{item_id}", params={"WarehouseId": wh_id})
+                found = _parse_lots_from_response(lot_data, item_id, item_name, item_code, item_unit)
+                return found, (None if found else item_row)
+            except Exception:
+                return [], item_row
+
+        items_no_lots = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(_fetch_item_lots, row) for row in items_raw]
+            for future in concurrent.futures.as_completed(futures):
+                lots, fallback_row = future.result()
+                if lots:
+                    result.extend(lots)
+                elif fallback_row is not None:
+                    items_no_lots.append(fallback_row)
+    # else: items_no_lots = vsi artikli -> pametni fallback spodaj
 
     # Korak 3: Pametni fallback
     if items_no_lots:
