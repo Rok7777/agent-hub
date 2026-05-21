@@ -17,10 +17,7 @@ from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
 def _scan_pl_for_lots(cli, wh_id, date_from, date_to_str=None):
-    """
-    Skenira P/L dokumente in vrne {article_id: {batch: {qty, price}}}.
-    date_to_str: ce podan (YYYY-MM-DD), preskoči dokumente na ali po tem datumu.
-    """
+    """P/L skeniranje - samo za cene (NC) kot fallback."""
     from collections import defaultdict
     lots   = defaultdict(lambda: defaultdict(lambda: {"qty": 0.0, "price": 0.0}))
     info   = {}
@@ -73,16 +70,15 @@ def _scan_pl_for_lots(cli, wh_id, date_from, date_to_str=None):
             page += 1
         except Exception:
             break
-    # Vrni kot navadne slovarje (za st.cache_data serializacijo)
     return {
         "lots": {aid: dict(batches) for aid, batches in lots.items()},
         "info": info,
     }
 
 
-@st.cache_data(ttl=86400, show_spinner=False)  # 24h — stari P/L se ne spremenijo
+@st.cache_data(ttl=86400, show_spinner=False)  # 24h
 def _get_pl_historical_cached(username, org_id, wh_id):
-    """P/L 61-365 dni nazaj. Cachet 24h ker se ne spremenijo."""
+    """P/L 61-365 dni - samo za cene. 24h cache."""
     from minimax_client import MinimaxClient
     from config import _secret
     from datetime import datetime, timedelta
@@ -92,24 +88,20 @@ def _get_pl_historical_cached(username, org_id, wh_id):
         client_secret=_secret("MINIMAX_CLIENT_SECRET", ""),
         org_id=int(org_id),
     )
-    now      = datetime.now()
-    d_from   = (now - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
-    d_to     = (now - timedelta(days=60)).strftime("%Y-%m-%d")
+    now    = datetime.now()
+    d_from = (now - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
+    d_to   = (now - timedelta(days=60)).strftime("%Y-%m-%d")
     return _scan_pl_for_lots(cli, wh_id, d_from, d_to)
 
 
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    FIFO REBALANCING:
-    1. /stocks per artikel  -> skupna realna zaloga (ground truth)
-       Zajame vse korekcije: Streamlit, rocne, inventura.
-    2. P/L (365 dni, split cache) -> kateri loti obstajajo + cene
-    3. FIFO: najstarejsi loti so prodani prvi -> polni od NAJNOVEJSEGA dokler
-       ni /stocks total izcrpan. Stari (porabljeni) loti dobijo 0.
+    DEFINITIVEN PRISTOP: /stocks/{itemId} za tocne per-lot podatke.
+    Minimax podpora potrjuje: GET /api/orgs/{orgId}/stocks/{itemId}
+    vraca serije/lote z dejanskimi kolicinami.
 
-    Prednost: /stocks vedno odraža realno stanje (vkljucno z rocnimi korekcijami).
-    Pogoj: prodaja je FIFO (kronološka) — kar je potrjeno.
+    Fallback: ce endpoint ne vraca lotov -> FIFO rebalancing.
     """
     from minimax_client import MinimaxClient
     from config import _secret
@@ -123,7 +115,6 @@ def _get_stock_cached(username, org_id, wh_id):
     )
 
     def _lot_date(code):
-        """Zadnjih 6 znakov = DDMMYY. Vrne datetime ali datetime.min."""
         if not code or len(code) < 6:
             return datetime.min
         try:
@@ -131,90 +122,127 @@ def _get_stock_cached(username, org_id, wh_id):
         except ValueError:
             return datetime.min
 
-    # ── /stocks: skupna realna zaloga per artikel ─────────────────────────────
-    stocks_raw   = cli.get_stock_by_lots(wh_id)
-    stocks_total = {}   # {article_id: total_qty}
-    item_info    = {}   # {article_id: {name, code, unit}}
-
-    for row in stocks_raw:
-        item_id = (row.get("Item") or {}).get("ID")
-        qty     = float(row.get("Quantity") or 0)
-        if not item_id or qty <= 0:
-            continue
-        stocks_total[item_id] = stocks_total.get(item_id, 0) + qty
-        if item_id not in item_info:
-            item_info[item_id] = {
-                "ItemName":          row.get("ItemName", "") or "",
-                "ItemCode":          row.get("ItemCode", "") or "",
-                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
-            }
-
-    if not stocks_total:
+    # ── Korak 1: /stocks -> seznam artiklov na zalogi ─────────────────────────
+    items_raw = cli.get_stock_by_lots(wh_id)
+    if not items_raw:
         return []
 
-    # ── P/L: historical (24h cache) + recent (svez, 60 dni) ──────────────────
-    hist   = _get_pl_historical_cached(username, org_id, wh_id)
-    d_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
-    recent = _scan_pl_for_lots(cli, wh_id, d_from)
+    # ── Korak 2: /stocks/{itemId} -> per-lot podatki ──────────────────────────
+    result         = []
+    items_no_lots  = []  # artikli brez lot podatkov -> fallback
 
-    # Merge: seštej količine, zadnja cena zmaga
-    lots_by_article = {}   # {article_id: {batch: {qty, price}}}
-    for src in [hist, recent]:
-        for aid, batches in src["lots"].items():
-            if aid not in lots_by_article:
-                lots_by_article[aid] = {}
-            for batch, data in batches.items():
-                if batch not in lots_by_article[aid]:
-                    lots_by_article[aid][batch] = {"qty": 0.0, "price": 0.0}
-                lots_by_article[aid][batch]["qty"] += data["qty"]
-                if data["price"] > 0:
-                    lots_by_article[aid][batch]["price"] = data["price"]
-        for aid, inf in src["info"].items():
-            if aid not in item_info:
-                item_info[aid] = inf
+    for item_row in items_raw:
+        item_id   = (item_row.get("Item") or {}).get("ID")
+        item_name = item_row.get("ItemName", "") or ""
+        item_code = item_row.get("ItemCode", "") or ""
+        item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
+        item_qty  = float(item_row.get("Quantity") or 0)
 
-    # ── FIFO rebalancing ──────────────────────────────────────────────────────
-    result = []
-
-    for item_id, total_qty in stocks_total.items():
-        lots = lots_by_article.get(item_id)
-        if not lots:
-            # Artikel je v zalogi ampak ni P/L lotov (starejsi od 365 dni)
-            # Engine bo javil no_lots — normalno za zelo stare zamrznjene
+        if not item_id:
             continue
 
-        # Sortiraj: NAJNOVEJSI lot najprej (FIFO = stari so ze prodani)
-        lots_sorted = sorted(
-            lots.items(),
-            key=lambda kv: _lot_date(kv[0]),
-            reverse=True
-        )
+        try:
+            lot_data = cli._get(f"/stocks/{item_id}", params={"WarehouseId": wh_id})
 
-        remaining = round(float(total_qty), 3)
-        info      = item_info.get(item_id, {})
+            # Parsaj odgovor - razlicni mozni formati
+            rows = []
+            if isinstance(lot_data, list):
+                rows = lot_data
+            elif isinstance(lot_data, dict):
+                rows = (lot_data.get("Rows") or lot_data.get("rows") or
+                        lot_data.get("Items") or [])
+                if not rows:
+                    rows = [lot_data]
 
-        for batch, data in lots_sorted:
-            if remaining <= 0:
-                break
-            assigned = round(min(data["qty"], remaining), 3)
-            if assigned <= 0.001:
+            item_lots_found = []
+            for row in rows:
+                # Filtriraj po skladiscu (ce response vsebuje warehouse info)
+                row_wh = ((row.get("Warehouse") or {}).get("ID") or
+                          (row.get("Skladisce") or {}).get("ID"))
+                if row_wh and str(row_wh) != str(wh_id):
+                    continue
+
+                # Batch/lot koda - poskusi vsa mozna polja
+                batch = (row.get("BatchNumber") or row.get("Serija") or
+                         row.get("SerialNumber") or row.get("LotNumber") or
+                         row.get("BatchNo") or "")
+                qty   = float(row.get("Quantity") or row.get("Kolicina") or 0)
+                price = float(row.get("Price") or row.get("AveragePrice") or
+                              row.get("Cena") or 0)
+
+                if batch and qty > 0.001:
+                    item_lots_found.append({
+                        "Item":              {"ID": item_id},
+                        "ItemName":          item_name,
+                        "ItemCode":          item_code,
+                        "BatchNumber":       batch,
+                        "Quantity":          qty,
+                        "UnitOfMeasurement": item_unit,
+                        "Price":             price,
+                    })
+
+            if item_lots_found:
+                result.extend(item_lots_found)
+            else:
+                # /stocks/{itemId} ni vrnil lotov za ta artikel
+                items_no_lots.append(item_row)
+
+        except Exception:
+            items_no_lots.append(item_row)
+
+    # ── Fallback za artikle brez lotov: FIFO rebalancing ─────────────────────
+    if items_no_lots:
+        # Pridobi lot info iz P/L (historical + recent)
+        hist   = _get_pl_historical_cached(username, org_id, wh_id)
+        d_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+        recent = _scan_pl_for_lots(cli, wh_id, d_from)
+
+        lots_by_art = {}
+        for src in [hist, recent]:
+            for aid, batches in src["lots"].items():
+                if aid not in lots_by_art:
+                    lots_by_art[aid] = {}
+                for batch, data in batches.items():
+                    if batch not in lots_by_art[aid]:
+                        lots_by_art[aid][batch] = {"qty": 0.0, "price": 0.0}
+                    lots_by_art[aid][batch]["qty"] += data["qty"]
+                    if data["price"] > 0:
+                        lots_by_art[aid][batch]["price"] = data["price"]
+
+        for item_row in items_no_lots:
+            item_id   = (item_row.get("Item") or {}).get("ID")
+            item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
+            item_name = item_row.get("ItemName", "") or ""
+            item_code = item_row.get("ItemCode", "") or ""
+            total_qty = float(item_row.get("Quantity") or 0)
+            lots      = lots_by_art.get(item_id)
+            if not lots or not item_id:
                 continue
-            remaining = round(remaining - assigned, 3)
-            result.append({
-                "Item":              {"ID": item_id},
-                "ItemName":          info.get("ItemName", ""),
-                "ItemCode":          info.get("ItemCode", "") or "",
-                "BatchNumber":       batch,
-                "Quantity":          assigned,
-                "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
-                "Price":             data.get("price", 0),
-            })
+            lots_sorted = sorted(lots.items(), key=lambda kv: _lot_date(kv[0]), reverse=True)
+            remaining   = round(float(total_qty), 3)
+            for batch, data in lots_sorted:
+                if remaining <= 0:
+                    break
+                assigned = round(min(data["qty"], remaining), 3)
+                if assigned <= 0.001:
+                    continue
+                remaining = round(remaining - assigned, 3)
+                result.append({
+                    "Item":              {"ID": item_id},
+                    "ItemName":          item_name,
+                    "ItemCode":          item_code,
+                    "BatchNumber":       batch,
+                    "Quantity":          assigned,
+                    "UnitOfMeasurement": item_unit,
+                    "Price":             data.get("price", 0),
+                })
 
     return result
 
 
 def _fallback_pl_is(cli, wh_id):
     return []
+
 
 
 
