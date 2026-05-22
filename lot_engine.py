@@ -353,9 +353,7 @@ def assign_lots(
             stock_key    = by_name.get(matched_name) or matched_name
             matched_note = note
 
-        name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
-        _is_seafood  = is_seafood(name_for_check)
-        check_name = name_for_check if _is_seafood else ""
+        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
         eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
         if not eligible:
@@ -366,8 +364,8 @@ def assign_lots(
             continue
 
         remaining   = qty_needed
-        assignments = []
-        fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood
+        fresh_art   = is_fresh_or_deli(name_for_check)
+        fresh_art   = is_fresh_or_deli(name_for_check)
 
         for lot in eligible:
             avail = round(lot['quantity'], 4)
@@ -521,9 +519,7 @@ def assign_lots_with_virtual(
             matched_note = note
 
         name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
-        _is_seafood2   = is_seafood(name_for_check)
-        check_name     = name_for_check if _is_seafood2 else ""
-        eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
+        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
 
         if not eligible:
             avail_sm = {}
@@ -545,7 +541,7 @@ def assign_lots_with_virtual(
 
         remaining  = qty_needed
         assignments = []
-        fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood2
+        fresh_art   = is_fresh_or_deli(name_for_check)
 
         for lot in eligible:
             avail = round(lot['quantity'], 4)
