@@ -440,22 +440,23 @@ def render():
                                 st.sidebar.json(rows[0])
                             return has_b
 
-                        # Pokazi CEL raw odgovor za /stocks/{itemId}
-                        # da vidimo VSA polja vkljucno z morebitnimi Serije/Batches
+                        # TEST: /stocks?WarehouseId=X&ResultsByBatchNumber=D
                         try:
-                            r1 = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh})
-                            st.sidebar.write(f"RAW /stocks/{fid} (vsa polja):")
-                            st.sidebar.json(r1)
+                            r1 = cli._get("/stocks", params={
+                                "WarehouseId": wh,
+                                "ResultsByBatchNumber": "D",
+                                "CurrentPage": 1,
+                                "PageSize": 20,
+                            })
+                            rows = r1.get("Rows", []) if isinstance(r1, dict) else []
+                            has_b = any(r.get("BatchNumber") for r in rows)
+                            st.sidebar.write(f"/stocks?RBN=D: {r1.get('TotalRows',0)} skupaj, {len(rows)} vrstic, loti: {has_b}")
+                            if rows:
+                                st.sidebar.json(rows[0])
+                            if has_b:
+                                st.sidebar.success("✅ ResultsByBatchNumber=D DELA!")
                         except Exception as e:
-                            st.sidebar.error(f"Test1: {e}")
-
-                        # Preizkusi brez WarehouseId - ce vrne drugacen format
-                        try:
-                            r2 = cli._get(f"/stocks/{fid}")
-                            st.sidebar.write(f"RAW /stocks/{fid} (brez WH):")
-                            st.sidebar.json(r2)
-                        except Exception as e:
-                            st.sidebar.error(f"Test2: {e}")
+                            st.sidebar.error(f"Test RBN=D: {e}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
