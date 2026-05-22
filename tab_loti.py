@@ -440,29 +440,22 @@ def render():
                                 st.sidebar.json(rows[0])
                             return has_b
 
-                        # Test 1: /stocks/{id}?ResultsByBatchNumber=Y
+                        # Pokazi CEL raw odgovor za /stocks/{itemId}
+                        # da vidimo VSA polja vkljucno z morebitnimi Serije/Batches
                         try:
-                            r1 = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh, "ResultsByBatchNumber": "Y"})
-                            if _check(f"Test1 /stocks/{fid}?RBN=Y", r1):
-                                st.sidebar.success("✅ Test 1 dela!")
+                            r1 = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh})
+                            st.sidebar.write(f"RAW /stocks/{fid} (vsa polja):")
+                            st.sidebar.json(r1)
                         except Exception as e:
                             st.sidebar.error(f"Test1: {e}")
 
-                        # Test 2: /stocks?ItemId=X&WarehouseId=X&ResultsByBatchNumber=Y
+                        # Preizkusi brez WarehouseId - ce vrne drugacen format
                         try:
-                            r2 = cli._get("/stocks", params={"ItemId": fid, "WarehouseId": wh, "ResultsByBatchNumber": "Y"})
-                            if _check(f"Test2 /stocks?ItemId={fid}&RBN=Y", r2):
-                                st.sidebar.success("✅ Test 2 dela!")
+                            r2 = cli._get(f"/stocks/{fid}")
+                            st.sidebar.write(f"RAW /stocks/{fid} (brez WH):")
+                            st.sidebar.json(r2)
                         except Exception as e:
                             st.sidebar.error(f"Test2: {e}")
-
-                        # Test 3: /stocks?ItemId=X&ResultsByBatchNumber=Y (brez WarehouseId)
-                        try:
-                            r3 = cli._get("/stocks", params={"ItemId": fid, "ResultsByBatchNumber": "Y"})
-                            if _check(f"Test3 /stocks?ItemId={fid} (brez WH)", r3):
-                                st.sidebar.success("✅ Test 3 dela!")
-                        except Exception as e:
-                            st.sidebar.error(f"Test3: {e}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
