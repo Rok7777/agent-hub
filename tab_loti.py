@@ -16,99 +16,16 @@ from lot_engine import assign_lots_with_virtual, check_old_lots
 from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
-def _scan_pl_for_lots(cli, wh_id, date_from, date_to_str=None):
-    """P/L skeniranje - za lote in cene."""
-    from collections import defaultdict
-    lots = defaultdict(lambda: defaultdict(lambda: {"qty": 0.0, "price": 0.0}))
-    info = {}
-    page = 1
-    while True:
-        try:
-            data = cli._get("/stockentry", params={
-                "StockEntryType": "P", "StockEntrySubtype": "L",
-                "Status": "P", "DateFrom": date_from,
-                "CurrentPage": page, "PageSize": 50,
-            })
-            rows = data.get("Rows", [])
-            if not rows:
-                break
-            for entry in rows:
-                eid = entry.get("StockEntryId")
-                if not eid:
-                    continue
-                if date_to_str:
-                    edate = str(entry.get("Date", "") or "")[:10]
-                    if edate and edate >= date_to_str:
-                        continue
-                try:
-                    detail = cli.get_entry_detail(eid)
-                    for row in (detail.get("StockEntryRows") or []):
-                        wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                        if str(wh_to) != str(wh_id):
-                            continue
-                        item_id = (row.get("Item") or {}).get("ID")
-                        batch   = row.get("BatchNumber", "") or ""
-                        qty     = float(row.get("Quantity") or 0)
-                        price   = float(row.get("Price") or 0)
-                        if not item_id or not batch or qty <= 0:
-                            continue
-                        lots[item_id][batch]["qty"]   += qty
-                        if price > 0:
-                            lots[item_id][batch]["price"] = price
-                        if item_id not in info:
-                            info[item_id] = {
-                                "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
-                                "ItemCode":          row.get("ItemCode", "") or "",
-                                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
-                            }
-                except Exception:
-                    continue
-            total   = data.get("TotalRows", 0)
-            fetched = (page - 1) * 50 + len(rows)
-            if fetched >= total:
-                break
-            page += 1
-        except Exception:
-            break
-    return {
-        "lots": {aid: dict(batches) for aid, batches in lots.items()},
-        "info": info,
-    }
-
-
-@st.cache_data(ttl=86400, show_spinner=False)  # 24h
-def _get_pl_historical_cached(username, org_id, wh_id):
-    """P/L 61-365 dni. 24h cache."""
-    from minimax_client import MinimaxClient
-    from config import _secret
-    from datetime import datetime, timedelta
-    cli = MinimaxClient(
-        username=username, password=_secret("MINIMAX_PASSWORD", ""),
-        client_id=_secret("MINIMAX_CLIENT_ID", ""),
-        client_secret=_secret("MINIMAX_CLIENT_SECRET", ""),
-        org_id=int(org_id),
-    )
-    now    = datetime.now()
-    d_from = (now - timedelta(days=365)).strftime("%Y-%m-%dT00:00:00")
-    d_to   = (now - timedelta(days=60)).strftime("%Y-%m-%d")
-    return _scan_pl_for_lots(cli, wh_id, d_from, d_to)
-
-
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    Direktni per-lot podatki iz Minimax API.
-
-    Korak 1: /stocks/{itemId}?ResultsByBatchNumber=Y -> tocni per-lot podatki
-             Ce lot ni na zalogi -> ga API ne vrne -> engine ga ne vidi.
-             Ni potrebe po P/L racunanju.
-
-    Fallback: Ce API ne vraca lotov -> FIFO rebalancing z /stocks + P/L 60 dni.
+    Direktni per-lot podatki iz Minimax zaloge.
+    GET /stocks?WarehouseId=X&ResultsByBatchNumber=D
+    Vrne tocne kolicine po lotih — april loti ki so porabljeni niso vrnjeni.
+    Ni potrebe po P/L, IS, FIFO ali kakrsnem koli racunanju.
     """
     from minimax_client import MinimaxClient
     from config import _secret
-    from datetime import datetime, timedelta
-    import concurrent.futures
 
     cli = MinimaxClient(
         username=username, password=_secret("MINIMAX_PASSWORD", ""),
@@ -117,203 +34,38 @@ def _get_stock_cached(username, org_id, wh_id):
         org_id=int(org_id),
     )
 
-    def _lot_date(code):
-        if not code or len(code) < 6:
-            return datetime.min
-        try:
-            return datetime.strptime(code[-6:], "%d%m%y")
-        except ValueError:
-            return datetime.min
-
-    # Korak 1: /stocks -> seznam artiklov na zalogi
-    items_raw = cli.get_stock_by_lots(wh_id)
-    if not items_raw:
-        return []
-
-    # Korak 2: Quick test - ali /stocks/{itemId} sploh vraca lote?
-    # Preizkusimo 3 artikle. Ce nobeden ne vrne lotov -> preskoci 209 klicev.
-    def _parse_lots_from_response(lot_data, item_id, item_name, item_code, item_unit):
-        rows = []
-        if isinstance(lot_data, list):
-            rows = lot_data
-        elif isinstance(lot_data, dict):
-            rows = (lot_data.get("Rows") or lot_data.get("rows") or
-                    lot_data.get("Items") or [])
-            if not rows:
-                rows = [lot_data]
-        found = []
+    result = []
+    page   = 1
+    while True:
+        data = cli._get("/stocks", params={
+            "WarehouseId":          wh_id,
+            "ResultsByBatchNumber": "D",
+            "CurrentPage":          page,
+            "PageSize":             200,
+        })
+        rows = data.get("Rows", [])
         for row in rows:
-            row_wh = ((row.get("Warehouse") or {}).get("ID") or
-                      (row.get("Skladisce") or {}).get("ID"))
-            if row_wh and str(row_wh) != str(wh_id):
+            item_id = (row.get("Item") or {}).get("ID")
+            batch   = row.get("BatchNumber") or ""
+            qty     = float(row.get("Quantity") or 0)
+            if not item_id or not batch or qty <= 0.001:
                 continue
-            batch = (row.get("BatchNumber") or row.get("Serija") or
-                     row.get("SerialNumber") or row.get("LotNumber") or
-                     row.get("BatchNo") or "")
-            qty   = float(row.get("Quantity") or row.get("Kolicina") or 0)
-            price = float(row.get("Price") or row.get("AveragePrice") or
-                          row.get("Cena") or 0)
-            if batch and qty > 0.001:
-                found.append({
-                    "Item":              {"ID": item_id},
-                    "ItemName":          item_name,
-                    "ItemCode":          item_code,
-                    "BatchNumber":       batch,
-                    "Quantity":          qty,
-                    "UnitOfMeasurement": item_unit,
-                    "Price":             price,
-                })
-        return found
-
-    # Sortiraj kandidate: ribe/morski artikli najprej (ti imajo lote)
-    LOT_KEYWORDS = ["LOSOS","SARD","BRANC","ORADA","POSTRV","LIGNJI","OSLIČ",
-                    "OSLIC","TUNA","KOZICE","ŠKAMPI","HOBOTNICA","SKAMPI"]
-    sorted_candidates = sorted(
-        items_raw,
-        key=lambda r: 0 if any(kw in (r.get("ItemName","") or "").upper() for kw in LOT_KEYWORDS) else 1
-    )
-
-    endpoint_works = False
-    for test_row in sorted_candidates[:5]:
-        test_id = (test_row.get("Item") or {}).get("ID")
-        if not test_id:
-            continue
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as tex:
-                fut = tex.submit(cli._get, f"/stocks/{test_id}", {"WarehouseId": wh_id})
-                test_data = fut.result(timeout=8)
-            test_lots = _parse_lots_from_response(
-                test_data, test_id,
-                test_row.get("ItemName",""), test_row.get("ItemCode",""),
-                test_row.get("UnitOfMeasurement","kg")
-            )
-            if test_lots:
-                endpoint_works = True
-                break
-        except Exception:
-            pass
-
-    result        = []
-    items_no_lots = list(items_raw)  # default: vse v fallback
-
-    if endpoint_works:
-        # Endpoint dela -> klici za vse artikle
-        def _fetch_item_lots(item_row):
-            item_id   = (item_row.get("Item") or {}).get("ID")
-            item_name = item_row.get("ItemName", "") or ""
-            item_code = item_row.get("ItemCode", "") or ""
-            item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
-            if not item_id:
-                return [], None
-            try:
-                lot_data = cli._get(f"/stocks/{item_id}", params={
-                    "WarehouseId": wh_id,
-                    "ResultsByBatchNumber": "Y",
-                })
-                found = _parse_lots_from_response(lot_data, item_id, item_name, item_code, item_unit)
-                return found, (None if found else item_row)
-            except Exception:
-                return [], item_row
-
-        items_no_lots = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(_fetch_item_lots, row) for row in items_raw]
-            for future in concurrent.futures.as_completed(futures):
-                lots, fallback_row = future.result()
-                if lots:
-                    result.extend(lots)
-                elif fallback_row is not None:
-                    items_no_lots.append(fallback_row)
-    # else: items_no_lots = vsi artikli -> pametni fallback spodaj
-
-    # Korak 3: Pametni fallback
-    if items_no_lots:
-        total_items = len(items_raw)
-        no_lots_pct = len(items_no_lots) / total_items if total_items > 0 else 1.0
-
-        if no_lots_pct > 0.5:
-            # /stocks/{itemId} ne podpira lotov -> FIFO rebalancing (hitro)
-            stocks_total  = {
-                (r.get("Item") or {}).get("ID"): float(r.get("Quantity") or 0)
-                for r in items_raw if (r.get("Item") or {}).get("ID")
-            }
-            item_info_map = {(r.get("Item") or {}).get("ID"): r for r in items_raw}
-
-            d_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
-            recent = _scan_pl_for_lots(cli, wh_id, d_from)
-            lots_by_art = {aid: dict(batches) for aid, batches in recent["lots"].items()}
-
-            result = []
-            for item_id, total_qty in stocks_total.items():
-                if total_qty <= 0:
-                    continue
-                lots = lots_by_art.get(item_id)
-                ir   = item_info_map.get(item_id, {})
-                if not lots:
-                    continue
-                lots_sorted = sorted(lots.items(), key=lambda kv: _lot_date(kv[0]), reverse=True)
-                remaining   = round(float(total_qty), 3)
-                for batch, data in lots_sorted:
-                    if remaining <= 0:
-                        break
-                    assigned = round(min(data["qty"], remaining), 3)
-                    if assigned <= 0.001:
-                        continue
-                    remaining = round(remaining - assigned, 3)
-                    result.append({
-                        "Item":              {"ID": item_id},
-                        "ItemName":          ir.get("ItemName", "") or "",
-                        "ItemCode":          ir.get("ItemCode", "") or "",
-                        "BatchNumber":       batch,
-                        "Quantity":          assigned,
-                        "UnitOfMeasurement": ir.get("UnitOfMeasurement", "kg") or "kg",
-                        "Price":             data.get("price", 0),
-                    })
-        else:
-            # Manjsina nima lotov -> P/L 365 dni samo za tiste
-            hist   = _get_pl_historical_cached(username, org_id, wh_id)
-            d_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
-            recent = _scan_pl_for_lots(cli, wh_id, d_from)
-            lots_by_art = {}
-            for src in [hist, recent]:
-                for aid, batches in src["lots"].items():
-                    if aid not in lots_by_art:
-                        lots_by_art[aid] = {}
-                    for batch, data in batches.items():
-                        if batch not in lots_by_art[aid]:
-                            lots_by_art[aid][batch] = {"qty": 0.0, "price": 0.0}
-                        lots_by_art[aid][batch]["qty"] += data["qty"]
-                        if data["price"] > 0:
-                            lots_by_art[aid][batch]["price"] = data["price"]
-
-            for item_row in items_no_lots:
-                item_id   = (item_row.get("Item") or {}).get("ID")
-                item_unit = item_row.get("UnitOfMeasurement", "kg") or "kg"
-                item_name = item_row.get("ItemName", "") or ""
-                item_code = item_row.get("ItemCode", "") or ""
-                total_qty = float(item_row.get("Quantity") or 0)
-                lots      = lots_by_art.get(item_id)
-                if not lots or not item_id:
-                    continue
-                lots_sorted = sorted(lots.items(), key=lambda kv: _lot_date(kv[0]), reverse=True)
-                remaining   = round(float(total_qty), 3)
-                for batch, data in lots_sorted:
-                    if remaining <= 0:
-                        break
-                    assigned = round(min(data["qty"], remaining), 3)
-                    if assigned <= 0.001:
-                        continue
-                    remaining = round(remaining - assigned, 3)
-                    result.append({
-                        "Item":              {"ID": item_id},
-                        "ItemName":          item_name,
-                        "ItemCode":          item_code,
-                        "BatchNumber":       batch,
-                        "Quantity":          assigned,
-                        "UnitOfMeasurement": item_unit,
-                        "Price":             data.get("price", 0),
-                    })
+            result.append({
+                "Item":              {"ID": item_id},
+                "ItemName":          row.get("ItemName", "") or "",
+                "ItemCode":          row.get("ItemCode", "") or "",
+                "BatchNumber":       batch,
+                "Quantity":          qty,
+                "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg") or "kg",
+                "Price":             float(row.get("AveragePurchasePrice") or 0),
+            })
+        total   = data.get("TotalRows", 0)
+        fetched = (page - 1) * 200 + len(rows)
+        if fetched >= total:
+            break
+        page += 1
     return result
+
 
 
 def render():
