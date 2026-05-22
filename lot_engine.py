@@ -549,18 +549,14 @@ def assign_lots_with_virtual(
                 continue
 
             if lot.get('_aged') and fresh_art:
-                lot_date = parse_lot_date(lot['code'])
-                days_old = (today - lot_date).days if lot_date else 0
                 use_sale = round(min(avail, remaining), 4)
                 if use_sale > 0:
                     assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
                     remaining = round(remaining - use_sale, 4)
-                writeoff = round(avail - use_sale, 4)
-                if writeoff > 0:
-                    assignments.append((lot['code'], writeoff, days_old, True, lot.get('lot_price', 0)))
+                # Zmanjšaj virtual samo za prodano — preostanek ostane za finalize_writeoffs
                 for vl in virtual[stock_key]:
                     if vl['code'] == lot['code']:
-                        vl['quantity'] = 0.0
+                        vl['quantity'] = round(avail - use_sale, 4)
                         break
             else:
                 if remaining <= 0:
@@ -670,3 +666,59 @@ def assign_lots_with_virtual(
                 })
 
     return _merge_lot_lines(output)
+
+
+# ─── Finalizacija odpisov po zadnjem dokumentu ───────────────────────────────
+
+def finalize_writeoffs(
+    virtual: dict[str, list[dict]],
+    stock:   dict[str, dict],
+    last_date: datetime,
+) -> list[dict]:
+    """
+    Po obdelavi vseh dokumentov (ali edinega):
+    Pregleda virtual zalogo in generira odpise za aged lote ki so ostali.
+
+    Aged = 16-30 dni star na dan zadnjega dokumenta.
+    Vrne seznam writeoff vrstic ki gredo na zadnji dokument.
+    """
+    writeoffs = []
+    for stock_key, lots in virtual.items():
+        art_data = stock.get(stock_key, {})
+        art_name = art_data.get('article_name', '')
+        art_code = art_data.get('article_code', '')
+        art_id   = art_data.get('article_id')
+        unit     = art_data.get('unit', 'kg')
+
+        if not is_fresh_or_deli(art_name):
+            continue
+
+        for lot in lots:
+            qty = round(lot.get('quantity', 0), 4)
+            if qty <= 0:
+                continue
+            d = parse_lot_date(lot['code'])
+            if d is None or d > last_date:
+                continue
+            days = (last_date - d).days
+            if not (16 <= days <= 30):
+                continue  # ni aged na dan zadnjega dokumenta
+
+            writeoffs.append({
+                'row_id':            None,
+                'article_id':        art_id,
+                'article_code':      art_code,
+                'article_name':      art_name,
+                'lot':               lot['code'],
+                'quantity':          qty,
+                'quantity_assigned': qty,
+                'unit':              lot.get('unit', unit),
+                'selling_price':     0,
+                'opis':              f'odpis star lot  [odpis lota - star {days} dni]',
+                'status':            'writeoff',
+                '_writeoff':         True,
+                '_writeoff_qty':     qty,
+                '_sale_qty':         0,
+                'lot_price':         lot.get('lot_price', 0),
+            })
+    return writeoffs
