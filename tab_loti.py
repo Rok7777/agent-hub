@@ -433,10 +433,15 @@ def render():
                     no_lot_count = len([l for l in lines if l["status"] in ("no_match","no_lots","partial")])
                     icon = "\u2705" if no_lot_count == 0 else "\u26a0\ufe0f"
                     with st.expander(f"{icon} {label}  ({len(lines)} vrstic)", expanded=(no_lot_count > 0)):
+                        def _fmt_opis(l):
+                            o = l.get("opis") or ""
+                            if l["status"] == "writeoff":
+                                return ("odpis star lot  " + o).strip()
+                            return o
                         df_r = pd.DataFrame([{
                             "": row_color(l["status"]), "Artikel": l["article_name"],
                             "Kol.": l["quantity_assigned"], "ME": l["unit"],
-                            "Lot": l.get("lot") or "\u2014", "Opis": l.get("opis") or "",
+                            "Lot": l.get("lot") or "\u2014", "Opis": _fmt_opis(l),
                         } for l in lines])
                         st.dataframe(df_r, use_container_width=True, hide_index=True)
 
