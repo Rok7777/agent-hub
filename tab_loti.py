@@ -420,38 +420,49 @@ def render():
                         kw in (r.get("ItemName","") or "").upper()
                         for kw in ["LOSOS","SARD","BRANC","ORADA","POSTRV","LIGNJI"]
                     )] or raw
-                    for test_row in test_candidates[:3]:
+                    test_row = test_candidates[0] if test_candidates else None
+                    if test_row:
                         fid   = (test_row.get("Item") or {}).get("ID")
                         fname = test_row.get("ItemName", "")
-                        if not fid:
-                            continue
+
+                        def _check(label, data):
+                            if isinstance(data, list):
+                                rows = data
+                            elif isinstance(data, dict):
+                                rows = data.get("Rows") or data.get("rows") or []
+                                if not rows:
+                                    rows = [data]
+                            else:
+                                rows = []
+                            has_b = any(r.get("BatchNumber") or r.get("Serija") for r in rows)
+                            st.sidebar.write(f"{label}: {len(rows)} vrstic, loti: {has_b}")
+                            if rows:
+                                st.sidebar.json(rows[0])
+                            return has_b
+
+                        # Test 1: /stocks/{id}?ResultsByBatchNumber=Y
                         try:
-                            # Preizkusi z ResultsByBatchNumber=Y
-                            test = cli._get(f"/stocks/{fid}", params={
-                                "WarehouseId": wh,
-                                "ResultsByBatchNumber": "Y",
-                            })
-                            if isinstance(test, list):
-                                trows = test
-                            elif isinstance(test, dict):
-                                trows = (test.get("Rows") or test.get("rows") or [])
-                                if not trows:
-                                    trows = [test]
-                            else:
-                                trows = []
-                            has_b = any(
-                                r.get("BatchNumber") or r.get("Serija")
-                                for r in trows
-                            )
-                            st.sidebar.write(f"/stocks/{fid} ({fname[:30]}): {len(trows)} vrstic, loti: {has_b}")
-                            st.sidebar.json(trows[0] if trows else test)
-                            if has_b:
-                                st.sidebar.success("✅ Endpoint vraca lote z ResultsByBatchNumber=Y!")
-                                break
-                            else:
-                                st.sidebar.warning("BatchNumber=NULL tudi z ResultsByBatchNumber=Y")
-                        except Exception as ex:
-                            st.sidebar.error(f"/stocks/{fid} napaka: {ex}")
+                            r1 = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh, "ResultsByBatchNumber": "Y"})
+                            if _check(f"Test1 /stocks/{fid}?RBN=Y", r1):
+                                st.sidebar.success("✅ Test 1 dela!")
+                        except Exception as e:
+                            st.sidebar.error(f"Test1: {e}")
+
+                        # Test 2: /stocks?ItemId=X&WarehouseId=X&ResultsByBatchNumber=Y
+                        try:
+                            r2 = cli._get("/stocks", params={"ItemId": fid, "WarehouseId": wh, "ResultsByBatchNumber": "Y"})
+                            if _check(f"Test2 /stocks?ItemId={fid}&RBN=Y", r2):
+                                st.sidebar.success("✅ Test 2 dela!")
+                        except Exception as e:
+                            st.sidebar.error(f"Test2: {e}")
+
+                        # Test 3: /stocks?ItemId=X&ResultsByBatchNumber=Y (brez WarehouseId)
+                        try:
+                            r3 = cli._get("/stocks", params={"ItemId": fid, "ResultsByBatchNumber": "Y"})
+                            if _check(f"Test3 /stocks?ItemId={fid} (brez WH)", r3):
+                                st.sidebar.success("✅ Test 3 dela!")
+                        except Exception as e:
+                            st.sidebar.error(f"Test3: {e}")
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
