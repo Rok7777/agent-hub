@@ -97,13 +97,13 @@ def _get_pl_historical_cached(username, org_id, wh_id):
 @st.cache_data(ttl=900, show_spinner=False)  # 15 min cache
 def _get_stock_cached(username, org_id, wh_id):
     """
-    /stocks/{itemId} za tocne per-lot podatke (Minimax podpora potrjuje).
+    Direktni per-lot podatki iz Minimax API.
 
-    Pametni fallback:
-    - Ce vecina artiklov nima lot podatkov iz /stocks/{itemId}
-      -> FIFO rebalancing z /stocks totali + P/L 60 dni (hitro, brez 365-dnevnega scana)
-    - Ce samo manjsina nima lotov
-      -> P/L 365 dni fallback samo za tiste artikle
+    Korak 1: /stocks/{itemId}?ResultsByBatchNumber=Y -> tocni per-lot podatki
+             Ce lot ni na zalogi -> ga API ne vrne -> engine ga ne vidi.
+             Ni potrebe po P/L racunanju.
+
+    Fallback: Ce API ne vraca lotov -> FIFO rebalancing z /stocks + P/L 60 dni.
     """
     from minimax_client import MinimaxClient
     from config import _secret
@@ -206,7 +206,10 @@ def _get_stock_cached(username, org_id, wh_id):
             if not item_id:
                 return [], None
             try:
-                lot_data = cli._get(f"/stocks/{item_id}", params={"WarehouseId": wh_id})
+                lot_data = cli._get(f"/stocks/{item_id}", params={
+                    "WarehouseId": wh_id,
+                    "ResultsByBatchNumber": "Y",
+                })
                 found = _parse_lots_from_response(lot_data, item_id, item_name, item_code, item_unit)
                 return found, (None if found else item_row)
             except Exception:
@@ -423,26 +426,30 @@ def render():
                         if not fid:
                             continue
                         try:
-                            test  = cli._get(f"/stocks/{fid}", params={"WarehouseId": wh})
-                            # Razlicni mozni formati odgovora
+                            # Preizkusi z ResultsByBatchNumber=Y
+                            test = cli._get(f"/stocks/{fid}", params={
+                                "WarehouseId": wh,
+                                "ResultsByBatchNumber": "Y",
+                            })
                             if isinstance(test, list):
                                 trows = test
                             elif isinstance(test, dict):
-                                trows = (test.get("Rows") or test.get("rows") or
-                                         test.get("Items") or [])
+                                trows = (test.get("Rows") or test.get("rows") or [])
                                 if not trows:
                                     trows = [test]
                             else:
                                 trows = []
                             has_b = any(
-                                r.get("BatchNumber") or r.get("Serija") or r.get("SerialNumber")
+                                r.get("BatchNumber") or r.get("Serija")
                                 for r in trows
                             )
                             st.sidebar.write(f"/stocks/{fid} ({fname[:30]}): {len(trows)} vrstic, loti: {has_b}")
                             st.sidebar.json(trows[0] if trows else test)
                             if has_b:
-                                st.sidebar.success("Endpoint vraca lote!")
+                                st.sidebar.success("✅ Endpoint vraca lote z ResultsByBatchNumber=Y!")
                                 break
+                            else:
+                                st.sidebar.warning("BatchNumber=NULL tudi z ResultsByBatchNumber=Y")
                         except Exception as ex:
                             st.sidebar.error(f"/stocks/{fid} napaka: {ex}")
             except Exception as e:
