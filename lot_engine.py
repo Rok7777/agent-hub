@@ -30,9 +30,10 @@ _FROZEN_RE = re.compile(r'zamrznjen|odtaljen', re.IGNORECASE)
 
 _SEAFOOD_RE = re.compile(
     'brancin|orada|losos|postrv|sard|oslič|oslic|huj|tun|lignji|kozice|'
-    'skampi|škampi|klapavice|ostriga|hobotnica|sipa|lubin|kovac|kovač|'
+    'skampi|škampi|klapavice|ostrig|hobotnica|sipa|lubin|kovac|kovač|'
     'šur|platesa|trska|polenovka|bakala|zobatec|špar|kirnja|arbun|morsk|'
-    'som|brancin|lubin|romb|skuš|inčun|list|list|pic|mugilid',
+    'som|lubin|romb|skuš|inčun|pic|mugilid|'
+    'pokrovač|kočic',
     re.IGNORECASE
 )
 _MAQFINO_RE   = re.compile(r'maQfino', re.IGNORECASE)
@@ -51,26 +52,21 @@ def is_fresh_or_deli(name: str) -> bool:
     return bool(_DELI_RE.search(name) or _FRESH_RE.search(name) or _KAVIAR_RE.search(name))
 
 def get_lot_warning_days(name: str) -> int:
-    """
-    Vrne mejo v dnevih za opozorilo starega lota.
-    0 = ni opozorila za to kategorijo.
-    """
     if is_fresh_or_deli(name):
-        return 10    # sveže + kaviar
+        return 10
     if _FROZEN_RE.search(name):
-        return 330   # 11 mesecev
+        return 330
     if _MAQFINO_RE.search(name):
-        return 150   # 5 mesecev (maQfino)
+        return 150
     if _MARINIRAN_RE.search(name):
-        return 180   # 6 mesecev
+        return 180
     if _V_OLJU_RE.search(name):
-        return 365   # 1 leto
+        return 365
     if _IZVLECEK_RE.search(name):
-        return 365   # 1 leto
+        return 365
     if _TESTENINE_RE.search(name):
-        return 1095  # 3 leta
-    return 0         # vse ostalo — brez opozorila
-
+        return 1095
+    return 0
 
 
 # ─── Kalo faktor ─────────────────────────────────────────────────────────────
@@ -79,37 +75,28 @@ _SARDELA_RE = re.compile('sard', re.IGNORECASE)
 _LOSOS_RE   = re.compile('losos', re.IGNORECASE)
 _TRIM_RE    = re.compile('trim', re.IGNORECASE)
 
-KALO_FACTOR = 1.10  # 10% kalo za sardele in losos (brez trim)
+KALO_FACTOR = 1.10
 
-_LOSOSOVA_RE = re.compile(r'lososov', re.IGNORECASE)  # Lososova postrv ≠ Losos
+_LOSOSOVA_RE = re.compile(r'lososov', re.IGNORECASE)
 
 def get_kalo_factor(article_name: str) -> float:
-    """Kalo faktor — zaenkrat 1.0 za vse artikle."""
     return 1.0
 
 
 # ─── Opozorilo starih lotov ───────────────────────────────────────────────────
 
 def check_old_lots(stock: dict, today: datetime, article_ids: set = None, article_dates: dict = None) -> list[dict]:
-    """
-    Preveri zalogo za stare lote ki se niso razknjižili.
-    article_ids:   če podan, preveri samo te artikle.
-    article_dates: {article_id: datetime} — za vsak artikel datum zadnjega dokumenta
-                   v katerem se pojavi. Če ni podano, se uporabi today za vse.
-    """
     warnings = []
     for key, data in stock.items():
         art_name  = data.get('article_name', key)
-        # Če je podan seznam article_ids, preveri samo te
         if article_ids is not None:
             art_id = data.get('article_id')
             if art_id not in article_ids:
                 continue
         threshold = get_lot_warning_days(art_name)
         if threshold == 0:
-            continue  # ta kategorija nima opozoril
+            continue
 
-        # Datum za ta artikel: zadnji dokument kjer se artikel pojavi
         art_id   = data.get('article_id')
         ref_date = (article_dates.get(art_id) if article_dates and art_id else None) or today
 
@@ -136,12 +123,6 @@ def check_old_lots(stock: dict, today: datetime, article_ids: set = None, articl
 # ─── Filtriranje lotov (FIFO) ─────────────────────────────────────────────────
 
 def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> list[dict]:
-    """
-    Vrne lote ustrezne za artikel, sortirane FIFO (najstarejši prvi).
-    NIKOLI ne vrne lotov novejših od today (datuma dokumenta).
-    Za sveže: normalni loti (<=14 dni) + aged loti (14-30 dni).
-    Za zamrznjene: vsi loti do datuma dokumenta.
-    """
     needs_14d = is_fresh_or_deli(article_name)
 
     result = []
@@ -152,11 +133,9 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
         if d is None:
             result.append({**lot, '_date': datetime(2099, 1, 1), '_aged': False})
             continue
-        # Nikoli ne uporabi lota ki je novejši od datuma dokumenta
         if d > today:
             continue
         days = (today - d).days
-        # Za sveže: preskoči lote starejše od 30 dni (ročna inventura)
         if needs_14d and days > 30:
             continue
         result.append({**lot, '_date': d, '_aged': bool(needs_14d and 16 <= days <= 30), 'lot_price': lot.get('lot_price', lot.get('price', 0))})
@@ -165,7 +144,7 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
     return result
 
 
-# ─── Smart matching — razčlenjevanje artiklov ─────────────────────────────────
+# ─── Smart matching ───────────────────────────────────────────────────────────
 
 _CODE_RE   = re.compile(r'^\(([^)]+)\)\s*')
 _FILLET_RE = re.compile(r'\bfil[ei]', re.IGNORECASE)
@@ -198,12 +177,9 @@ def _strip_code(name: str) -> str:
 _LOSOSOVA_SPEC_RE = re.compile(r'lososov', re.IGNORECASE)
 
 def _get_species(name: str) -> Optional[str]:
-    """Prva beseda po šifri (npr. BRANCIN, ORADA, LIGNJI ...)"""
     clean = _strip_code(name).upper()
-    # Posebej ločimo LOSOSOVA POSTRV od LOSOS
     if _LOSOSOVA_SPEC_RE.search(clean):
         return "LOSOSOVA POSTRV"
-    # vzami vse do prve vejice ali oklepaja
     seg = re.split(r'[,\(]', clean)[0].strip()
     return seg if seg else None
 
@@ -223,10 +199,8 @@ def _size_distance(s1: Optional[tuple], s2: Optional[tuple]) -> int:
         return 3
     lo1, hi1, u1 = s1
     lo2, hi2, u2 = s2
-    # Normalizacija na grame — samo če je enota kg
     if u1 == 'kg': lo1, hi1, u1 = lo1*1000, hi1*1000, 'g'
     if u2 == 'kg': lo2, hi2, u2 = lo2*1000, hi2*1000, 'g'
-    # Kosi (škampi, kozice) — brez enote, majhne vrednosti
     if not u1 and not u2 and lo1 < 200 and lo2 < 200:
         seq = _SIZE_COUNT
     else:
@@ -236,7 +210,6 @@ def _size_distance(s1: Optional[tuple], s2: Optional[tuple]) -> int:
         for i, (slo, shi) in enumerate(seq):
             if slo <= lo and hi <= shi * 1.5:
                 return i
-        # Fallback: najbližji razred
         best_i, best_d = 0, float('inf')
         for i, (slo, shi) in enumerate(seq):
             d = abs(lo - slo)
@@ -261,11 +234,6 @@ def smart_match(
     available: dict[str, list[dict]],
     unit: str
 ) -> tuple[Optional[str], str]:
-    """
-    Poišče najboljši dostopen artikel za prodan artikel.
-    available: {article_name: [lots]}
-    Vrne (matched_name, opis_notacija) ali (None, razlog)
-    """
     sold_sp     = _get_species(sold_name)
     sold_fillet = _has_fillet(sold_name)
     sold_size   = _get_size(sold_name)
@@ -278,12 +246,10 @@ def smart_match(
     def has_stock(n):
         return any(l.get('quantity',0) > 0 for l in available.get(n, []))
 
-    # Korak 1: Ista vrsta (obvezno) + ista ME
     candidates = [
         n for n in available
         if _get_species(n) == sold_sp and has_stock(n)
     ]
-    # Fallback za Lososova postrv — išči tudi po "POSTRV"
     if not candidates and "LOSOSOVA POSTRV" in (sold_sp or ""):
         candidates = [
             n for n in available
@@ -292,12 +258,10 @@ def smart_match(
     if not candidates:
         return None, f"ni zaloge za {sold_sp}"
 
-    # Korak 2: File → očiščeno → sveže hierarhija
     _OCISCEN_RE = re.compile(r'oči[sš][cč]en', re.IGNORECASE)
     sold_ociscen = bool(_OCISCEN_RE.search(sold_name))
 
     if sold_fillet:
-        # file → očiščeno → sveže
         fillet_cands = [n for n in candidates if _has_fillet(n)]
         if not fillet_cands:
             fillet_cands = [n for n in candidates if _OCISCEN_RE.search(n)]
@@ -305,7 +269,6 @@ def smart_match(
             fillet_cands = candidates
         candidates = fillet_cands
     elif sold_ociscen:
-        # očiščeno → sveže (brez file)
         ociscen_cands = [n for n in candidates if _OCISCEN_RE.search(n)]
         if not ociscen_cands:
             ociscen_cands = [n for n in candidates if not _has_fillet(n)]
@@ -313,19 +276,15 @@ def smart_match(
             ociscen_cands = candidates
         candidates = ociscen_cands
     else:
-        # cel/svež → brez file in brez očiščeno
         basic_cands = [n for n in candidates if not _has_fillet(n) and not _OCISCEN_RE.search(n)]
         candidates = basic_cands if basic_cands else candidates
 
     if not candidates:
         return None, f"ni ustreznega artikla za {sold_sp}"
 
-    # Korak 3: Točkovanje — teža je primarna, država sekundarna
     def score(n):
         size_dist = _size_distance(sold_size, _get_size(n))
-        # Teža je primarna (večja kazen za napačno težo)
         s = -size_dist * 10
-        # Država je sekundarna (manjši bonus/malus)
         art_origin = _get_origin(n)
         if sold_origin and art_origin:
             s += 3 if art_origin == sold_origin else 0
@@ -344,34 +303,11 @@ def assign_lots(
     stock: dict[str, dict],
     today: datetime
 ) -> list[dict]:
-    """
-    Dodeli FIFO lote vrsticam dokumenta.
-
-    document_lines: [
-      { 'row_id': int, 'article_id': int, 'article_code': str,
-        'article_name': str, 'quantity': float, 'unit': str,
-        'selling_price': float, 'opis': str }
-    ]
-
-    stock: {
-      article_name: {
-        'article_id': int,
-        'article_code': str,
-        'lots': [{'code': str, 'quantity': float, 'unit': str}]
-      }
-    }
-
-    Vrne seznam outputnih vrstic z: lot, quantity_assigned, opis, status
-    """
-    # Indeks: article_id (str) → stock key
-    # Stock ključi so str(article_id)
     by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
     by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
     by_name = {v.get('article_name',''): k for k, v in stock.items()}
-    # Case-insensitive name lookup
     by_name_ci = {v.get('article_name','').strip().lower(): k for k, v in stock.items()}
 
-    # Virtualna zaloga
     virtual: dict[str, list[dict]] = {
         key: [lot.copy() for lot in data['lots']]
         for key, data in stock.items()
@@ -389,23 +325,19 @@ def assign_lots(
 
         matched_note = ''
 
-        # Kalo faktor — sardele in losos (brez trim) razknižimo 10% več
         kalo = get_kalo_factor(art_name)
         if kalo != 1.0:
             qty_needed = round(qty_needed * kalo, 4)
 
-        # Iskanje v zalogi: najprej po ID, nato po kodi, nato po imenu
         stock_key = (by_id.get(art_id) or by_code.get(art_code) or
                      by_name.get(art_name) or by_name_ci.get(art_name.strip().lower()))
 
-        # Preverimo ali ima zaloga
         has_vstock = (
             stock_key is not None and
             any(l.get('quantity',0) > 0 for l in virtual.get(stock_key, []))
         )
 
         if not has_vstock:
-            # Smart matching — gradi flat {name: lots} za smart_match
             avail_with_stock = {}
             for k, lots in virtual.items():
                 if any(l.get('quantity',0) > 0 for l in lots):
@@ -418,13 +350,10 @@ def assign_lots(
                     'opis': f"{base_opis} [brez lota: {note}]".strip(),
                     'status': 'no_match'})
                 continue
-            # Poišči stock_key za matched_name
             stock_key    = by_name.get(matched_name) or matched_name
             matched_note = note
 
-        # FIFO filtriranje
         name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
-        # Ne-morski artikli dobijo vse lote brez starostnih omejitev
         _is_seafood  = is_seafood(name_for_check)
         check_name = name_for_check if _is_seafood else ""
         eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
@@ -436,15 +365,8 @@ def assign_lots(
                 'status': 'no_lots'})
             continue
 
-        # ── FIFO dodelitev ──────────────────────────────────────────────────
-        # Aged lot (14-30 dni, sveže) — FIFO vrstni red (najstarejši najprej):
-        #   Aged lot se porabi PRED svežim lotom.
-        #   Vrstica 1: prodana količina iz aged lota
-        #   Vrstica 2: odpis preostanka aged lota (ločena vrstica)
-        #   Šele nato svež lot za morebitni preostanek prodaje.
-
         remaining   = qty_needed
-        assignments = []  # (lot_code, qty, days_old_for_writeoff)
+        assignments = []
         fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood
 
         for lot in eligible:
@@ -455,8 +377,6 @@ def assign_lots(
             if lot.get('_aged') and fresh_art:
                 lot_date = parse_lot_date(lot['code'])
                 days_old = (today - lot_date).days if lot_date else 0
-                # Del za prodajo
-                use_sale = round(min(avail, remaining), 4)
                 use_sale = round(min(avail, remaining), 4)
                 if use_sale > 0:
                     assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
@@ -521,12 +441,8 @@ def assign_lots(
     return _merge_lot_lines(output)
 
 def _merge_lot_lines(lines: list[dict]) -> list[dict]:
-    """
-    Združi vrstice z istim (row_id, article_code, lot).
-    Prodajne in odpisne vrstice istega lota se združijo — opis pokaže sestavo.
-    """
     result = []
-    seen   = {}  # (row_id, article_code, lot) → index in result
+    seen   = {}
     for line in lines:
         key = (line.get('row_id', 0), line.get('article_code',''), line.get('lot'))
         if key not in seen:
@@ -537,22 +453,17 @@ def _merge_lot_lines(lines: list[dict]) -> list[dict]:
             existing['quantity_assigned'] = round(
                 existing['quantity_assigned'] + line['quantity_assigned'], 4
             )
-            # Seštej prodajo in odpis
             existing['_sale_qty']    = round(existing.get('_sale_qty', 0) + line.get('_sale_qty', 0), 4)
             existing['_writeoff_qty']= round(existing.get('_writeoff_qty', 0) + line.get('_writeoff_qty', 0), 4)
-            # Shrani dni starosti iz odpis vrstice
             if line.get('_writeoff') and line.get('opis'):
                 existing['_writeoff_opis'] = line['opis']
-            # Status: merged vrstica ni writeoff
             existing['_writeoff'] = False
             existing['status']    = 'ok' if existing.get('status') in ('ok','writeoff') else existing.get('status','ok')
-    # Dodaj opis sestave kjer je prišlo do merge odpisa
     import re as _re
     for row in result:
         wo  = row.get('_writeoff_qty', 0)
         sal = row.get('_sale_qty', 0)
         if wo > 0 and sal > 0:
-            # Poišči dni iz odpis opisa
             wo_opis = row.get('_writeoff_opis', '')
             m = _re.search(r'star (\d+) dni', wo_opis)
             dni = m.group(1) if m else '?'
@@ -574,7 +485,6 @@ def assign_lots_with_virtual(
     by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
     by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
     by_name = {v.get('article_name',''): k for k, v in stock.items()}
-    # Case-insensitive name lookup
     by_name_ci = {v.get('article_name','').strip().lower(): k for k, v in stock.items()}
     output  = []
 
@@ -616,12 +526,11 @@ def assign_lots_with_virtual(
         eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
 
         if not eligible:
-            # Ni ustreznih lotov — poskusi smart match (npr. isti artikel, druga šifra)
             avail_sm = {}
             for k, lots in virtual.items():
                 if any(l.get('quantity', 0) > 0 for l in lots):
                     sname = stock[k].get('article_name', k)
-                    if sname != art_name:  # ne ponujaj istega artikla
+                    if sname != art_name:
                         avail_sm[sname] = lots
             matched_sm, note_sm = smart_match(art_name, avail_sm, unit)
             if matched_sm:
@@ -638,10 +547,6 @@ def assign_lots_with_virtual(
         assignments = []
         fresh_art   = is_fresh_or_deli(name_for_check) and _is_seafood2
 
-        # FIFO — aged lot se porabi PRED svežim:
-        # Vrstica 1: prodana kol. iz aged lota
-        # Vrstica 2: odpis preostanka aged lota
-        # Nato svež lot za preostanek prodaje
         for lot in eligible:
             avail = round(lot['quantity'], 4)
             if avail <= 0:
@@ -650,7 +555,6 @@ def assign_lots_with_virtual(
             if lot.get('_aged') and fresh_art:
                 lot_date = parse_lot_date(lot['code'])
                 days_old = (today - lot_date).days if lot_date else 0
-                use_sale = round(min(avail, remaining), 4)
                 use_sale = round(min(avail, remaining), 4)
                 if use_sale > 0:
                     assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
@@ -701,12 +605,10 @@ def assign_lots_with_virtual(
             })
 
         if remaining > 0:
-            # Išči pametne zamenjave dokler ni pokrita vsa količina
-            tried_keys = {stock_key}  # že preizkušeni stock_key-ji
+            tried_keys = {stock_key}
             rem_remaining = remaining
 
             while rem_remaining > 0:
-                # Gradi seznam razpoložljivih artiklov (brez že preizkušenih)
                 avail_for_remainder = {}
                 for k, lots in virtual.items():
                     if k in tried_keys:
@@ -716,13 +618,13 @@ def assign_lots_with_virtual(
                         avail_for_remainder[sname] = lots
 
                 if not avail_for_remainder:
-                    break  # Ni več razpoložljivih artiklov
+                    break
 
                 matched_rem, note_rem = smart_match(art_name, avail_for_remainder, unit)
                 rem_stock_key_candidate = by_name.get(matched_rem) or matched_rem
 
                 if not matched_rem or rem_stock_key_candidate in tried_keys:
-                    break  # Ni zamenjave
+                    break
 
                 tried_keys.add(rem_stock_key_candidate)
                 rem_stock_key  = rem_stock_key_candidate
@@ -730,7 +632,7 @@ def assign_lots_with_virtual(
                 rem_stock_data = stock.get(rem_stock_key, {})
 
                 if not rem_eligible:
-                    continue  # Ni lotov za to zamenjavo
+                    continue
 
                 for lot in rem_eligible:
                     if rem_remaining <= 0:
@@ -739,7 +641,7 @@ def assign_lots_with_virtual(
                     if avail <= 0:
                         continue
                     use_lot = round(min(avail, rem_remaining), 4)
-                    use_qty = rem_remaining  # Polna preostala količina na vrstici
+                    use_qty = rem_remaining
                     lot_shortfall = round(rem_remaining - use_lot, 4)
                     rem_opis = (opis + f' {note_rem} [zamenjava za razliko]').strip()
                     if lot_shortfall > 0:
@@ -762,7 +664,6 @@ def assign_lots_with_virtual(
                             break
 
             if rem_remaining > 0:
-                # Ni več zamenjav — ohrani original količino brez lota
                 output.append({**line,
                     'article_id':   stock_data.get('article_id', line.get('article_id')),
                     'article_code': stock_data.get('article_code', art_code),
