@@ -12,7 +12,7 @@ from minimax_client import (
     MinimaxClient, LOCATIONS,
     parse_stock_to_engine_format, parse_entry_to_lines,
 )
-from lot_engine import assign_lots_with_virtual, check_old_lots
+from lot_engine import assign_lots_with_virtual, check_old_lots, finalize_writeoffs
 from config import get_client, get_wh_id, get_an_id, check_config, resolve_ids
 
 
@@ -48,7 +48,7 @@ def _get_stock_cached(username, org_id, wh_id):
             item_id = (row.get("Item") or {}).get("ID")
             batch   = row.get("BatchNumber") or ""
             qty     = float(row.get("Quantity") or 0)
-            if not item_id or not batch or qty <= 0.001:
+            if not item_id or not batch or qty < 0.05:  # pod 50g = ghost lot
                 continue
             result.append({
                 "Item":              {"ID": item_id},
@@ -359,6 +359,19 @@ def render():
                                     doc_article_ids.add(aid)
                                     if aid not in article_dates or doc_date > article_dates[aid]:
                                         article_dates[aid] = doc_date
+
+                        # Finalizacija odpisov — po zadnjem dokumentu
+                        last_eid  = sorted_ids[-1]
+                        last_info = next((d for d in drafts if d.get("StockEntryId") == last_eid), {})
+                        last_date_str = str(last_info.get("Date", ""))[:10]
+                        try:
+                            last_date = datetime.strptime(last_date_str, "%Y-%m-%d")
+                        except Exception:
+                            last_date = datetime.now()
+
+                        wo_lines = finalize_writeoffs(shared_virtual, stock, last_date)
+                        if wo_lines:
+                            all_results[last_eid] = all_results[last_eid] + wo_lines
 
                         old_lot_warnings = check_old_lots(
                             stock, datetime.now(),
