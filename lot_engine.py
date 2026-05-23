@@ -53,7 +53,7 @@ def is_fresh_or_deli(name: str) -> bool:
 
 def get_lot_warning_days(name: str) -> int:
     if is_fresh_or_deli(name):
-        return 10
+        return 16
     if _FROZEN_RE.search(name):
         return 330
     if _MAQFINO_RE.search(name):
@@ -138,7 +138,7 @@ def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> l
         days = (today - d).days
         if needs_14d and days > 30:
             continue
-        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 16 <= days <= 30), 'lot_price': lot.get('lot_price', lot.get('price', 0))})
+        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 21 <= days <= 30), 'lot_price': lot.get('lot_price', lot.get('price', 0))})
 
     result.sort(key=lambda x: x['_date'])
     return result
@@ -701,7 +701,7 @@ def finalize_writeoffs(
             if d is None or d > last_date:
                 continue
             days = (last_date - d).days
-            if not (16 <= days <= 30):
+            if not (21 <= days <= 30):
                 continue  # ni aged na dan zadnjega dokumenta
 
             writeoffs.append({
