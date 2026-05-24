@@ -633,7 +633,7 @@ def assign_lots_with_virtual(
                     if avail <= 0:
                         continue
                     use_lot = round(min(avail, rem_remaining), 4)
-                    use_qty = rem_remaining
+                    use_qty = use_lot  # Samo kar lot dejansko pokrije
                     lot_shortfall = round(rem_remaining - use_lot, 4)
                     rem_opis = (opis + f' {note_rem} [zamenjava za razliko]').strip()
                     if lot_shortfall > 0:
