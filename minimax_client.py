@@ -546,7 +546,28 @@ class MinimaxClient:
         replaced_row_ids = set()
 
         for r in new_rows:
-            if r.get("_writeoff") or r.get("status") in ("no_lots", "no_match", "partial"):
+            if r.get("_writeoff"):
+                continue
+            # Vrstice brez lota ali partial z lotom — ohrani za ročno korekcijo
+            if r.get("status") in ("no_lots", "no_match"):
+                continue  # orig_rows loop doda original nespremenjen
+            if r.get("status") == "partial":
+                # Partial ima lot — dodaj kot novo vrstico
+                if r.get("lot"):
+                    row = {
+                        "Item":          {"ID": r["article_id"]},
+                        "Quantity":      r["quantity_assigned"],
+                        "SellingPrice":  r.get("selling_price"),
+                        "WarehouseFrom": default_wh_from,
+                        "Note":          r.get("opis", "") or "",
+                        "BatchNumber":   r["lot"],
+                    }
+                    if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
+                    lp = float(r.get("lot_price") or 0)
+                    if lp > 0:
+                        row["Price"] = lp
+                        row["Value"] = round(lp * r["quantity_assigned"], 4)
+                    extra_rows.append(row)
                 continue
             rid        = r.get("row_id", 0)
             orig_art   = (orig_by_rownum.get(rid, {}).get("Item") or {}).get("ID")
