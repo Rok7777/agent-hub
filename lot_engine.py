@@ -340,9 +340,9 @@ def assign_lots(
         if not has_vstock:
             avail_with_stock = {}
             for k, lots in virtual.items():
-                if any(l.get('quantity',0) > 0 for l in lots):
-                    sname = stock[k].get('article_name', k)
-                    avail_with_stock[sname] = lots
+                art_nm_k = stock[k].get('article_name', k)
+                if get_eligible_lots(lots, art_nm_k, today):
+                    avail_with_stock[art_nm_k] = lots
             matched_name, note = smart_match(art_name, avail_with_stock, unit)
             if matched_name is None:
                 output.append({**line,
@@ -507,9 +507,9 @@ def assign_lots_with_virtual(
         if not has_vstock:
             avail_with_stock = {}
             for k, lots in virtual.items():
-                if any(l.get('quantity',0) > 0 for l in lots):
-                    sname = stock[k].get('article_name', k)
-                    avail_with_stock[sname] = lots
+                art_nm_k = stock[k].get('article_name', k)
+                if get_eligible_lots(lots, art_nm_k, today):
+                    avail_with_stock[art_nm_k] = lots
             matched_name, note = smart_match(art_name, avail_with_stock, unit)
             if matched_name is None:
                 output.append({**line, 'lot': None, 'quantity_assigned': qty_needed,
@@ -524,10 +524,12 @@ def assign_lots_with_virtual(
         if not eligible:
             avail_sm = {}
             for k, lots in virtual.items():
-                if any(l.get('quantity', 0) > 0 for l in lots):
-                    sname = stock[k].get('article_name', k)
-                    if sname != art_name:
-                        avail_sm[sname] = lots
+                if k == stock_key:
+                    continue
+                art_nm = stock[k].get('article_name', k)
+                # Samo artikli z vsaj enim eligible lotom
+                if get_eligible_lots(lots, art_nm, today):
+                    avail_sm[art_nm] = lots
             matched_sm, note_sm = smart_match(art_name, avail_sm, unit)
             if matched_sm:
                 stock_key    = by_name.get(matched_sm) or matched_sm
