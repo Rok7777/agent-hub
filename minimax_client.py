@@ -546,6 +546,23 @@ class MinimaxClient:
         replaced_row_ids = set()
 
         for r in new_rows:
+            # Odpisi z row_id=None — dodaj kot nove vrstice
+            if r.get("_writeoff") and r.get("row_id") is None and r.get("lot"):
+                row = {
+                    "Item":          {"ID": r["article_id"]},
+                    "Quantity":      r["quantity_assigned"],
+                    "WarehouseFrom": default_wh_from,
+                    "BatchNumber":   r["lot"],
+                    "Note":          r.get("opis", "") or "",
+                }
+                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
+                if r.get("unit"):          row["UnitOfMeasurement"] = r["unit"]
+                lp = float(r.get("lot_price") or 0)
+                if lp > 0:
+                    row["Price"] = lp
+                    row["Value"] = round(lp * r["quantity_assigned"], 4)
+                extra_rows.append(row)
+                continue
             if r.get("_writeoff"):
                 continue
             # Vrstice brez lota ali partial z lotom — ohrani za ročno korekcijo
