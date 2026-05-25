@@ -78,6 +78,13 @@ class MinimaxClient:
             raise Exception(f"PUT {path} → {r.status_code}: {r.text[:500]}")
         return r.json()
 
+    def _post(self, path: str, body: dict) -> dict:
+        url = f"{BASE}/api/orgs/{self.org_id}{path}"
+        r = requests.post(url, headers=self._headers(), json=body, timeout=20)
+        if not r.ok:
+            raise Exception(f"POST {path} → {r.status_code}: {r.text[:500]}")
+        return r.json()
+
     # ── Journal (Temeljnice) ──────────────────────────────────────────────────
 
     def get_journal_drafts(self) -> list[dict]:
@@ -565,7 +572,7 @@ class MinimaxClient:
                 continue
             if r.get("_writeoff"):
                 continue
-            # Vrstice brez lota ali partial z lotom — ohrani za ročno korekcijo
+            # Vrstice brez lota — ohrani za ročno korekcijo
             if r.get("status") in ("no_lots", "no_match"):
                 continue  # orig_rows loop doda original nespremenjen
             if r.get("status") == "partial":
