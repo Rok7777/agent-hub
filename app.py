@@ -3,6 +3,7 @@ Agent Hub — Glavna navigacija.
 Moduli:
   tab_loti.py        — dodelitev lotov (ureja chat "Zapiranje LOT")
   tab_temeljnice.py  — dnevni izkupiček (ureja chat "Ločeni procesi")
+  tab_prejem.py      — prejem blaga (ureja chat "Prejem blaga")
   minimax_client.py  — API klient (ureja chat "Ločeni procesi")
 """
 
@@ -61,15 +62,10 @@ if st.session_state["aktiven_modul"] is None:
 
     # ── Modul 1: Prejem ──────────────────────────────────────────────────────
     with c1:
-        st.markdown("""
-        <div class="modul-kmalu">
-            <div style="font-size:28px">📥</div>
-            <h4>Prejem blaga</h4>
-            <p>Dobavnice → zaloga + knjiženje PR</p>
-            <br><span style="background:#ddd;color:#888;border-radius:20px;padding:2px 10px;font-size:10px">kmalu</span>
-        </div>
-        <div class="trigger-man">📷 Trigger: skeniranje dobavnice</div>
-        """, unsafe_allow_html=True)
+        if st.button("📥\n\n**Prejem blaga**\n\nDobavnice → zaloga + knjiženje PR", use_container_width=True, key="btn_prejem"):
+            st.session_state["aktiven_modul"] = "prejem"
+            st.rerun()
+        st.markdown('<div class="trigger-man">📷 Trigger: skeniranje dobavnice</div>', unsafe_allow_html=True)
 
     # ── Modul 2: Veleprodaja ─────────────────────────────────────────────────
     with c2:
@@ -127,6 +123,7 @@ else:
     NAZIVI = {
         "loti":       "📦 Loti — dodelitev serij",
         "temeljnice": "💰 Temeljnice — dnevni izkupiček",
+        "prejem":     "📥 Prejem blaga",
     }
 
     col_back, col_title = st.columns([1, 8])
@@ -144,6 +141,9 @@ else:
         render()
     elif modul == "temeljnice":
         from tab_temeljnice import render
+        render()
+    elif modul == "prejem":
+        from tab_prejem import render
         render()
 
 st.divider()
