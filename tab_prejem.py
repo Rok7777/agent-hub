@@ -444,14 +444,25 @@ def render():
             st.session_state["prejem_file_store"] = file_store
 
         if file_store:
+            # Prikaži samo neobdelane datoteke
+            unprocessed = [
+                fname for fname in file_store
+                if not any(d.get("fname") == fname for d in drafts.values())
+            ]
+            already_done = [
+                fname for fname in file_store
+                if any(d.get("fname") == fname for d in drafts.values())
+            ]
+            if already_done:
+                st.caption(f"✅ Že obdelano ({len(already_done)}): {', '.join(already_done)}")
+            if not unprocessed:
+                st.info("Vse naložene datoteke so že obdelane. Za novo obdelavo izbrišite osnutek in naložite znova.")
             selected_files = []
-            for fname in file_store:
-                is_done = any(d.get("fname") == fname for d in drafts.values())
-                if st.checkbox(f"{'✅' if is_done else '📄'} {fname}", value=not is_done, key=f"chk_f_{fname}"):
+            for fname in unprocessed:
+                if st.checkbox(f"📄 {fname}", value=True, key=f"chk_f_{fname}"):
                     selected_files.append(fname)
 
-            col1, col2 = st.columns([2,1])
-            with col1:
+            if unprocessed:
                 if st.button(f"🤖 Obdelaj z AI ({len(selected_files)})", type="primary",
                              use_container_width=True, disabled=not selected_files, key="btn_obdelaj"):
                     prog = st.progress(0)
@@ -512,10 +523,7 @@ def render():
                     st.session_state["prejem_drafts"] = drafts
                     _save_drafts(drafts)
                     st.rerun()
-            with col2:
-                if st.button("↺ Počisti datoteke", use_container_width=True, key="btn_clr_f"):
-                    st.session_state["prejem_file_store"] = {}
-                    st.rerun()
+
 
     if not drafts:
         st.info("Naloži dobavnice zgoraj za začetek.")
@@ -528,6 +536,21 @@ def render():
     st.markdown(f"{STATUS_ICON['ready']} Pripravljen &nbsp;&nbsp;"
                 f"{STATUS_ICON['error']} Pomanjkljiv &nbsp;&nbsp;"
                 f"{STATUS_ICON['sent']} Poslan v Minimax", unsafe_allow_html=True)
+
+    # Izbriši dobavnice — nad master checkboxom
+    to_del_top = selected_draft_ids if selected_draft_ids else []
+    if st.button(
+        f"🗑️ Izbriši dobavnice  ({len(to_del_top)} izbranih)" if to_del_top
+        else "🗑️ Izbriši dobavnice  (označi za brisanje)",
+        use_container_width=True,
+        disabled=not to_del_top,
+        key="btn_del_top",
+    ):
+        for did in to_del_top:
+            drafts.pop(did, None)
+        st.session_state["prejem_drafts"] = drafts
+        _save_drafts(drafts)
+        st.rerun()
 
     # Master checkbox za izbiro vseh osnutkov
     prev_master_drafts = st.session_state.get("prev_master_drafts", None)
@@ -877,24 +900,6 @@ def render():
     # ═══════════════════════════════════════════════════════════
     # AKCIJSKI GUMBI
     # ═══════════════════════════════════════════════════════════
-    # Gumb za brisanje nad črto — bolj pri roki
-    st.markdown("---")
-    del_col1, del_col2 = st.columns([2, 1])
-    with del_col1:
-        to_del_top = selected_draft_ids if selected_draft_ids else []
-        if st.button(
-            f"🗑️ Izbriši dobavnice  ({len(to_del_top)} izbranih)" if to_del_top
-            else "🗑️ Izbriši dobavnice  (označi za brisanje)",
-            use_container_width=True,
-            disabled=not to_del_top,
-            key="btn_del_top",
-        ):
-            for did in to_del_top:
-                drafts.pop(did, None)
-            st.session_state["prejem_drafts"] = drafts
-            _save_drafts(drafts)
-            st.rerun()
-
     st.divider()
 
     to_act = selected_draft_ids if selected_draft_ids else list(drafts.keys())
@@ -905,39 +910,27 @@ def render():
         and not _has_critical(_validate(drafts[did].get("header",{}), drafts[did].get("rows",[])))
     ]
 
-    col_send, col_del = st.columns(2)
-    with col_send:
-        if st.button(
-            f"📤 Pošlji v Minimax  ({len(ready_ids)} osnutkov)",
-            type="primary", use_container_width=True,
-            disabled=not ready_ids, key="btn_send",
-        ):
-            prog = st.progress(0)
-            for i, did in enumerate(ready_ids):
-                prog.progress((i+1)/len(ready_ids), text="Prenašam …")
-                entry_id, err = _send_draft(drafts[did])
-                if err:
-                    st.error(f"❌ {drafts[did]['header'].get('supplier_name','?')}: {err}")
-                else:
-                    drafts[did]["sent_to_minimax"]  = True
-                    drafts[did]["minimax_entry_id"] = entry_id
-                    st.success(f"✅ {drafts[did]['header'].get('supplier_name','?')} → ID: {entry_id}")
-            prog.empty()
-            st.session_state["prejem_drafts"] = drafts
-            _save_drafts(drafts)
-            st.rerun()
+    if st.button(
+        f"📤 Pošlji v Minimax  ({len(ready_ids)} osnutkov)",
+        type="primary", use_container_width=True,
+        disabled=not ready_ids, key="btn_send",
+    ):
+        prog = st.progress(0)
+        for i, did in enumerate(ready_ids):
+            prog.progress((i+1)/len(ready_ids), text="Prenašam …")
+            entry_id, err = _send_draft(drafts[did])
+            if err:
+                st.error(f"❌ {drafts[did]['header'].get('supplier_name','?')}: {err}")
+            else:
+                drafts[did]["sent_to_minimax"]  = True
+                drafts[did]["minimax_entry_id"] = entry_id
+                st.success(f"✅ {drafts[did]['header'].get('supplier_name','?')} → ID: {entry_id}")
+        prog.empty()
+        st.session_state["prejem_drafts"] = drafts
+        _save_drafts(drafts)
+        st.rerun()
 
-    with col_del:
-        to_del = selected_draft_ids
-        if st.button(
-            f"🗑️ Izbriši osnutke  ({len(to_del)} izbranih)",
-            use_container_width=True, disabled=not to_del, key="btn_del",
-        ):
-            for did in to_del:
-                drafts.pop(did, None)
-            st.session_state["prejem_drafts"] = drafts
-            _save_drafts(drafts)
-            st.rerun()
+
 
     if selected_draft_ids:
         st.caption(f"Izbrano: {len(selected_draft_ids)} osnutkov")
