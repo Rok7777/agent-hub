@@ -602,6 +602,12 @@ def render():
                    + (f"  ·  Minimax ID: {draft.get('minimax_entry_id')}" if draft.get("sent_to_minimax") else ""))
 
             # Drži expander odprt po form submitu
+            # Validacija PRED expander — potrebujemo za expanded parameter
+            if draft.get("parse_error"):
+                errors = [("❌", f"Napaka branja: {draft['parse_error']}")]  # za bool(errors)
+            else:
+                errors = _validate(h, draft.get("rows", []))
+
             draft_exp_open = st.session_state.get(f"draft_exp_{draft_id}", bool(errors))
             with st.expander(lbl, expanded=draft_exp_open):
                 if draft.get("parse_error"):
