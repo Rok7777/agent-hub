@@ -10,6 +10,7 @@ import base64
 import re
 import traceback
 import uuid
+import os
 from datetime import datetime
 
 from minimax_client import MinimaxClient
@@ -89,6 +90,35 @@ REQUIRED_ROW = [
     ("country_of_origin",  "⚠️", "Država porekla manjka"),
     ("tariff",             "⚠️", "Carinska tarifa manjka"),
 ]
+
+# ─── Trajno shranjevanje osnutkov ────────────────────────────────────────────
+
+DRAFTS_FILE = "prejem_osnutki.json"
+
+def _save_drafts(drafts: dict):
+    """Shrani osnutke v JSON datoteko — preživi reboot in osvežitev strani."""
+    try:
+        # Serializiramo — izpustimo bytes (slike) ki jih ne moremo shraniti
+        def _clean(obj):
+            if isinstance(obj, dict):
+                return {k: _clean(v) for k, v in obj.items() if k != "bytes"}
+            elif isinstance(obj, list):
+                return [_clean(i) for i in obj]
+            return obj
+        with open(DRAFTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(_clean(drafts), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Shranjevanje osnutkov: {e}")
+
+def _load_drafts() -> dict:
+    """Naloži osnutke iz JSON datoteke ob zagonu."""
+    try:
+        if os.path.exists(DRAFTS_FILE):
+            with open(DRAFTS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
 
 # ─── Pomožne funkcije ─────────────────────────────────────────────────────────
 
@@ -359,8 +389,10 @@ def render():
             st.session_state["password"]      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD",""), type="password")
             st.session_state["org_id"]        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID","171038"))
 
-    if "prejem_drafts"     not in st.session_state: st.session_state["prejem_drafts"]     = {}
-    if "prejem_file_store" not in st.session_state: st.session_state["prejem_file_store"] = {}
+    if "prejem_drafts" not in st.session_state:
+        st.session_state["prejem_drafts"] = _load_drafts()
+    if "prejem_file_store" not in st.session_state:
+        st.session_state["prejem_file_store"] = {}
 
     drafts     = st.session_state["prejem_drafts"]
     file_store = st.session_state["prejem_file_store"]
@@ -449,6 +481,7 @@ def render():
                         }
                     prog.empty()
                     st.session_state["prejem_drafts"] = drafts
+                    _save_drafts(drafts)
                     st.rerun()
             with col2:
                 if st.button("↺ Počisti datoteke", use_container_width=True, key="btn_clr_f"):
@@ -771,6 +804,7 @@ def render():
                 drafts[draft_id]      = draft
 
     st.session_state["prejem_drafts"] = drafts
+    _save_drafts(drafts)
 
     # ═══════════════════════════════════════════════════════════
     # AKCIJSKI GUMBI
@@ -804,6 +838,7 @@ def render():
                     st.success(f"✅ {drafts[did]['header'].get('supplier_name','?')} → ID: {entry_id}")
             prog.empty()
             st.session_state["prejem_drafts"] = drafts
+            _save_drafts(drafts)
             st.rerun()
 
     with col_del:
@@ -815,6 +850,7 @@ def render():
             for did in to_del:
                 drafts.pop(did, None)
             st.session_state["prejem_drafts"] = drafts
+            _save_drafts(drafts)
             st.rerun()
 
     if selected_draft_ids:
