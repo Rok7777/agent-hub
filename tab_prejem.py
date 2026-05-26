@@ -93,12 +93,14 @@ REQUIRED_ROW = [
 
 # ─── Trajno shranjevanje osnutkov ────────────────────────────────────────────
 
-DRAFTS_FILE = "prejem_osnutki.json"
+import pathlib as _pathlib
+DRAFTS_FILE = str(_pathlib.Path(__file__).parent / "prejem_osnutki.json")
+
+FILES_FILE = str(_pathlib.Path(__file__).parent / "prejem_files.json")
 
 def _save_drafts(drafts: dict):
     """Shrani osnutke v JSON datoteko — preživi reboot in osvežitev strani."""
     try:
-        # Serializiramo — izpustimo bytes (slike) ki jih ne moremo shraniti
         def _clean(obj):
             if isinstance(obj, dict):
                 return {k: _clean(v) for k, v in obj.items() if k != "bytes"}
@@ -116,6 +118,27 @@ def _load_drafts() -> dict:
         if os.path.exists(DRAFTS_FILE):
             with open(DRAFTS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _save_files(file_store: dict):
+    """Shrani seznam čakajočih datotek (brez bytes)."""
+    try:
+        slim = {k: {"name": v["name"], "type": v["type"]} for k, v in file_store.items()}
+        with open(FILES_FILE, "w", encoding="utf-8") as f:
+            json.dump(slim, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _load_files() -> dict:
+    """Naloži seznam čakajočih datotek (brez bytes — bytes se izgubijo na reboot)."""
+    try:
+        if os.path.exists(FILES_FILE):
+            with open(FILES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Vrni brez bytes (bytes se morajo ponovno naložiti)
+            return {k: {**v, "bytes": None} for k, v in data.items()}
     except Exception:
         pass
     return {}
@@ -487,7 +510,7 @@ def render():
     if "prejem_drafts" not in st.session_state:
         st.session_state["prejem_drafts"] = _load_drafts()
     if "prejem_file_store" not in st.session_state:
-        st.session_state["prejem_file_store"] = {}
+        st.session_state["prejem_file_store"] = _load_files()
 
     drafts     = st.session_state["prejem_drafts"]
     file_store = st.session_state["prejem_file_store"]
@@ -496,41 +519,46 @@ def render():
     # UPLOAD + OBDELAVA
     # ═══════════════════════════════════════════════════════════
     with st.expander("📤 Naloži in obdelaj dobavnice", expanded=not bool(drafts)):
+        # Key reset trick — po nalaganju resetiramo widget (pobriše datoteke iz widgeta)
+        upload_key = f"prejem_uploader_{st.session_state.get('upload_reset_n', 0)}"
         uploaded_files = st.file_uploader(
             "Izberite dobavnice (slike ali PDF)",
             type=["jpg","jpeg","png","pdf"],
             accept_multiple_files=True,
-            key="prejem_uploader",
+            key=upload_key,
             label_visibility="collapsed",
         )
+        # Ko so datoteke naložene → shrani bytes in takoj resetiraj widget
         if uploaded_files:
+            added = False
             for f in uploaded_files:
                 if f.name not in file_store:
                     file_store[f.name] = {"bytes": f.read(), "type": f.type, "name": f.name}
-            st.session_state["prejem_file_store"] = file_store
+                    added = True
+            if added:
+                st.session_state["prejem_file_store"] = file_store
+                _save_files(file_store)
+                st.session_state["upload_reset_n"] = st.session_state.get("upload_reset_n", 0) + 1
+                st.rerun()
 
-        if file_store:
-            # Prikaži samo neobdelane datoteke
-            unprocessed = [
-                fname for fname in file_store
-                if not any(d.get("fname") == fname for d in drafts.values())
-            ]
-            already_done = [
-                fname for fname in file_store
-                if any(d.get("fname") == fname for d in drafts.values())
-            ]
-            if already_done:
-                st.caption(f"✅ Že obdelano ({len(already_done)}): {', '.join(already_done)}")
-            if not unprocessed:
-                st.info("Vse naložene datoteke so že obdelane. Za novo obdelavo izbrišite osnutek in naložite znova.")
+        # Prikaži samo neobdelane datoteke iz file_store
+        unprocessed = [
+            fname for fname in file_store
+            if not any(d.get("fname") == fname for d in drafts.values())
+        ]
+
+        if not file_store:
+            st.caption("Naložite dobavnice z gumbom zgoraj.")
+        elif not unprocessed:
+            st.info("Vse naložene datoteke so že obdelane.")
+        else:
             selected_files = []
             for fname in unprocessed:
                 if st.checkbox(f"📄 {fname}", value=True, key=f"chk_f_{fname}"):
                     selected_files.append(fname)
 
-            if unprocessed:
-                if st.button(f"🤖 Obdelaj z AI ({len(selected_files)})", type="primary",
-                             use_container_width=True, disabled=not selected_files, key="btn_obdelaj"):
+            if st.button(f"🤖 Obdelaj z AI ({len(selected_files)})", type="primary",
+                         use_container_width=True, disabled=not selected_files, key="btn_obdelaj"):
                     prog = st.progress(0)
                     for i, fname in enumerate(selected_files):
                         prog.progress((i+1)/len(selected_files), text=f"Berem {fname} …")
@@ -546,6 +574,8 @@ def render():
                                 "parse_error": err or "AI ni vrnil podatkov",
                                 "header":{},"rows":[],"declarations":[],
                                 "sent_to_minimax":False,"minimax_entry_id":None}
+                            file_store.pop(fname, None)
+                            _save_files(file_store)
                             continue
 
                         lot      = _lot_number(parsed.get("supplier_name",""), parsed.get("invoice_date",""))
@@ -585,7 +615,11 @@ def render():
                             "declarations":_build_declarations(header, rows_out),
                             "sent_to_minimax":False,"minimax_entry_id":None,
                         }
+                        # Odstrani iz file_store — obdelana datoteka ne potrebuje ostati
+                        file_store.pop(fname, None)
+                        _save_files(file_store)
                     prog.empty()
+                    st.session_state["prejem_file_store"] = file_store
                     st.session_state["prejem_drafts"] = drafts
                     _save_drafts(drafts)
                     st.rerun()
