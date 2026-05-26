@@ -32,19 +32,19 @@ SUPPLIER_ITEM_MAPPINGS = {
     "LIBO": {
         "OČIŠČENA": {
             "item_code": "POSSS0301",
-            "item_name": "POSTRV (Šarenka), 300-400g, očiščena, sveža, Slovenija",
+            "item_name": "(POSSS0301) POSTRV (Šarenka), 300-400g, očiščena, sveža, Slovenija",
         },
         "FILE BEL": {
             "item_code": "POSSS0202",
-            "item_name": "POSTRV (Šarenka), 160-200g, file, sveža, Slovenija",
+            "item_name": "(POSSS0202) POSTRV (Šarenka), 160-200g, file, sveža, Slovenija",
         },
         "FILE RDEČ": {
             "item_code":  None,   # potrebna ročna delitev
-            "item_name":  "⚠️ Razdeliti: LPOSS0202 (150-300g) ali LPOSS0102 (300g+)",
+            "item_name":  "⚠️ Razdeliti: (LPOSS0202) ali (LPOSS0102)",
             "needs_split": True,
             "split_options": [
-                {"item_code": "LPOSS0202", "item_name": "LOSOSOVA POSTRV file, 150-300g, svež, Slovenija"},
-                {"item_code": "LPOSS0102", "item_name": "LOSOSOVA POSTRV file, 300g+, svež, Slovenija"},
+                {"item_code": "LPOSS0202", "item_name": "(LPOSS0202) LOSOSOVA POSTRV file, 150-300g, svež, Slovenija"},
+                {"item_code": "LPOSS0102", "item_name": "(LPOSS0102) LOSOSOVA POSTRV file, 300g+, svež, Slovenija"},
             ],
         },
     },
