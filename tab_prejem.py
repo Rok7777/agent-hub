@@ -537,17 +537,28 @@ def render():
                 f"{STATUS_ICON['error']} Pomanjkljiv &nbsp;&nbsp;"
                 f"{STATUS_ICON['sent']} Poslan v Minimax", unsafe_allow_html=True)
 
-    # Izbriši dobavnice — nad master checkboxom
-    # Beremo stanje checkboxov iz session_state (prejšnji rerun)
-    pre_selected = [did for did in drafts if st.session_state.get(f"sel_d_{did}", False)]
+    # Preberemo trenutno vrednost master checkboxa iz session_state (nova vrednost je
+    # že tam ob začetku rerun-a ker jo je Streamlit shranil ob kliku)
+    current_master   = st.session_state.get("master_sel_all_drafts", False)
+    prev_master_peek = st.session_state.get("prev_master_drafts", None)
+
+    # Izračunamo efektivno selekcijo — upoštevamo če se je master ravnokar spremenil
+    if prev_master_peek is not None and current_master != prev_master_peek:
+        # Master se je spremenil → vsi ali nobeden
+        effective_selected = list(drafts.keys()) if current_master else []
+    else:
+        # Beremo posamezne checkboxe iz session_state
+        effective_selected = [did for did in drafts if st.session_state.get(f"sel_d_{did}", False)]
+
+    # Gumb Izbriši dobavnice — zdaj vedno točen
     if st.button(
-        f"🗑️ Izbriši dobavnice  ({len(pre_selected)} izbranih)" if pre_selected
+        f"🗑️ Izbriši dobavnice  ({len(effective_selected)} izbranih)" if effective_selected
         else "🗑️ Izbriši dobavnice  (označi za brisanje)",
         use_container_width=True,
-        disabled=not pre_selected,
+        disabled=not effective_selected,
         key="btn_del_top",
     ):
-        for did in pre_selected:
+        for did in effective_selected:
             drafts.pop(did, None)
         st.session_state["prejem_drafts"] = drafts
         _save_drafts(drafts)
@@ -559,7 +570,7 @@ def render():
         "☑ Izberi / odzberi vse osnutke",
         key="master_sel_all_drafts",
     )
-    # Ob spremembi master → posodobi vse posamezne PRED renderiranjem
+    # Ob spremembi → posodobi vse posamezne PRED renderiranjem posameznih
     if prev_master_drafts is not None and master_sel_drafts != prev_master_drafts:
         for did in drafts:
             st.session_state[f"sel_d_{did}"] = master_sel_drafts
