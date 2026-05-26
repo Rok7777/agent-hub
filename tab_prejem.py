@@ -26,11 +26,9 @@ SUPPLIER_PREFIXES = {
 
 VP_CEN_CODE  = "VP-CEN"
 OLTREON_INFO = "OltreCon d.o.o., Orehovlje 2F, 5291 Miren"
-VET_OZNAKA   = "SI 844 ES"  # fiksna veterinarska oznaka
+VET_OZNAKA   = "SI 844 ES"
 
-# Status
 STATUS_ICON  = {"ready": "🟢", "sent": "⚫", "error": "🔴"}
-STATUS_LABEL = {"ready": "Pripravljen", "sent": "Poslan v Minimax", "error": "Pomanjkljiv"}
 
 REQUIRED_HEADER = [
     ("supplier_name",  "❌", "Dobavitelj ni vpisan"),
@@ -54,11 +52,9 @@ def _secret(key, default=""):
 
 def _lot_number(supplier_name: str, date_str: str) -> str:
     prefix = ""
-    sup_up = supplier_name.upper()
     for key, val in SUPPLIER_PREFIXES.items():
-        if key in sup_up:
-            prefix = val
-            break
+        if key in supplier_name.upper():
+            prefix = val; break
     try:
         d = datetime.strptime(date_str[:10], "%Y-%m-%d")
         return f"{prefix}{d.strftime('%d%m%y')}"
@@ -132,86 +128,58 @@ def _parse_claude(image_bytes: bytes, media_type: str = "image/jpeg"):
 def _kategorija_temperatura(kategorija: str) -> str:
     k = kategorija.lower()
     if "zamrz" in k: return "DO -18°C"
-    if "odtalj" in k: return "DO +4°C"
-    return "DO +4°C"  # sveže
+    return "DO +4°C"
 
 def _build_declarations(header: dict, rows: list) -> list:
-    """
-    Kreira deklaracije — ena na unikaten artikel.
-    TODO: Dopolniti ko dobimo vzorec OltreCon deklaracije:
-          - Polje IZDELEK
-          - Izračun PORABITI DO
-          - Ovalni žig (slika)
-    """
-    seen    = {}
-    decls   = []
-    lot_nas = header.get("lot_number", "")
-    lot_dob = header.get("lot_dobavitelja", "")
-    datum_izlova  = header.get("datum_izlova", "")
-    kraj_proizvoda = header.get("kraj_proizvoda", "")
+    """Kreira deklaracije — ena na unikaten artikel."""
+    seen, decls = {}, []
+    lot_nas    = header.get("lot_number", "")
+    lot_dob    = header.get("lot_dobavitelja", "")
+    datum_izl  = header.get("datum_izlova", "")
+    kraj_prod  = header.get("kraj_proizvoda", "")
 
     for row in rows:
         key = row.get("item_code", "") or row.get("inv_name", "")
-        if key in seen:
-            continue
+        if key in seen: continue
         seen[key] = True
-
         kategorija = row.get("kategorija", "sveže")
-        decl = {
-            "naziv_blaga":       f"{row.get('item_name') or row.get('inv_name','')} ({row.get('latin_name','')})",
-            "izdelek":           "",  # TODO: dopolniti po vzorcu OltreCon
-            "drzava_porekla":    row.get("country_of_origin", ""),
-            "kraj_proizvoda":    kraj_proizvoda or row.get("kraj_proizvoda", ""),
-            "dobavitelj":        OLTREON_INFO,
-            "lot":               lot_nas,
-            "lot_dobavitelja":   lot_dob or row.get("lot_dobavitelja", ""),
+        decls.append({
+            "naziv_blaga":         f"{row.get('item_name') or row.get('inv_name','')} ({row.get('latin_name','')})",
+            "izdelek":             "",   # TODO: po vzorcu OltreCon
+            "drzava_porekla":      row.get("country_of_origin", ""),
+            "kraj_proizvoda":      kraj_prod or row.get("kraj_proizvoda", ""),
+            "dobavitelj":          OLTREON_INFO,
+            "lot":                 lot_nas,
+            "lot_dobavitelja":     lot_dob or row.get("lot_dobavitelja", ""),
             "kategorija_svezosti": kategorija,
-            "porabiti_do":       "",  # TODO: izračun po vzorcu
-            "datum_izlova":      datum_izlova or row.get("datum_izlova", ""),
+            "porabiti_do":         "",   # TODO: izračun po vzorcu
+            "datum_izlova":        datum_izl or row.get("datum_izlova", ""),
             "hraniti_temperatura": _kategorija_temperatura(kategorija),
             "veterinarska_oznaka": VET_OZNAKA,
-            "item_code":         row.get("item_code", ""),
-            "item_name":         row.get("item_name") or row.get("inv_name", ""),
-        }
-        decls.append(decl)
+            "item_code":           row.get("item_code", ""),
+            "item_name":           row.get("item_name") or row.get("inv_name", ""),
+        })
     return decls
 
 def _generate_zpl(decl: dict) -> str:
-    """
-    Generira ZPL kodo za Zebra GK420t — nalepka 8x5 cm (609x406 dots pri 203dpi).
-    TODO: Finalizirati ko dobimo:
-          - Vzorec OltreCon deklaracije (polje IZDELEK, PORABITI DO)
-          - Datoteko ovalnega žiga (slika za ^GF)
-    """
-    naziv    = (decl.get("naziv_blaga") or "")[:60]
-    izdelek  = decl.get("izdelek") or "TODO"
-    drzava   = decl.get("drzava_porekla", "")
-    kraj     = decl.get("kraj_proizvoda", "")
-    dob      = decl.get("dobavitelj", "")
-    lot      = decl.get("lot", "")
-    lot_d    = decl.get("lot_dobavitelja", "")
-    kat      = decl.get("kategorija_svezosti", "")
-    por      = decl.get("porabiti_do") or "TODO"
-    izlov    = decl.get("datum_izlova", "")
-    temp     = decl.get("hraniti_temperatura", "")
-    vet      = decl.get("veterinarska_oznaka", VET_OZNAKA)
-
+    """ZPL za Zebra GK420t — 8x5 cm. TODO: ovalni žig, IZDELEK, PORABITI DO."""
+    def _esc(s): return (s or "")[:60]
     return f"""^XA
 ^PW609
 ^LL406
 ^CI28
-^FO15,15^A0N,20,20^FDNAZIV BLAGA: {naziv}^FS
-^FO15,40^A0N,18,18^FDIZDLEK: {izdelek}^FS
-^FO15,65^A0N,18,18^FDDRZAVA POREKLA: {drzava}^FS
-^FO15,88^A0N,18,18^FDKRAJ PROIZVODA: {kraj}^FS
-^FO15,111^A0N,18,18^FDDOBAVITELJ: {dob[:45]}^FS
-^FO15,134^A0N,18,18^FDLOT: {lot}^FS
-^FO15,157^A0N,18,18^FDLOT DOBAVITELJA: {lot_d}^FS
-^FO15,180^A0N,18,18^FDKATEGORIJA SVEZOSTI: {kat}^FS
-^FO15,203^A0N,18,18^FDPORABITI DO: {por}^FS
-^FO15,226^A0N,18,18^FDDATUM IZLOVA: {izlov}^FS
-^FO15,249^A0N,18,18^FDHRANITI PRI TEMPERATURI: {temp}^FS
-^FO480,270^A0N,20,20^FD{vet}^FS
+^FO15,15^A0N,20,20^FDNAZIV BLAGA: {_esc(decl.get('naziv_blaga'))}^FS
+^FO15,40^A0N,18,18^FDIZDLEK: {_esc(decl.get('izdelek'))}^FS
+^FO15,65^A0N,18,18^FDDRZAVA POREKLA: {_esc(decl.get('drzava_porekla'))}^FS
+^FO15,88^A0N,18,18^FDKRAJ PROIZVODA: {_esc(decl.get('kraj_proizvoda'))}^FS
+^FO15,111^A0N,18,18^FDDOBAVITELJ: {_esc(decl.get('dobavitelj'))}^FS
+^FO15,134^A0N,18,18^FDLOT: {_esc(decl.get('lot'))}^FS
+^FO15,157^A0N,18,18^FDLOT DOBAVITELJA: {_esc(decl.get('lot_dobavitelja'))}^FS
+^FO15,180^A0N,18,18^FDKATEGORIJA SVEZOSTI: {_esc(decl.get('kategorija_svezosti'))}^FS
+^FO15,203^A0N,18,18^FDPORABITI DO: {_esc(decl.get('porabiti_do'))}^FS
+^FO15,226^A0N,18,18^FDDATUM IZLOVA: {_esc(decl.get('datum_izlova'))}^FS
+^FO15,249^A0N,18,18^FDHRANITI PRI TEMPERATURI: {_esc(decl.get('hraniti_temperatura'))}^FS
+^FO480,300^A0N,18,18^FD{_esc(decl.get('veterinarska_oznaka'))}^FS
 ^XZ"""
 
 # ─── Validacija ───────────────────────────────────────────────────────────────
@@ -238,8 +206,7 @@ def _has_critical(errors): return any(t == "❌" for t, _ in errors)
 def _draft_status(draft: dict) -> str:
     if draft.get("parse_error"): return "error"
     if draft.get("sent_to_minimax"): return "sent"
-    errors = _validate(draft.get("header", {}), draft.get("rows", []))
-    return "error" if _has_critical(errors) else "ready"
+    return "error" if _has_critical(_validate(draft.get("header",{}), draft.get("rows",[]))) else "ready"
 
 # ─── Minimax prenos ───────────────────────────────────────────────────────────
 
@@ -247,7 +214,7 @@ def _get_item_id_by_code(cli, code):
     try:
         data = cli._get("/items", params={"Code": code, "CurrentPage": 1, "PageSize": 5})
         for r in data.get("Rows", []):
-            if r.get("Code", "").upper() == code.upper():
+            if r.get("Code","").upper() == code.upper():
                 return r.get("ItemId") or 0
     except: pass
     return 0
@@ -255,15 +222,14 @@ def _get_item_id_by_code(cli, code):
 def _get_wh_id(cli):
     try:
         for wh in cli.get_warehouses():
-            if wh.get("Code", "") == VP_CEN_CODE:
+            if wh.get("Code","") == VP_CEN_CODE:
                 return wh.get("WarehouseId") or wh.get("ID") or 0
     except: pass
     return 0
 
 def _get_supplier_id(cli, name):
     try:
-        name_up = name.upper()
-        page = 1
+        name_up, page = name.upper(), 1
         while True:
             data = cli._get("/suppliers", params={"CurrentPage": page, "PageSize": 100})
             rows = data.get("Rows", [])
@@ -281,37 +247,34 @@ def _send_draft(draft: dict) -> tuple:
         cli    = _get_client()
         wh_id  = _get_wh_id(cli)
         if not wh_id: return None, "Skladišče VP-CEN ni najdeno"
-        sup_id = _get_supplier_id(cli, draft["header"].get("supplier_name", ""))
-        if not sup_id: return None, f"Dobavitelj ni najden v Minimaxu"
-
+        sup_id = _get_supplier_id(cli, draft["header"].get("supplier_name",""))
+        if not sup_id: return None, "Dobavitelj ni najden v Minimaxu"
         stock_rows = []
         for row in draft["rows"]:
-            item_id = _get_item_id_by_code(cli, row.get("item_code", ""))
+            item_id = _get_item_id_by_code(cli, row.get("item_code",""))
             if not item_id: return None, f"Artikel '{row.get('item_code')}' ni najden"
             sr = {
                 "Item":              {"ID": item_id},
                 "Quantity":          float(row.get("quantity") or 0),
                 "Price":             float(row.get("price") or 0),
-                "BatchNumber":       row.get("batch_number", ""),
-                "UnitOfMeasurement": row.get("unit", "kg"),
+                "BatchNumber":       row.get("batch_number",""),
+                "UnitOfMeasurement": row.get("unit","kg"),
                 "WarehouseTo":       {"ID": wh_id},
             }
             if row.get("selling_price") and float(row.get("selling_price")) > 0:
                 sr["SellingPrice"] = float(row["selling_price"])
             stock_rows.append(sr)
-
-        h = draft["header"]
+        h    = draft["header"]
         body = {
-            "StockEntryType": "P", "StockEntrySubtype": "L", "Status": "O",
-            "Date":        h["invoice_date"] + "T00:00:00",
+            "StockEntryType":"P","StockEntrySubtype":"L","Status":"O",
+            "Date":        h["invoice_date"]+"T00:00:00",
             "Description": f"{h.get('invoice_number','')} — {h.get('supplier_name','')}",
             "Supplier":    {"ID": sup_id},
             "WarehouseTo": {"ID": wh_id},
             "StockEntryRows": stock_rows,
         }
-        result   = cli._post("/stockentry", body)
-        entry_id = result.get("StockEntryId") or result.get("ID") or "?"
-        return entry_id, None
+        result = cli._post("/stockentry", body)
+        return result.get("StockEntryId") or result.get("ID") or "?", None
     except Exception as e:
         return None, str(e)
 
@@ -320,7 +283,6 @@ def _send_draft(draft: dict) -> tuple:
 def render():
     st.caption("Skeniranje dobavnic dobavitelja → P/L osnutek v VP-CEN + deklaracije")
 
-    # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
         st.header("⚙️ Nastavitve")
         with st.expander("Minimax dostop", expanded=False):
@@ -329,23 +291,17 @@ def render():
             st.session_state["username"]      = st.text_input("Uporabniško ime",  value=_secret("MINIMAX_USERNAME",""))
             st.session_state["password"]      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD",""), type="password")
             st.session_state["org_id"]        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID","171038"))
-        st.divider()
-        st.caption(f"Osnutkov v pomnilniku: {len(st.session_state.get('prejem_drafts', {}))}")
 
-    # Init
-    if "prejem_drafts" not in st.session_state:
-        st.session_state["prejem_drafts"] = {}
-    if "prejem_file_store" not in st.session_state:
-        st.session_state["prejem_file_store"] = {}
+    if "prejem_drafts"     not in st.session_state: st.session_state["prejem_drafts"]     = {}
+    if "prejem_file_store" not in st.session_state: st.session_state["prejem_file_store"] = {}
 
     drafts     = st.session_state["prejem_drafts"]
     file_store = st.session_state["prejem_file_store"]
 
     # ═══════════════════════════════════════════════════════════
-    # UPLOAD + OBDELAVA (zgoraj, zložljivo)
+    # UPLOAD + OBDELAVA
     # ═══════════════════════════════════════════════════════════
     with st.expander("📤 Naloži in obdelaj dobavnice", expanded=not bool(drafts)):
-
         uploaded_files = st.file_uploader(
             "Izberite dobavnice (slike ali PDF)",
             type=["jpg","jpeg","png","pdf"],
@@ -360,39 +316,36 @@ def render():
             st.session_state["prejem_file_store"] = file_store
 
         if file_store:
-            selected = []
+            selected_files = []
             for fname in file_store:
                 is_done = any(d.get("fname") == fname for d in drafts.values())
-                lbl = f"{'✅' if is_done else '📄'} {fname}"
-                if st.checkbox(lbl, value=not is_done, key=f"chk_{fname}"):
-                    selected.append(fname)
+                if st.checkbox(f"{'✅' if is_done else '📄'} {fname}", value=not is_done, key=f"chk_f_{fname}"):
+                    selected_files.append(fname)
 
             col1, col2 = st.columns([2,1])
             with col1:
-                if st.button(f"🤖 Obdelaj z AI ({len(selected)})", type="primary",
-                             use_container_width=True, disabled=not selected, key="btn_obdelaj"):
+                if st.button(f"🤖 Obdelaj z AI ({len(selected_files)})", type="primary",
+                             use_container_width=True, disabled=not selected_files, key="btn_obdelaj"):
                     prog = st.progress(0)
-                    for i, fname in enumerate(selected):
-                        prog.progress((i+1)/len(selected), text=f"Berem {fname} …")
-                        fdata = file_store[fname]
-                        mmap  = {"image/jpeg":"image/jpeg","image/jpg":"image/jpeg",
-                                 "image/png":"image/png","application/pdf":"application/pdf"}
-                        mtype = mmap.get(fdata["type"], "image/jpeg")
+                    for i, fname in enumerate(selected_files):
+                        prog.progress((i+1)/len(selected_files), text=f"Berem {fname} …")
+                        fdata  = file_store[fname]
+                        mmap   = {"image/jpeg":"image/jpeg","image/jpg":"image/jpeg",
+                                  "image/png":"image/png","application/pdf":"application/pdf"}
+                        mtype  = mmap.get(fdata["type"],"image/jpeg")
                         parsed, err = _parse_claude(fdata["bytes"], mtype)
 
                         draft_id = str(uuid.uuid4())[:8]
                         if err or not parsed:
-                            drafts[draft_id] = {
-                                "id": draft_id, "fname": fname,
+                            drafts[draft_id] = {"id":draft_id,"fname":fname,
                                 "parse_error": err or "AI ni vrnil podatkov",
-                                "header": {}, "rows": [], "declarations": [],
-                                "sent_to_minimax": False, "minimax_entry_id": None,
-                            }
+                                "header":{},"rows":[],"declarations":[],
+                                "sent_to_minimax":False,"minimax_entry_id":None}
                             continue
 
-                        lot = _lot_number(parsed.get("supplier_name",""), parsed.get("invoice_date",""))
+                        lot      = _lot_number(parsed.get("supplier_name",""), parsed.get("invoice_date",""))
                         rows_out = []
-                        for item in parsed.get("items", []):
+                        for item in parsed.get("items",[]):
                             rows_out.append({
                                 "inv_name":          item.get("name",""),
                                 "item_code":         "",
@@ -411,7 +364,6 @@ def render():
                                 "datum_izlova":      item.get("datum_izlova", parsed.get("datum_izlova","")),
                                 "kraj_proizvoda":    parsed.get("kraj_proizvoda",""),
                             })
-
                         header = {
                             "supplier_name":   parsed.get("supplier_name",""),
                             "invoice_number":  parsed.get("invoice_number",""),
@@ -421,23 +373,17 @@ def render():
                             "datum_izlova":    parsed.get("datum_izlova",""),
                             "kraj_proizvoda":  parsed.get("kraj_proizvoda",""),
                         }
-                        decls = _build_declarations(header, rows_out)
                         drafts[draft_id] = {
-                            "id": draft_id, "fname": fname,
-                            "parse_error": None,
-                            "header":       header,
-                            "rows":         rows_out,
-                            "declarations": decls,
-                            "sent_to_minimax": False,
-                            "minimax_entry_id": None,
+                            "id":draft_id,"fname":fname,"parse_error":None,
+                            "header":header,"rows":rows_out,
+                            "declarations":_build_declarations(header, rows_out),
+                            "sent_to_minimax":False,"minimax_entry_id":None,
                         }
-
                     prog.empty()
                     st.session_state["prejem_drafts"] = drafts
                     st.rerun()
-
             with col2:
-                if st.button("↺ Počisti datoteke", use_container_width=True, key="btn_clr_files"):
+                if st.button("↺ Počisti datoteke", use_container_width=True, key="btn_clr_f"):
                     st.session_state["prejem_file_store"] = {}
                     st.rerun()
 
@@ -449,17 +395,19 @@ def render():
     # SEZNAM OSNUTKOV
     # ═══════════════════════════════════════════════════════════
     st.subheader("📋 Osnutki")
+    st.markdown(f"{STATUS_ICON['ready']} Pripravljen &nbsp;&nbsp;"
+                f"{STATUS_ICON['error']} Pomanjkljiv &nbsp;&nbsp;"
+                f"{STATUS_ICON['sent']} Poslan v Minimax", unsafe_allow_html=True)
 
-    # Legenda
-    st.markdown(
-        f"{STATUS_ICON['ready']} Pripravljen &nbsp;&nbsp;"
-        f"{STATUS_ICON['error']} Pomanjkljiv &nbsp;&nbsp;"
-        f"{STATUS_ICON['sent']} Poslan v Minimax",
-        unsafe_allow_html=True
+    # Master checkbox za izbiro vseh osnutkov
+    master_sel_drafts = st.checkbox(
+        "☑ Izberi / odzberi vse osnutke",
+        key="master_sel_all_drafts",
+        value=False
     )
     st.markdown("---")
 
-    selected_ids = []
+    selected_draft_ids = []
 
     for draft_id, draft in list(drafts.items()):
         status = _draft_status(draft)
@@ -467,35 +415,28 @@ def render():
         h      = draft.get("header", {})
         fname  = draft.get("fname", "")
 
-        # Checkbox za izbor
         col_chk, col_exp = st.columns([0.5, 9.5])
         with col_chk:
-            if st.checkbox("", key=f"sel_{draft_id}", value=False):
-                selected_ids.append(draft_id)
+            sel = st.checkbox("", key=f"sel_d_{draft_id}", value=master_sel_drafts)
+            if sel: selected_draft_ids.append(draft_id)
         with col_exp:
-            label = (
-                f"{icon} **{h.get('supplier_name') or fname}**  ·  "
-                f"{h.get('invoice_date','?')}  ·  "
-                f"#{h.get('invoice_number','?')}  ·  "
-                f"{len(draft.get('rows',[]))} artikov  ·  "
-                f"{len(draft.get('declarations',[]))} deklaracij"
-            )
-            if draft.get("sent_to_minimax"):
-                label += f"  ·  ID: {draft.get('minimax_entry_id','')}"
+            lbl = (f"{icon} **{h.get('supplier_name') or fname}**  ·  "
+                   f"{h.get('invoice_date','?')}  ·  #{h.get('invoice_number','?')}  ·  "
+                   f"{len(draft.get('rows',[]))} artikov  ·  "
+                   f"{len(draft.get('declarations',[]))} deklaracij"
+                   + (f"  ·  Minimax ID: {draft.get('minimax_entry_id')}" if draft.get("sent_to_minimax") else ""))
 
-            with st.expander(label, expanded=False):
-
+            with st.expander(lbl, expanded=False):
                 if draft.get("parse_error"):
                     st.error(f"Napaka branja: {draft['parse_error']}")
                     continue
 
-                # ── Header korekcija ──────────────────────────────────────
                 errors = _validate(h, draft["rows"])
                 if errors:
-                    for typ, msg in errors:
-                        st.write(f"{typ} {msg}")
+                    for typ, msg in errors: st.write(f"{typ} {msg}")
                     st.divider()
 
+                # Header
                 c1,c2,c3 = st.columns(3)
                 with c1:
                     h["supplier_name"]  = st.text_input("Dobavitelj", value=h.get("supplier_name",""), key=f"sup_{draft_id}")
@@ -522,6 +463,7 @@ def render():
                 # ── Tabs: Artikli | Deklaracije ───────────────────────────
                 tab_art, tab_decl = st.tabs(["🐟 Artikli", "🏷️ Deklaracije"])
 
+                # ── TAB: ARTIKLI ──────────────────────────────────────────
                 with tab_art:
                     for idx, row in enumerate(draft["rows"]):
                         art_icon = "✅" if row.get("item_code") else "❌"
@@ -550,51 +492,96 @@ def render():
                         total = sum(float(r.get("quantity") or 0)*float(r.get("price") or 0) for r in draft["rows"])
                         st.metric("Skupna nabavna vrednost", f"{total:.2f} €")
 
+                # ── TAB: DEKLARACIJE ──────────────────────────────────────
                 with tab_decl:
-                    # Regeneriraj deklaracije ob vsaki spremembi
                     draft["declarations"] = _build_declarations(h, draft["rows"])
                     decls = draft["declarations"]
 
                     if not decls:
                         st.info("Deklaracije bodo generirane ko so artikli določeni.")
                     else:
+                        # ── Master vrstica: izberi vse + skupne kopije ────
+                        m_col1, m_col2, m_col3 = st.columns([0.5, 5, 1.5])
+                        with m_col1:
+                            master_sel_decl = st.checkbox(
+                                "☑", key=f"msd_{draft_id}", value=True,
+                                help="Izberi / odzberi vse deklaracije"
+                            )
+                        with m_col2:
+                            st.markdown("**Deklaracija**")
+                        with m_col3:
+                            # Master kopije — ko se spremeni, posodobi vse posamezne
+                            prev_master_k = f"prev_mc_{draft_id}"
+                            master_copies = st.number_input(
+                                "Kopije (vse)", min_value=1, max_value=99, value=1,
+                                key=f"mc_{draft_id}", label_visibility="collapsed",
+                                help="Nastavi število kopij za vse deklaracije"
+                            )
+                            prev_val = st.session_state.get(prev_master_k, master_copies)
+                            if master_copies != prev_val:
+                                for di2 in range(len(decls)):
+                                    st.session_state[f"ic_{draft_id}_{di2}"] = master_copies
+                            st.session_state[prev_master_k] = master_copies
+
+                        st.markdown("---")
+
+                        # ── Posamezne deklaracije ─────────────────────────
+                        selected_decls = []
                         for di, decl in enumerate(decls):
-                            with st.expander(f"🏷️ {decl['item_name'] or decl['naziv_blaga']}", expanded=False):
-                                dc1, dc2 = st.columns(2)
-                                with dc1:
-                                    decl["naziv_blaga"]       = st.text_input("Naziv blaga",       value=decl.get("naziv_blaga",""),       key=f"dg_naz_{draft_id}_{di}")
-                                    decl["izdelek"]           = st.text_input("Izdelek ⏳ TODO",    value=decl.get("izdelek",""),           key=f"dg_izd_{draft_id}_{di}")
-                                    decl["drzava_porekla"]    = st.text_input("Država porekla",     value=decl.get("drzava_porekla",""),    key=f"dg_drz_{draft_id}_{di}")
-                                    decl["kraj_proizvoda"]    = st.text_input("Kraj proizvoda",     value=decl.get("kraj_proizvoda",""),    key=f"dg_kraj_{draft_id}_{di}")
-                                    decl["dobavitelj"]        = st.text_input("Dobavitelj",         value=decl.get("dobavitelj",OLTREON_INFO), key=f"dg_dob_{draft_id}_{di}")
-                                with dc2:
-                                    decl["lot"]               = st.text_input("LOT (naš)",          value=decl.get("lot",""),               key=f"dg_lot_{draft_id}_{di}")
-                                    decl["lot_dobavitelja"]   = st.text_input("LOT dobavitelja",    value=decl.get("lot_dobavitelja",""),    key=f"dg_lotd_{draft_id}_{di}")
-                                    decl["kategorija_svezosti"] = st.text_input("Kategorija svežosti", value=decl.get("kategorija_svezosti",""), key=f"dg_kat_{draft_id}_{di}")
-                                    decl["porabiti_do"]       = st.text_input("Porabiti do ⏳ TODO", value=decl.get("porabiti_do",""),       key=f"dg_por_{draft_id}_{di}")
-                                    decl["datum_izlova"]      = st.text_input("Datum izlova",       value=decl.get("datum_izlova",""),      key=f"dg_izl_{draft_id}_{di}")
-                                    decl["hraniti_temperatura"] = st.text_input("Hraniti pri temp.", value=decl.get("hraniti_temperatura",""), key=f"dg_tmp_{draft_id}_{di}")
+                            d_col1, d_col2, d_col3 = st.columns([0.5, 5, 1.5])
+                            with d_col1:
+                                d_sel = st.checkbox("", key=f"ds_{draft_id}_{di}", value=master_sel_decl)
+                            with d_col2:
+                                with st.expander(f"🏷️ {decl.get('item_name') or decl.get('naziv_blaga','')}", expanded=False):
+                                    dc1, dc2 = st.columns(2)
+                                    with dc1:
+                                        decl["naziv_blaga"]       = st.text_input("Naziv blaga",       value=decl.get("naziv_blaga",""),          key=f"dn_{draft_id}_{di}")
+                                        decl["izdelek"]           = st.text_input("Izdelek ⏳",        value=decl.get("izdelek",""),              key=f"di_{draft_id}_{di}")
+                                        decl["drzava_porekla"]    = st.text_input("Država porekla",    value=decl.get("drzava_porekla",""),       key=f"dd_{draft_id}_{di}")
+                                        decl["kraj_proizvoda"]    = st.text_input("Kraj proizvoda",    value=decl.get("kraj_proizvoda",""),       key=f"dk_{draft_id}_{di}")
+                                        decl["dobavitelj"]        = st.text_input("Dobavitelj",        value=decl.get("dobavitelj",OLTREON_INFO), key=f"ddo_{draft_id}_{di}")
+                                    with dc2:
+                                        decl["lot"]               = st.text_input("LOT (naš)",         value=decl.get("lot",""),                  key=f"dl_{draft_id}_{di}")
+                                        decl["lot_dobavitelja"]   = st.text_input("LOT dobavitelja",   value=decl.get("lot_dobavitelja",""),      key=f"dld_{draft_id}_{di}")
+                                        decl["kategorija_svezosti"] = st.text_input("Kategorija",      value=decl.get("kategorija_svezosti",""), key=f"dks_{draft_id}_{di}")
+                                        decl["porabiti_do"]       = st.text_input("Porabiti do ⏳",    value=decl.get("porabiti_do",""),          key=f"dp_{draft_id}_{di}")
+                                        decl["datum_izlova"]      = st.text_input("Datum izlova",      value=decl.get("datum_izlova",""),         key=f"diz_{draft_id}_{di}")
+                                        decl["hraniti_temperatura"] = st.text_input("Hraniti pri T.",  value=decl.get("hraniti_temperatura",""), key=f"dht_{draft_id}_{di}")
+                                    st.caption(f"Vet. oznaka: {VET_OZNAKA}")
+                            with d_col3:
+                                ind_copies = st.number_input(
+                                    "Kopije", min_value=1, max_value=99,
+                                    value=int(st.session_state.get(f"ic_{draft_id}_{di}", master_copies)),
+                                    key=f"ic_{draft_id}_{di}",
+                                    label_visibility="collapsed",
+                                )
+                            if d_sel:
+                                selected_decls.append((di, decl, ind_copies))
 
-                                st.caption(f"Vet. oznaka: {decl.get('veterinarska_oznaka', VET_OZNAKA)}")
-
-                                # ZPL preview + download
-                                zpl = _generate_zpl(decl)
-                                col_zpl1, col_zpl2 = st.columns(2)
-                                with col_zpl1:
-                                    if st.button("🖨️ Natisni deklaracijo", key=f"print_{draft_id}_{di}",
-                                                  use_container_width=True):
-                                        # TODO: direktno tiskanje na Zebra GK420t
-                                        st.info("⏳ Tiskanje na Zebra GK420t — v razvoju. "
-                                                "Prenesite ZPL in pošljite na printer.")
-                                with col_zpl2:
-                                    st.download_button(
-                                        "⬇️ Prenesi ZPL",
-                                        data=zpl,
-                                        file_name=f"dekl_{draft_id}_{di}.zpl",
-                                        mime="text/plain",
-                                        key=f"dl_zpl_{draft_id}_{di}",
-                                        use_container_width=True,
-                                    )
+                        # ── Gumb NATISNI (pod seznamom) ───────────────────
+                        st.markdown("---")
+                        if st.button(
+                            f"🖨️ Natisni deklaracije ({len(selected_decls)} izbranih · "
+                            f"{sum(c for _,_,c in selected_decls)} kopij skupaj)",
+                            key=f"print_{draft_id}",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=not selected_decls,
+                        ):
+                            # TODO: direktno tiskanje na Zebra GK420t
+                            # Zaenkrat generiramo ZPL datoteke za prenos
+                            zpl_all = ""
+                            for di, decl, copies in selected_decls:
+                                for _ in range(copies):
+                                    zpl_all += _generate_zpl(decl) + "\n"
+                            st.download_button(
+                                f"⬇️ Prenesi ZPL ({len(selected_decls)} deklaracij)",
+                                data=zpl_all,
+                                file_name=f"deklaracije_{draft_id}.zpl",
+                                mime="text/plain",
+                                key=f"dl_all_zpl_{draft_id}",
+                            )
+                            st.info("⏳ Direktno tiskanje na Zebra GK420t bo implementirano ko dobimo vzorec OltreCon deklaracije.")
 
                 # Shrani spremembe
                 draft["header"]       = h
@@ -603,60 +590,51 @@ def render():
     st.session_state["prejem_drafts"] = drafts
 
     # ═══════════════════════════════════════════════════════════
-    # AKCIJSKI GUMBI (spodaj)
+    # AKCIJSKI GUMBI
     # ═══════════════════════════════════════════════════════════
     st.divider()
 
+    to_act = selected_draft_ids if selected_draft_ids else list(drafts.keys())
     ready_ids = [
-        did for did in (selected_ids or list(drafts.keys()))
+        did for did in to_act
         if not drafts[did].get("parse_error")
         and not drafts[did].get("sent_to_minimax")
         and not _has_critical(_validate(drafts[did].get("header",{}), drafts[did].get("rows",[])))
     ]
 
     col_send, col_del = st.columns(2)
-
     with col_send:
-        n_ready = len([did for did in ready_ids if did in (selected_ids or list(drafts.keys()))])
-        all_ok  = all(
-            not _has_critical(_validate(drafts[did].get("header",{}), drafts[did].get("rows",[])))
-            for did in drafts if not drafts[did].get("parse_error") and not drafts[did].get("sent_to_minimax")
-        )
         if st.button(
             f"📤 Pošlji v Minimax  ({len(ready_ids)} osnutkov)",
             type="primary", use_container_width=True,
-            disabled=not ready_ids,
-            key="btn_send_minimax",
+            disabled=not ready_ids, key="btn_send",
         ):
-            to_send = selected_ids if selected_ids else list(drafts.keys())
             prog = st.progress(0)
-            for i, did in enumerate([d for d in to_send if d in ready_ids]):
-                prog.progress((i+1)/len(ready_ids), text=f"Prenašam …")
+            for i, did in enumerate(ready_ids):
+                prog.progress((i+1)/len(ready_ids), text="Prenašam …")
                 entry_id, err = _send_draft(drafts[did])
                 if err:
                     st.error(f"❌ {drafts[did]['header'].get('supplier_name','?')}: {err}")
                 else:
-                    drafts[did]["sent_to_minimax"]   = True
-                    drafts[did]["minimax_entry_id"]  = entry_id
-                    st.success(f"✅ {drafts[did]['header'].get('supplier_name','?')} → Minimax ID: {entry_id}")
+                    drafts[did]["sent_to_minimax"]  = True
+                    drafts[did]["minimax_entry_id"] = entry_id
+                    st.success(f"✅ {drafts[did]['header'].get('supplier_name','?')} → ID: {entry_id}")
             prog.empty()
             st.session_state["prejem_drafts"] = drafts
             st.rerun()
 
     with col_del:
-        to_del = selected_ids if selected_ids else []
+        to_del = selected_draft_ids
         if st.button(
             f"🗑️ Izbriši osnutke  ({len(to_del)} izbranih)",
-            use_container_width=True,
-            disabled=not to_del,
-            key="btn_delete",
+            use_container_width=True, disabled=not to_del, key="btn_del",
         ):
             for did in to_del:
                 drafts.pop(did, None)
             st.session_state["prejem_drafts"] = drafts
             st.rerun()
 
-    if selected_ids:
-        st.caption(f"Izbrano: {len(selected_ids)} osnutkov")
+    if selected_draft_ids:
+        st.caption(f"Izbrano: {len(selected_draft_ids)} osnutkov")
     else:
-        st.caption("Kljukica ob osnutku = izbor za pošiljanje/brisanje. Brez izbora = akcija velja za vse.")
+        st.caption("Brez izbora = akcija velja za vse osnutke.")
