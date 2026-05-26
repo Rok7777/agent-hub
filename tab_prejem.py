@@ -388,6 +388,25 @@ def _send_draft(draft: dict) -> tuple:
     except Exception as e:
         return None, str(e)
 
+# ─── Pomožne funkcije za UI ──────────────────────────────────────────────────
+
+def _flabel(label: str, val) -> str:
+    """Označi polje z 🔴 če je vrednost 0 ali prazna."""
+    if val is None or val == "" or val == 0 or val == 0.0:
+        return f"🔴 {label}"
+    return f"✅ {label}"
+
+def _art_status(row: dict) -> tuple:
+    """Vrne (ujemanje_ok, podatki_ok) za prikaz dveh statusnih ikon."""
+    matched   = bool(row.get("item_code"))
+    data_ok   = (
+        float(row.get("quantity") or 0) > 0 and
+        float(row.get("price") or 0) > 0 and
+        bool(row.get("batch_number")) and
+        bool(row.get("country_of_origin"))
+    )
+    return matched, (matched and data_ok)
+
 # ─── Iskanje artiklov ─────────────────────────────────────────────────────────
 
 def _get_article_options() -> list:
@@ -668,15 +687,16 @@ def render():
                         if row.get("_split_child"):
                             continue
 
-                        has_art   = bool(row.get("item_code"))
-                        art_icon  = "✅" if has_art else "❌"
-                        qty_disp  = float(row.get("quantity") or 0)
-                        mm_naziv  = row.get("item_name","")
-                        mm_label  = (f"   ·—·   {mm_naziv}" if mm_naziv else f"  ({row['item_code']})") if has_art else " — ❌ artikel manjka"
+                        matched, data_ok = _art_status(row)
+                        s1       = "🟢" if matched  else "🔴"
+                        s2       = "🟢" if data_ok  else "🔴"
+                        qty_disp = float(row.get("quantity") or 0)
+                        mm_naziv = row.get("item_name","")
+                        mm_label = (f"   ·—·   {mm_naziv}" if mm_naziv else f"  ({row.get('item_code','')})") if matched else "   — artikel manjka"
 
                         with st.expander(
-                            f"{art_icon} {idx+1}. {row['inv_name']}  ({qty_disp} {row.get('unit','kg')}){mm_label}",
-                            expanded=not has_art
+                            f"{s1}{s2} {idx+1}. {row['inv_name']}  ({qty_disp} {row.get('unit','kg')}){mm_label}",
+                            expanded=not matched
                         ):
                             if row.get("latin_name"):
                                 st.caption(f"🔬 *{row['latin_name']}*")
@@ -715,17 +735,17 @@ def render():
                                 # ── Polja ────────────────────────────────
                                 cc1,cc2,cc3,cc4 = st.columns(4)
                                 with cc1:
-                                    f_qty      = st.number_input("Količina", value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
-                                    f_unit     = st.text_input("ME", value=row.get("unit","kg"), key=f"unit_{draft_id}_{idx}")
+                                    f_qty      = st.number_input(_flabel("Količina",         row.get("quantity")),       value=float(row.get("quantity") or 0),       min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
+                                    f_unit     = st.text_input( _flabel("ME",                row.get("unit")),           value=row.get("unit","kg"),                                              key=f"unit_{draft_id}_{idx}")
                                 with cc2:
-                                    f_price    = st.number_input("Cena €/enoto", value=float(row.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"price_{draft_id}_{idx}")
-                                    f_discount = st.number_input("% popusta", value=float(row.get("discount_pct") or 0), min_value=0.0, max_value=100.0, step=0.01, format="%.2f", key=f"disc_{draft_id}_{idx}")
+                                    f_price    = st.number_input(_flabel("Cena €/enoto",     row.get("price")),          value=float(row.get("price") or 0),          min_value=0.0, step=0.01,  format="%.4f", key=f"price_{draft_id}_{idx}")
+                                    f_discount = st.number_input(        "% popusta",                                    value=float(row.get("discount_pct") or 0),   min_value=0.0, max_value=100.0, step=0.01, format="%.2f", key=f"disc_{draft_id}_{idx}")
                                 with cc3:
-                                    f_sell     = st.number_input("Prod. cena €", value=float(row.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sell_{draft_id}_{idx}")
-                                    f_batch    = st.text_input("Serija / Lot", value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
+                                    f_sell     = st.number_input(_flabel("Prod. cena €",     row.get("selling_price")),  value=float(row.get("selling_price") or 0),  min_value=0.0, step=0.01,  format="%.4f", key=f"sell_{draft_id}_{idx}")
+                                    f_batch    = st.text_input( _flabel("Serija / Lot",      row.get("batch_number")),   value=row.get("batch_number",""),                                        key=f"batch_{draft_id}_{idx}")
                                 with cc4:
-                                    f_country  = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
-                                    f_tariff   = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
+                                    f_country  = st.text_input( _flabel("Država (2 črkoven)",row.get("country_of_origin")), value=row.get("country_of_origin",""),                               key=f"cntry_{draft_id}_{idx}")
+                                    f_tariff   = st.text_input( _flabel("Carinska tarifa",   row.get("tariff")),         value=row.get("tariff",""),                                              key=f"tariff_{draft_id}_{idx}")
                                 # ── Gumbi ────────────────────────────────
                                 gb1, gb2 = st.columns(2)
                                 with gb1:
