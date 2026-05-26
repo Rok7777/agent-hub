@@ -648,213 +648,113 @@ def render():
 
                 # ── TAB: ARTIKLI ──────────────────────────────────────────
                 with tab_art:
+                    all_opts = _get_article_options()
+
                     for idx, row in enumerate(draft["rows"]):
+                        # Preskoči split pod-vrstice (legacy — ne bi smelo biti)
                         if row.get("_split_child"):
                             continue
 
-                        is_split  = bool(row.get("_split"))
-                        all_coded = all(
-                            (r.get("item_code") or "") != ""
-                            for r in ([row] + row.get("_split_rows", []))
-                        )
-                        orig_qty  = float(row.get("_orig_qty") or row.get("quantity") or 0)
-                        art_icon  = "✅" if all_coded else ("✂️" if is_split else "❌")
+                        has_art   = bool(row.get("item_code"))
+                        art_icon  = "✅" if has_art else "❌"
+                        qty_disp  = float(row.get("quantity") or 0)
+                        mm_label  = f"  `{row['item_code']}`" if has_art else " — artikel manjka"
 
-                        # Naslov: naziv dobavnice + Minimax naziv če je znan
-                        mm_naziv = row.get("item_name","")
-                        mm_label = f"  →  {mm_naziv}" if mm_naziv and not row.get("_needs_split_hint") else ""
-                        split_label = " — ⚠️ razdeliti!" if row.get("_needs_split_hint") and not is_split else ""
-                        if is_split:
-                            exp_suffix = " — ✂️ razdeljena"
-                        elif row.get("item_code"):
-                            exp_suffix = f"  `{row['item_code']}`{mm_label}"
-                        elif row.get("_needs_split_hint"):
-                            exp_suffix = split_label
-                        else:
-                            exp_suffix = " — šifra manjka"
                         with st.expander(
-                            f"{art_icon} {idx+1}. {row['inv_name']}  ({orig_qty} {row.get('unit','kg')}){exp_suffix}",
-                            expanded=False
+                            f"{art_icon} {idx+1}. {row['inv_name']}  ({qty_disp} {row.get('unit','kg')}){mm_label}",
+                            expanded=not has_art
                         ):
                             if row.get("latin_name"):
                                 st.caption(f"🔬 *{row['latin_name']}*")
 
-                            if not is_split:
-                                # ── Normalna vrstica — st.form preprečuje Enter/zapiranje
-                                # Shrani original za "Opusti spremembe"
-                                orig_snap_key = f"orig_{draft_id}_{idx}"
-                                if orig_snap_key not in st.session_state:
-                                    st.session_state[orig_snap_key] = {
-                                        k: v for k, v in row.items() if not k.startswith("_")
-                                    }
+                            # Shrani original za Opusti
+                            orig_key = f"orig_{draft_id}_{idx}"
+                            if orig_key not in st.session_state:
+                                st.session_state[orig_key] = {k:v for k,v in row.items() if not k.startswith("_")}
 
-                                with st.form(key=f"form_art_{draft_id}_{idx}"):
-                                    cc1,cc2,cc3,cc4 = st.columns(4)
-                                    with cc1:
-                                        f_item_code = st.text_input("Minimax artikel", value=row.get("item_code",""), key=f"fi_code_{draft_id}_{idx}")
-                                        f_quantity  = st.number_input("Količina", value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"fi_qty_{draft_id}_{idx}")
-                                    with cc2:
-                                        f_unit  = st.text_input("ME", value=row.get("unit","kg"), key=f"fi_unit_{draft_id}_{idx}")
-                                        f_price = st.number_input("Nab. cena €", value=float(row.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"fi_price_{draft_id}_{idx}")
-                                    with cc3:
-                                        f_sell  = st.number_input("Prod. cena €", value=float(row.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"fi_sell_{draft_id}_{idx}")
-                                        f_batch = st.text_input("Serija / Lot", value=row.get("batch_number",""), key=f"fi_batch_{draft_id}_{idx}")
-                                    with cc4:
-                                        f_country = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"fi_cntry_{draft_id}_{idx}")
-                                        f_tariff  = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"fi_tariff_{draft_id}_{idx}")
+                            with st.form(key=f"form_art_{draft_id}_{idx}"):
 
-                                    # Hint za split
-                                    if row.get("_needs_split_hint"):
-                                        st.warning("⚠️ Ta artikel zahteva ročno delitev glede na velikost!")
-                                        opts_hint = row.get("_split_options", [])
-                                        if opts_hint:
-                                            st.caption("Možnosti: " + " · ".join(f"`{o['item_code']}` {o['item_name']}" for o in opts_hint))
+                                # ── Iskanje artikla ──────────────────────
+                                search_q = st.text_input(
+                                    "Minimax artikel — ključne besede, loči z  /",
+                                    value="",
+                                    placeholder="npr: postrv/file/svež  ali  LPOSS  ali  150-300",
+                                    key=f"sq_{draft_id}_{idx}",
+                                )
+                                filtered = _search_articles(search_q, all_opts)
+                                f_labels = ["— izberi —"] + [
+                                    f"{o['item_code']}  {o['item_name']}" for o in filtered
+                                ]
+                                curr_code = row.get("item_code","")
+                                curr_idx  = next(
+                                    (i+1 for i,o in enumerate(filtered) if o["item_code"]==curr_code), 0
+                                )
+                                sel_art = st.selectbox(
+                                    "Izberi artikel iz rezultatov",
+                                    f_labels, index=curr_idx,
+                                    key=f"sel_{draft_id}_{idx}",
+                                    label_visibility="collapsed",
+                                )
 
-                                    fb1, fb2, fb3 = st.columns(3)
-                                    with fb1:
-                                        do_confirm = st.form_submit_button("✅ Potrdi", type="primary", use_container_width=True)
-                                    with fb2:
-                                        do_revert  = st.form_submit_button("↩ Opusti spremembe", use_container_width=True)
-                                    with fb3:
-                                        do_split   = st.form_submit_button("✂️ Razdeli vrstico", use_container_width=True)
+                                # ── Polja ────────────────────────────────
+                                cc1,cc2,cc3,cc4 = st.columns(4)
+                                with cc1:
+                                    f_qty   = st.number_input("Količina", value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
+                                    f_unit  = st.text_input("ME", value=row.get("unit","kg"), key=f"unit_{draft_id}_{idx}")
+                                with cc2:
+                                    f_price = st.number_input("Nab. cena €", value=float(row.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"price_{draft_id}_{idx}")
+                                    f_sell  = st.number_input("Prod. cena €", value=float(row.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sell_{draft_id}_{idx}")
+                                with cc3:
+                                    f_batch   = st.text_input("Serija / Lot", value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
+                                    f_country = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
+                                with cc4:
+                                    f_tariff  = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
 
-                                    if do_confirm:
-                                        row["item_code"]         = f_item_code
-                                        row["quantity"]          = f_quantity
-                                        row["unit"]              = f_unit
-                                        row["price"]             = f_price
-                                        row["selling_price"]     = f_sell
-                                        row["batch_number"]      = f_batch
-                                        row["country_of_origin"] = f_country
-                                        row["tariff"]            = f_tariff
-                                        st.session_state[orig_snap_key] = {k:v for k,v in row.items() if not k.startswith("_")}
-                                        st.session_state[f"draft_exp_{draft_id}"] = True
-                                        st.session_state["prejem_drafts"] = drafts
-                                        _save_drafts(drafts)
-                                        st.rerun()
+                                # ── Gumbi ────────────────────────────────
+                                gb1, gb2 = st.columns(2)
+                                with gb1:
+                                    do_confirm = st.form_submit_button("✅ Potrdi", type="primary", use_container_width=True)
+                                with gb2:
+                                    do_revert  = st.form_submit_button("↩ Opusti spremembe", use_container_width=True)
 
-                                    if do_revert:
-                                        orig = st.session_state.get(orig_snap_key, {})
-                                        for k, v in orig.items():
-                                            row[k] = v
-                                        st.session_state[f"draft_exp_{draft_id}"] = True
-                                        st.session_state["prejem_drafts"] = drafts
-                                        _save_drafts(drafts)
-                                        st.rerun()
+                                if do_confirm:
+                                    # Apliciraj izbiro artikla
+                                    if sel_art and sel_art != "— izberi —":
+                                        code      = sel_art.split("  ")[0].strip()
+                                        name_part = sel_art[len(code):].strip()
+                                        row["item_code"] = code
+                                        row["item_name"] = name_part
+                                    row["quantity"]          = f_qty
+                                    row["unit"]              = f_unit
+                                    row["price"]             = f_price
+                                    row["selling_price"]     = f_sell
+                                    row["batch_number"]      = f_batch
+                                    row["country_of_origin"] = f_country
+                                    row["tariff"]            = f_tariff
+                                    # Posodobi snapshot
+                                    st.session_state[orig_key] = {k:v for k,v in row.items() if not k.startswith("_")}
+                                    st.session_state[f"draft_exp_{draft_id}"] = True
+                                    st.session_state["prejem_drafts"] = drafts
+                                    _save_drafts(drafts)
+                                    st.rerun()
 
-                                    if do_split:
-                                        row["_split"]    = True
-                                        row["_orig_qty"] = orig_qty
-                                        opts = row.get("_split_options", [])
-                                        template = {k:v for k,v in row.items() if not k.startswith("_")}
-                                        row["_split_rows"] = [
-                                            {**template,
-                                             "item_code": opts[0]["item_code"] if opts else "",
-                                             "item_name": opts[0]["item_name"] if opts else "",
-                                             "quantity": 0.0, "_split_child": True},
-                                        ]
-                                        st.session_state[f"draft_exp_{draft_id}"] = True
-                                        st.session_state["prejem_drafts"] = drafts
-                                        _save_drafts(drafts)
-                                        st.rerun()
+                                if do_revert:
+                                    orig = st.session_state.get(orig_key, {})
+                                    for k,v in orig.items():
+                                        row[k] = v
+                                    st.session_state[f"draft_exp_{draft_id}"] = True
+                                    st.session_state["prejem_drafts"] = drafts
+                                    _save_drafts(drafts)
+                                    st.rerun()
 
-                                # ── Razdeljena vrstica — st.form preprečuje zapiranje ob spremembi
-                                split_rows  = row.get("_split_rows", [])
-                                all_opts    = _get_article_options()
-                                opt_labels  = ["— izberi —"] + [f"{o['item_code']}  {o['item_name']}" for o in all_opts]
-
-                                split_sum = round(sum(float(r.get("quantity") or 0) for r in split_rows), 4)
-                                diff      = round(orig_qty - split_sum, 4)
-                                st.caption(f"Skupna količina dobavnice: **{orig_qty} {row.get('unit','kg')}**")
-                                if diff != 0:
-                                    st.warning(f"⚠️ Vsota delov: **{split_sum} kg** — manjka še **{diff} kg**")
-                                else:
-                                    st.success(f"✅ Vsota delov: {split_sum} kg = {orig_qty} kg")
-
-                                with st.form(key=f"form_split_{draft_id}_{idx}"):
-                                    for si, srow in enumerate(split_rows):
-                                        st.markdown(f"**Del {si+1}:**")
-
-                                        # Iskanje artikla
-                                        search_q = st.text_input(
-                                            "Minimax artikel (išči po šifri ali nazivu)",
-                                            value=srow.get("item_code",""),
-                                            key=f"sq_{draft_id}_{idx}_{si}",
-                                            placeholder="npr: POSSS ali postrv file ali 300-400"
-                                        )
-                                        filtered = _search_articles(search_q, all_opts)
-                                        f_labels  = ["— izberi —"] + [f"{o['item_code']}  {o['item_name']}" for o in filtered]
-                                        # Predizpolni indeks če je šifra že znana
-                                        curr_code = srow.get("item_code","")
-                                        curr_idx  = next((i+1 for i,o in enumerate(filtered) if o["item_code"]==curr_code), 0)
-                                        sel_art = st.selectbox(
-                                            "Izberi artikel",
-                                            f_labels,
-                                            index=curr_idx,
-                                            key=f"sel_{draft_id}_{idx}_{si}",
-                                            label_visibility="collapsed",
-                                        )
-
-                                        sc1, sc2, sc3, sc4 = st.columns(4)
-                                        with sc1:
-                                            srow["quantity"] = st.number_input("Količina (kg)", value=float(srow.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"sqty_{draft_id}_{idx}_{si}")
-                                        with sc2:
-                                            srow["price"] = st.number_input("Nab. cena €", value=float(srow.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sprice_{draft_id}_{idx}_{si}")
-                                        with sc3:
-                                            srow["selling_price"] = st.number_input("Prod. cena €", value=float(srow.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"ssell_{draft_id}_{idx}_{si}")
-                                            srow["batch_number"]  = st.text_input("Serija / Lot", value=srow.get("batch_number",""), key=f"sbatch_{draft_id}_{idx}_{si}")
-                                        with sc4:
-                                            srow["country_of_origin"] = st.text_input("Država", value=srow.get("country_of_origin",""), key=f"scntry_{draft_id}_{idx}_{si}")
-                                            srow["tariff"]            = st.text_input("Tarifa", value=srow.get("tariff",""), key=f"stariff_{draft_id}_{idx}_{si}")
-
-                                        if si < len(split_rows)-1:
-                                            st.divider()
-
-                                    # Gumbi znotraj forme
-                                    fa, fb, fc, fd = st.columns(4)
-                                    with fa:
-                                        add_part = st.form_submit_button("➕ Dodaj del", use_container_width=True)
-                                    with fb:
-                                        rem_part = st.form_submit_button("➖ Odstrani zadnji", use_container_width=True,
-                                                                          disabled=len(split_rows) <= 1)
-                                    with fc:
-                                        unsplit  = st.form_submit_button("↺ Razveljavi", use_container_width=True)
-                                    with fd:
-                                        confirm  = st.form_submit_button("✅ Potrdi", type="primary", use_container_width=True)
-
-                                    if confirm or add_part or rem_part or unsplit:
-                                        # Najprej apliciraj iskanje / selekcijo na vsak del
-                                        for si, srow in enumerate(split_rows):
-                                            sel_key = f"sel_{draft_id}_{idx}_{si}"
-                                            sel_val = st.session_state.get(sel_key, "— izberi —")
-                                            if sel_val and sel_val != "— izberi —":
-                                                code = sel_val.split("  ")[0].strip()
-                                                name_part = sel_val[len(code):].strip()
-                                                srow["item_code"] = code
-                                                srow["item_name"] = name_part
-                                        if add_part:
-                                            template = {k:v for k,v in row.items() if not k.startswith("_")}
-                                            split_rows.append({**template,"item_code":"","item_name":"","quantity":0.0,"_split_child":True})
-                                        if rem_part and len(split_rows) > 1:
-                                            split_rows.pop()
-                                        if unsplit:
-                                            for k in ["_split","_orig_qty","_split_rows"]:
-                                                row.pop(k, None)
-                                        row["_split_rows"] = split_rows
-                                        st.session_state["prejem_drafts"] = drafts
-                                        _save_drafts(drafts)
-                                        st.rerun()
-
-
+                    # Skupna vrednost
                     if draft["rows"]:
-                        total = 0.0
-                        for r in draft["rows"]:
-                            if r.get("_split"):
-                                for sr in r.get("_split_rows",[]):
-                                    total += float(sr.get("quantity") or 0) * float(sr.get("price") or 0)
-                            elif not r.get("_split_child"):
-                                total += float(r.get("quantity") or 0) * float(r.get("price") or 0)
+                        total = sum(
+                            float(r.get("quantity") or 0) * float(r.get("price") or 0)
+                            for r in draft["rows"] if not r.get("_split_child")
+                        )
                         st.metric("Skupna nabavna vrednost", f"{total:.2f} €")
+
                 # ── TAB: DEKLARACIJE ──────────────────────────────────────
                 with tab_decl:
                     draft["declarations"] = _build_declarations(h, draft["rows"])
