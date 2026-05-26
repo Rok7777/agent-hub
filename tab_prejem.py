@@ -400,11 +400,16 @@ def render():
                 f"{STATUS_ICON['sent']} Poslan v Minimax", unsafe_allow_html=True)
 
     # Master checkbox za izbiro vseh osnutkov
-    master_sel_drafts = st.checkbox(
+    prev_master_drafts = st.session_state.get("prev_master_drafts", None)
+    master_sel_drafts  = st.checkbox(
         "☑ Izberi / odzberi vse osnutke",
         key="master_sel_all_drafts",
-        value=False
     )
+    # Ob spremembi master → posodobi vse posamezne PRED renderiranjem
+    if prev_master_drafts is not None and master_sel_drafts != prev_master_drafts:
+        for did in drafts:
+            st.session_state[f"sel_d_{did}"] = master_sel_drafts
+    st.session_state["prev_master_drafts"] = master_sel_drafts
     st.markdown("---")
 
     selected_draft_ids = []
@@ -417,7 +422,7 @@ def render():
 
         col_chk, col_exp = st.columns([0.5, 9.5])
         with col_chk:
-            sel = st.checkbox("", key=f"sel_d_{draft_id}", value=master_sel_drafts)
+            sel = st.checkbox("", key=f"sel_d_{draft_id}")
             if sel: selected_draft_ids.append(draft_id)
         with col_exp:
             lbl = (f"{icon} **{h.get('supplier_name') or fname}**  ·  "
@@ -501,12 +506,19 @@ def render():
                         st.info("Deklaracije bodo generirane ko so artikli določeni.")
                     else:
                         # ── Master vrstica: izberi vse + skupne kopije ────
+                        prev_msd_k = f"prev_msd_{draft_id}"
                         m_col1, m_col2, m_col3 = st.columns([0.5, 5, 1.5])
                         with m_col1:
                             master_sel_decl = st.checkbox(
-                                "☑", key=f"msd_{draft_id}", value=True,
+                                "☑", key=f"msd_{draft_id}",
                                 help="Izberi / odzberi vse deklaracije"
                             )
+                            # Ob spremembi → posodobi vse posamezne PRED renderiranjem
+                            prev_msd = st.session_state.get(prev_msd_k, None)
+                            if prev_msd is not None and master_sel_decl != prev_msd:
+                                for di2 in range(len(decls)):
+                                    st.session_state[f"ds_{draft_id}_{di2}"] = master_sel_decl
+                            st.session_state[prev_msd_k] = master_sel_decl
                         with m_col2:
                             st.markdown("**Deklaracija**")
                         with m_col3:
@@ -530,7 +542,7 @@ def render():
                         for di, decl in enumerate(decls):
                             d_col1, d_col2, d_col3 = st.columns([0.5, 5, 1.5])
                             with d_col1:
-                                d_sel = st.checkbox("", key=f"ds_{draft_id}_{di}", value=master_sel_decl)
+                                d_sel = st.checkbox("", key=f"ds_{draft_id}_{di}")
                             with d_col2:
                                 with st.expander(f"🏷️ {decl.get('item_name') or decl.get('naziv_blaga','')}", expanded=False):
                                     dc1, dc2 = st.columns(2)
