@@ -25,6 +25,52 @@ SUPPLIER_PREFIXES = {
 }
 
 VP_CEN_CODE  = "VP-CEN"
+
+# Znani mappingi po dobaviteljih (dopolnjujemo sproti)
+SUPPLIER_ITEM_MAPPINGS = {
+    "LIBO": {
+        "OČIŠČENA": {
+            "item_code": "POSSS0301",
+            "item_name": "POSTRV (Šarenka), 300-400g, očiščena, sveža, Slovenija",
+        },
+        "FILE BEL": {
+            "item_code": "POSSS0202",
+            "item_name": "POSTRV (Šarenka), 160-200g, file, sveža, Slovenija",
+        },
+        "FILE RDEČ": {
+            "item_code":  None,   # potrebna ročna delitev
+            "item_name":  "⚠️ Razdeliti: LPOSS0202 (150-300g) ali LPOSS0102 (300g+)",
+            "needs_split": True,
+            "split_options": [
+                {"item_code": "LPOSS0202", "item_name": "LOSOSOVA POSTRV file, 150-300g, svež, Slovenija"},
+                {"item_code": "LPOSS0102", "item_name": "LOSOSOVA POSTRV file, 300g+, svež, Slovenija"},
+            ],
+        },
+    },
+}
+
+def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
+    """Aplicira znane mappinge po dobavitelju na liste artiklov."""
+    sup_up = supplier_name.upper()
+    mapping = None
+    for key, val in SUPPLIER_ITEM_MAPPINGS.items():
+        if key in sup_up:
+            mapping = val
+            break
+    if not mapping:
+        return rows
+
+    for row in rows:
+        inv_name_up = row.get("inv_name", "").upper()
+        for keyword, data in mapping.items():
+            if keyword.upper() in inv_name_up:
+                row["item_code"] = data.get("item_code") or ""
+                row["item_name"] = data.get("item_name") or ""
+                if data.get("needs_split"):
+                    row["_needs_split_hint"] = True
+                    row["_split_options"]    = data.get("split_options", [])
+                break
+    return rows
 OLTREON_INFO = "OltreCon d.o.o., Orehovlje 2F, 5291 Miren"
 VET_OZNAKA   = "SI 844 ES"
 
@@ -394,6 +440,7 @@ def render():
                             "datum_izlova":    parsed.get("datum_izlova",""),
                             "kraj_proizvoda":  parsed.get("kraj_proizvoda",""),
                         }
+                        rows_out = _apply_supplier_mapping(parsed.get("supplier_name",""), rows_out)
                         drafts[draft_id] = {
                             "id":draft_id,"fname":fname,"parse_error":None,
                             "header":header,"rows":rows_out,
@@ -503,11 +550,21 @@ def render():
                         orig_qty  = float(row.get("_orig_qty") or row.get("quantity") or 0)
                         art_icon  = "✅" if all_coded else ("✂️" if is_split else "❌")
 
+                        # Naslov: naziv dobavnice + Minimax naziv če je znan
+                        mm_naziv = row.get("item_name","")
+                        mm_label = f"  →  {mm_naziv}" if mm_naziv and not row.get("_needs_split_hint") else ""
+                        split_label = " — ⚠️ razdeliti!" if row.get("_needs_split_hint") and not is_split else ""
+                        if is_split:
+                            exp_suffix = " — ✂️ razdeljena"
+                        elif row.get("item_code"):
+                            exp_suffix = f"  `{row['item_code']}`{mm_label}"
+                        elif row.get("_needs_split_hint"):
+                            exp_suffix = split_label
+                        else:
+                            exp_suffix = " — šifra manjka"
                         with st.expander(
-                            f"{art_icon} {idx+1}. {row['inv_name']}  ({orig_qty} {row.get('unit','kg')})"
-                            + (" — ✂️ razdeljena" if is_split else
-                               (f" — `{row['item_code']}`" if row.get("item_code") else " — šifra manjka")),
-                            expanded=not all_coded
+                            f"{art_icon} {idx+1}. {row['inv_name']}  ({orig_qty} {row.get('unit','kg')}){exp_suffix}",
+                            expanded=False
                         ):
                             if row.get("latin_name"):
                                 st.caption(f"🔬 *{row['latin_name']}*")
@@ -528,15 +585,31 @@ def render():
                                     row["country_of_origin"] = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
                                     row["tariff"]            = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
 
+                                # Hint za split (npr. Libo FILE RDEČ)
+                                if row.get("_needs_split_hint") and not is_split:
+                                    st.warning("⚠️ Ta artikel zahteva ročno delitev glede na velikost!")
+                                    opts = row.get("_split_options", [])
+                                    if opts:
+                                        st.caption("Možnosti: " + " · ".join(f"`{o['item_code']}` {o['item_name']}" for o in opts))
+
                                 if st.button("✂️ Razdeli vrstico", key=f"split_{draft_id}_{idx}",
                                              help="Razdeli na več Minimax artiklov"):
                                     row["_split"]    = True
                                     row["_orig_qty"] = orig_qty
+                                    opts = row.get("_split_options", [])
                                     template = {k:v for k,v in row.items() if not k.startswith("_")}
-                                    row["_split_rows"] = [
-                                        {**template, "item_code":"", "quantity":0.0, "_split_child":True},
-                                        {**template, "item_code":"", "quantity":0.0, "_split_child":True},
-                                    ]
+                                    if opts and len(opts) >= 2:
+                                        row["_split_rows"] = [
+                                            {**template, "item_code": opts[0]["item_code"],
+                                             "item_name": opts[0]["item_name"], "quantity":0.0, "_split_child":True},
+                                            {**template, "item_code": opts[1]["item_code"],
+                                             "item_name": opts[1]["item_name"], "quantity":0.0, "_split_child":True},
+                                        ]
+                                    else:
+                                        row["_split_rows"] = [
+                                            {**template, "item_code":"", "quantity":0.0, "_split_child":True},
+                                            {**template, "item_code":"", "quantity":0.0, "_split_child":True},
+                                        ]
                                     st.rerun()
                             else:
                                 # Razdeljena vrstica
@@ -638,7 +711,11 @@ def render():
                             with d_col1:
                                 d_sel = st.checkbox("", key=f"ds_{draft_id}_{di}")
                             with d_col2:
-                                with st.expander(f"🏷️ {decl.get('item_name') or decl.get('naziv_blaga','')}", expanded=False):
+                                # Naslov deklaracije: naziv artikla + Minimax šifra če je znana
+                                decl_title = decl.get('item_name') or decl.get('naziv_blaga','')
+                                decl_code  = decl.get('item_code','')
+                                decl_label = f"🏷️ {decl_title}" + (f"  `{decl_code}`" if decl_code else "")
+                                with st.expander(decl_label, expanded=False):
                                     dc1, dc2 = st.columns(2)
                                     with dc1:
                                         decl["naziv_blaga"]       = st.text_input("Naziv blaga",       value=decl.get("naziv_blaga",""),          key=f"dn_{draft_id}_{di}")
