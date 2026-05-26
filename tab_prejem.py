@@ -538,15 +538,16 @@ def render():
                 f"{STATUS_ICON['sent']} Poslan v Minimax", unsafe_allow_html=True)
 
     # Izbriši dobavnice — nad master checkboxom
-    to_del_top = selected_draft_ids if selected_draft_ids else []
+    # Beremo stanje checkboxov iz session_state (prejšnji rerun)
+    pre_selected = [did for did in drafts if st.session_state.get(f"sel_d_{did}", False)]
     if st.button(
-        f"🗑️ Izbriši dobavnice  ({len(to_del_top)} izbranih)" if to_del_top
+        f"🗑️ Izbriši dobavnice  ({len(pre_selected)} izbranih)" if pre_selected
         else "🗑️ Izbriši dobavnice  (označi za brisanje)",
         use_container_width=True,
-        disabled=not to_del_top,
+        disabled=not pre_selected,
         key="btn_del_top",
     ):
-        for did in to_del_top:
+        for did in pre_selected:
             drafts.pop(did, None)
         st.session_state["prejem_drafts"] = drafts
         _save_drafts(drafts)
