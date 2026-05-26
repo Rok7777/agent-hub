@@ -725,7 +725,7 @@ def render():
 
                         with st.expander(
                             f"{s1}{s2} {idx+1}. {row['inv_name']}  ({qty_disp} {row.get('unit','kg')}){mm_label}",
-                            expanded=not matched
+                            expanded=False
                         ):
                             if row.get("latin_name"):
                                 st.caption(f"🔬 *{row['latin_name']}*")
