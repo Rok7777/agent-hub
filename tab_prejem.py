@@ -191,14 +191,31 @@ def _validate(header: dict, rows: list) -> list:
             errors.append((typ, f"Glava: {msg}"))
     if not rows:
         errors.append(("❌", "Ni artikov za vnos"))
-    for i, row in enumerate(rows, 1):
-        for field, typ, msg in REQUIRED_ROW:
-            val = row.get(field)
-            if field == "quantity":
-                if not val or float(val) <= 0:
-                    errors.append((typ, f"Vrstica {i} ({row.get('inv_name','?')}): {msg}"))
-            elif not val:
-                errors.append((typ, f"Vrstica {i} ({row.get('inv_name','?')}): {msg}"))
+    vnum = 0
+    for row in rows:
+        if row.get("_split_child"):
+            continue
+        vnum += 1
+        if row.get("_split"):
+            # Validacija split vrstice
+            split_rows = row.get("_split_rows", [])
+            orig_qty   = float(row.get("_orig_qty") or 0)
+            split_sum  = round(sum(float(r.get("quantity") or 0) for r in split_rows), 4)
+            if round(split_sum - orig_qty, 4) != 0:
+                errors.append(("❌", f"Vrstica {vnum} ({row.get('inv_name','?')}): vsota delov ({split_sum}) ≠ originalna količina ({orig_qty})"))
+            for si, srow in enumerate(split_rows, 1):
+                if not srow.get("item_code"):
+                    errors.append(("❌", f"Vrstica {vnum} del {si}: šifra artikla manjka"))
+                if not srow.get("quantity") or float(srow.get("quantity",0)) <= 0:
+                    errors.append(("❌", f"Vrstica {vnum} del {si}: količina mora biti > 0"))
+        else:
+            for field, typ, msg in REQUIRED_ROW:
+                val = row.get(field)
+                if field == "quantity":
+                    if not val or float(val) <= 0:
+                        errors.append((typ, f"Vrstica {vnum} ({row.get('inv_name','?')}): {msg}"))
+                elif not val:
+                    errors.append((typ, f"Vrstica {vnum} ({row.get('inv_name','?')}): {msg}"))
     return errors
 
 def _has_critical(errors): return any(t == "❌" for t, _ in errors)
@@ -251,19 +268,23 @@ def _send_draft(draft: dict) -> tuple:
         if not sup_id: return None, "Dobavitelj ni najden v Minimaxu"
         stock_rows = []
         for row in draft["rows"]:
-            item_id = _get_item_id_by_code(cli, row.get("item_code",""))
-            if not item_id: return None, f"Artikel '{row.get('item_code')}' ni najden"
-            sr = {
-                "Item":              {"ID": item_id},
-                "Quantity":          float(row.get("quantity") or 0),
-                "Price":             float(row.get("price") or 0),
-                "BatchNumber":       row.get("batch_number",""),
-                "UnitOfMeasurement": row.get("unit","kg"),
-                "WarehouseTo":       {"ID": wh_id},
-            }
-            if row.get("selling_price") and float(row.get("selling_price")) > 0:
-                sr["SellingPrice"] = float(row["selling_price"])
-            stock_rows.append(sr)
+            if row.get("_split_child"):
+                continue
+            rows_to_process = row.get("_split_rows", []) if row.get("_split") else [row]
+            for r in rows_to_process:
+                item_id = _get_item_id_by_code(cli, r.get("item_code",""))
+                if not item_id: return None, f"Artikel '{r.get('item_code')}' ni najden"
+                sr = {
+                    "Item":              {"ID": item_id},
+                    "Quantity":          float(r.get("quantity") or 0),
+                    "Price":             float(r.get("price") or 0),
+                    "BatchNumber":       r.get("batch_number",""),
+                    "UnitOfMeasurement": r.get("unit","kg"),
+                    "WarehouseTo":       {"ID": wh_id},
+                }
+                if r.get("selling_price") and float(r.get("selling_price")) > 0:
+                    sr["SellingPrice"] = float(r["selling_price"])
+                stock_rows.append(sr)
         h    = draft["header"]
         body = {
             "StockEntryType":"P","StockEntrySubtype":"L","Status":"O",
@@ -471,32 +492,105 @@ def render():
                 # ── TAB: ARTIKLI ──────────────────────────────────────────
                 with tab_art:
                     for idx, row in enumerate(draft["rows"]):
-                        art_icon = "✅" if row.get("item_code") else "❌"
+                        if row.get("_split_child"):
+                            continue
+
+                        is_split  = bool(row.get("_split"))
+                        all_coded = all(
+                            (r.get("item_code") or "") != ""
+                            for r in ([row] + row.get("_split_rows", []))
+                        )
+                        orig_qty  = float(row.get("_orig_qty") or row.get("quantity") or 0)
+                        art_icon  = "✅" if all_coded else ("✂️" if is_split else "❌")
+
                         with st.expander(
-                            f"{art_icon} {idx+1}. {row['inv_name']}"
-                            + (f" — `{row['item_code']}`" if row.get("item_code") else " — šifra manjka"),
-                            expanded=not row.get("item_code")
+                            f"{art_icon} {idx+1}. {row['inv_name']}  ({orig_qty} {row.get('unit','kg')})"
+                            + (" — ✂️ razdeljena" if is_split else
+                               (f" — `{row['item_code']}`" if row.get("item_code") else " — šifra manjka")),
+                            expanded=not all_coded
                         ):
                             if row.get("latin_name"):
                                 st.caption(f"🔬 *{row['latin_name']}*")
-                            cc1,cc2,cc3,cc4 = st.columns(4)
-                            with cc1:
-                                row["item_code"] = st.text_input("Minimax šifra ⚠️", value=row.get("item_code",""), key=f"code_{draft_id}_{idx}")
-                                row["quantity"]  = st.number_input("Količina", value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
-                            with cc2:
-                                row["unit"]  = st.text_input("ME", value=row.get("unit","kg"), key=f"unit_{draft_id}_{idx}")
-                                row["price"] = st.number_input("Nab. cena €", value=float(row.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"price_{draft_id}_{idx}")
-                            with cc3:
-                                row["selling_price"]     = st.number_input("Prod. cena €", value=float(row.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sell_{draft_id}_{idx}")
-                                row["batch_number"]      = st.text_input("Serija / Lot", value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
-                            with cc4:
-                                row["country_of_origin"] = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
-                                row["tariff"]            = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
+
+                            if not is_split:
+                                # Normalna vrstica
+                                cc1,cc2,cc3,cc4 = st.columns(4)
+                                with cc1:
+                                    row["item_code"] = st.text_input("Minimax šifra ⚠️", value=row.get("item_code",""), key=f"code_{draft_id}_{idx}")
+                                    row["quantity"]  = st.number_input("Količina", value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
+                                with cc2:
+                                    row["unit"]  = st.text_input("ME", value=row.get("unit","kg"), key=f"unit_{draft_id}_{idx}")
+                                    row["price"] = st.number_input("Nab. cena €", value=float(row.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"price_{draft_id}_{idx}")
+                                with cc3:
+                                    row["selling_price"] = st.number_input("Prod. cena €", value=float(row.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sell_{draft_id}_{idx}")
+                                    row["batch_number"]  = st.text_input("Serija / Lot", value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
+                                with cc4:
+                                    row["country_of_origin"] = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
+                                    row["tariff"]            = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
+
+                                if st.button("✂️ Razdeli vrstico", key=f"split_{draft_id}_{idx}",
+                                             help="Razdeli na več Minimax artiklov"):
+                                    row["_split"]    = True
+                                    row["_orig_qty"] = orig_qty
+                                    template = {k:v for k,v in row.items() if not k.startswith("_")}
+                                    row["_split_rows"] = [
+                                        {**template, "item_code":"", "quantity":0.0, "_split_child":True},
+                                        {**template, "item_code":"", "quantity":0.0, "_split_child":True},
+                                    ]
+                                    st.rerun()
+                            else:
+                                # Razdeljena vrstica
+                                split_rows = row.get("_split_rows", [])
+                                split_sum  = round(sum(float(r.get("quantity") or 0) for r in split_rows), 4)
+                                diff       = round(orig_qty - split_sum, 4)
+
+                                st.caption(f"Skupna količina dobavnice: **{orig_qty} {row.get('unit','kg')}**")
+                                if diff != 0:
+                                    st.warning(f"⚠️ Vsota delov: **{split_sum} kg** — manjka še **{diff} kg**")
+                                else:
+                                    st.success(f"✅ Vsota delov: {split_sum} kg = {orig_qty} kg")
+
+                                for si, srow in enumerate(split_rows):
+                                    st.markdown(f"**Del {si+1}:**")
+                                    sc1,sc2,sc3,sc4 = st.columns(4)
+                                    with sc1:
+                                        srow["item_code"] = st.text_input("Minimax šifra", value=srow.get("item_code",""), key=f"scode_{draft_id}_{idx}_{si}")
+                                        srow["quantity"]  = st.number_input("Količina (kg)", value=float(srow.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"sqty_{draft_id}_{idx}_{si}")
+                                    with sc2:
+                                        srow["unit"]  = st.text_input("ME", value=srow.get("unit","kg"), key=f"sunit_{draft_id}_{idx}_{si}")
+                                        srow["price"] = st.number_input("Nab. cena €", value=float(srow.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sprice_{draft_id}_{idx}_{si}")
+                                    with sc3:
+                                        srow["selling_price"] = st.number_input("Prod. cena €", value=float(srow.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"ssell_{draft_id}_{idx}_{si}")
+                                        srow["batch_number"]  = st.text_input("Serija / Lot", value=srow.get("batch_number",""), key=f"sbatch_{draft_id}_{idx}_{si}")
+                                    with sc4:
+                                        srow["country_of_origin"] = st.text_input("Država", value=srow.get("country_of_origin",""), key=f"scntry_{draft_id}_{idx}_{si}")
+                                        srow["tariff"]            = st.text_input("Tarifa", value=srow.get("tariff",""), key=f"stariff_{draft_id}_{idx}_{si}")
+
+                                ca, cb, cc_btn = st.columns(3)
+                                with ca:
+                                    if st.button("➕ Dodaj del", key=f"addp_{draft_id}_{idx}"):
+                                        template = {k:v for k,v in row.items() if not k.startswith("_")}
+                                        split_rows.append({**template,"item_code":"","quantity":0.0,"_split_child":True})
+                                        st.rerun()
+                                with cb:
+                                    if len(split_rows) > 2 and st.button("➖ Odstrani zadnji", key=f"remp_{draft_id}_{idx}"):
+                                        split_rows.pop()
+                                        st.rerun()
+                                with cc_btn:
+                                    if st.button("↺ Razveljavi delitev", key=f"unsplit_{draft_id}_{idx}"):
+                                        for k in ["_split","_orig_qty","_split_rows"]:
+                                            row.pop(k, None)
+                                        st.rerun()
 
                     if draft["rows"]:
-                        total = sum(float(r.get("quantity") or 0)*float(r.get("price") or 0) for r in draft["rows"])
+                        total = 0.0
+                        for r in draft["rows"]:
+                            if r.get("_split"):
+                                for sr in r.get("_split_rows",[]):
+                                    total += float(sr.get("quantity") or 0) * float(sr.get("price") or 0)
+                            elif not r.get("_split_child"):
+                                total += float(r.get("quantity") or 0) * float(r.get("price") or 0)
                         st.metric("Skupna nabavna vrednost", f"{total:.2f} €")
-
                 # ── TAB: DEKLARACIJE ──────────────────────────────────────
                 with tab_decl:
                     draft["declarations"] = _build_declarations(h, draft["rows"])
