@@ -672,7 +672,7 @@ def render():
                         art_icon  = "✅" if has_art else "❌"
                         qty_disp  = float(row.get("quantity") or 0)
                         mm_naziv  = row.get("item_name","")
-                        mm_label  = (f"  `{row['item_code']}`" + (f"  {mm_naziv}" if mm_naziv else "")) if has_art else " — artikel manjka"
+                        mm_label  = (f"  ({row['item_code']})" + (f"  {mm_naziv}" if mm_naziv else "")) if has_art else " — artikel manjka"
 
                         with st.expander(
                             f"{art_icon} {idx+1}. {row['inv_name']}  ({qty_disp} {row.get('unit','kg')}){mm_label}",
