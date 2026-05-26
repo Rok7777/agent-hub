@@ -739,9 +739,13 @@ def render():
                                     st.rerun()
 
                                 if do_revert:
+                                    # Povrni podatke vrstice
                                     orig = st.session_state.get(orig_key, {})
-                                    for k,v in orig.items():
+                                    for k, v in orig.items():
                                         row[k] = v
+                                    # Počisti iskalnik in izbiro — kot svež začetek
+                                    st.session_state.pop(f"sq_{draft_id}_{idx}", None)
+                                    st.session_state.pop(f"sel_{draft_id}_{idx}", None)
                                     st.session_state[f"draft_exp_{draft_id}"] = True
                                     st.session_state["prejem_drafts"] = drafts
                                     _save_drafts(drafts)
