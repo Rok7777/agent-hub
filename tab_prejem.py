@@ -446,6 +446,35 @@ def _search_articles(query: str, options: list) -> list:
 def render():
     st.caption("Skeniranje dobavnic dobavitelja → P/L osnutek v VP-CEN + deklaracije")
 
+    # Skrij +/- gumbe na number inputih + auto-select ob kliku
+    st.markdown("""
+    <style>
+    button[data-testid="stNumberInputStepDown"],
+    button[data-testid="stNumberInputStepUp"] {
+        display: none !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    import streamlit.components.v1 as _components
+    _components.html("""
+    <script>
+    function attachSelectAll() {
+        var inputs = parent.document.querySelectorAll('input[type="number"]');
+        inputs.forEach(function(inp) {
+            if (!inp.dataset.selectAllAttached) {
+                inp.addEventListener('focus', function() { this.select(); });
+                inp.dataset.selectAllAttached = 'true';
+            }
+        });
+    }
+    // Ob zagonu in ob vsaki spremembi DOM
+    attachSelectAll();
+    var observer = new MutationObserver(attachSelectAll);
+    observer.observe(parent.document.body, { childList: true, subtree: true });
+    </script>
+    """, height=0, scrolling=False)
+
     with st.sidebar:
         st.header("⚙️ Nastavitve")
         with st.expander("Minimax dostop", expanded=False):
@@ -739,7 +768,7 @@ def render():
                                     f_unit     = st.text_input( _flabel("ME",                row.get("unit")),           value=row.get("unit","kg"),                                              key=f"unit_{draft_id}_{idx}")
                                 with cc2:
                                     f_price    = st.number_input(_flabel("Cena €/enoto",     row.get("price")),          value=float(row.get("price") or 0),          min_value=0.0, step=0.01,  format="%.4f", key=f"price_{draft_id}_{idx}")
-                                    f_discount = st.number_input(        "% popusta",                                    value=float(row.get("discount_pct") or 0),   min_value=0.0, max_value=100.0, step=0.01, format="%.2f", key=f"disc_{draft_id}_{idx}")
+                                    f_discount = st.number_input("% popusta",                                            value=float(row.get("discount_pct") or 0),   min_value=0.0, max_value=100.0, step=0.01, format="%.2f", key=f"disc_{draft_id}_{idx}")
                                 with cc3:
                                     f_sell     = st.number_input(_flabel("Prod. cena €",     row.get("selling_price")),  value=float(row.get("selling_price") or 0),  min_value=0.0, step=0.01,  format="%.4f", key=f"sell_{draft_id}_{idx}")
                                     f_batch    = st.text_input( _flabel("Serija / Lot",      row.get("batch_number")),   value=row.get("batch_number",""),                                        key=f"batch_{draft_id}_{idx}")
