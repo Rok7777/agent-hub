@@ -350,16 +350,29 @@ def _send_draft(draft: dict) -> tuple:
             for r in rows_to_process:
                 item_id = _get_item_id_by_code(cli, r.get("item_code",""))
                 if not item_id: return None, f"Artikel '{r.get('item_code')}' ni najden"
+                qty   = float(r.get("quantity") or 0)
+                price = float(r.get("price") or 0)
+                disc  = float(r.get("discount_pct") or 0)
+                nc            = round(price * (1 - disc / 100), 6) if disc else price
+                nv            = round(nc * qty, 4)
+                sell_price    = float(r.get("selling_price") or 0)
+                sell_vrednost = round(sell_price * qty, 4) if sell_price > 0 else 0
+
                 sr = {
                     "Item":              {"ID": item_id},
-                    "Quantity":          float(r.get("quantity") or 0),
-                    "Price":             float(r.get("price") or 0),
+                    "Quantity":          qty,
+                    "Price":             price,
+                    "DiscountPercent":   disc,
+                    "PurchasePrice":     nc,
+                    "Value":             nv,
                     "BatchNumber":       r.get("batch_number",""),
                     "UnitOfMeasurement": r.get("unit","kg"),
                     "WarehouseTo":       {"ID": wh_id},
                 }
-                if r.get("selling_price") and float(r.get("selling_price")) > 0:
-                    sr["SellingPrice"] = float(r["selling_price"])
+                if sell_price > 0:
+                    sr["SellingPrice"] = sell_price
+                if sell_vrednost > 0:
+                    sr["SellingValue"] = sell_vrednost
                 stock_rows.append(sr)
         h    = draft["header"]
         body = {
@@ -698,18 +711,20 @@ def render():
 
                                 # ── Polja ────────────────────────────────
                                 cc1,cc2,cc3,cc4 = st.columns(4)
+                                # ── Polja ────────────────────────────────
+                                cc1,cc2,cc3,cc4 = st.columns(4)
                                 with cc1:
-                                    f_qty   = st.number_input("Količina", value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
-                                    f_unit  = st.text_input("ME", value=row.get("unit","kg"), key=f"unit_{draft_id}_{idx}")
+                                    f_qty      = st.number_input("Količina", value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
+                                    f_unit     = st.text_input("ME", value=row.get("unit","kg"), key=f"unit_{draft_id}_{idx}")
                                 with cc2:
-                                    f_price = st.number_input("Nab. cena €", value=float(row.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"price_{draft_id}_{idx}")
-                                    f_sell  = st.number_input("Prod. cena €", value=float(row.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sell_{draft_id}_{idx}")
+                                    f_price    = st.number_input("Cena €/enoto", value=float(row.get("price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"price_{draft_id}_{idx}")
+                                    f_discount = st.number_input("% popusta", value=float(row.get("discount_pct") or 0), min_value=0.0, max_value=100.0, step=0.01, format="%.2f", key=f"disc_{draft_id}_{idx}")
                                 with cc3:
-                                    f_batch   = st.text_input("Serija / Lot", value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
-                                    f_country = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
+                                    f_sell     = st.number_input("Prod. cena €", value=float(row.get("selling_price") or 0), min_value=0.0, step=0.01, format="%.4f", key=f"sell_{draft_id}_{idx}")
+                                    f_batch    = st.text_input("Serija / Lot", value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
                                 with cc4:
-                                    f_tariff  = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
-
+                                    f_country  = st.text_input("Država (2 črkoven)", value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
+                                    f_tariff   = st.text_input("Carinska tarifa", value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
                                 # ── Gumbi ────────────────────────────────
                                 gb1, gb2 = st.columns(2)
                                 with gb1:
@@ -727,10 +742,12 @@ def render():
                                     row["quantity"]          = f_qty
                                     row["unit"]              = f_unit
                                     row["price"]             = f_price
+                                    row["discount_pct"]      = f_discount
                                     row["selling_price"]     = f_sell
                                     row["batch_number"]      = f_batch
                                     row["country_of_origin"] = f_country
                                     row["tariff"]            = f_tariff
+                                    row["discount_pct"]      = f_discount
                                     # Posodobi snapshot
                                     st.session_state[orig_key] = {k:v for k,v in row.items() if not k.startswith("_")}
                                     st.session_state[f"draft_exp_{draft_id}"] = True
