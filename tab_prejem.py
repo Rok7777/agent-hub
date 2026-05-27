@@ -17,6 +17,31 @@ from minimax_client import MinimaxClient
 
 # ─── Konstante ────────────────────────────────────────────────────────────────
 
+# Intrastat podatki po dobaviteljih — dopolniti sproti
+SUPPLIER_INTRASTAT = {
+    "LIBO":            {"country_dispatch": "SI", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "ALEMAR":          {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
+    "CERKVENIK":       {"country_dispatch": "SI", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "ORADA ADRIATIC":  {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "FIORITAL":        {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
+    "KVIBO":           {"country_dispatch": "SI", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "FORMIO":          {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
+    "COST IN":         {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
+    "MARTINOVIC":      {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "MARTINOVIĆ":      {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "ROMICA":          {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "RO-TRADE":        {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
+    "MADIA":           {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
+    "FRULPESCA":       {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
+}
+
+def _get_intrastat(supplier_name: str) -> dict:
+    sup_up = supplier_name.upper()
+    for key, val in SUPPLIER_INTRASTAT.items():
+        if key.upper() in sup_up:
+            return val
+    return {"country_dispatch": "", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"}
+
 SUPPLIER_PREFIXES = {
     "ALEMAR": "AL", "CERKVENIK": "CE", "KVIBO": "KV",
     "FIORITAL": "FI", "FORMIO": "FO", "LIBO": "LI",
@@ -367,14 +392,27 @@ def _draft_status(draft: dict) -> str:
 
 # ─── Minimax prenos ───────────────────────────────────────────────────────────
 
-def _get_item_id_by_code(cli, code):
+def _get_item_data(cli, code: str) -> dict:
+    """Vrne {"item_id": int, "mass_converter": float} za artikel po šifri."""
     try:
         data = cli._get("/items", params={"Code": code, "CurrentPage": 1, "PageSize": 5})
         for r in data.get("Rows", []):
             if r.get("Code","").upper() == code.upper():
-                return r.get("ItemId") or 0
+                item_id = r.get("ItemId") or 0
+                # Pretvornik za maso — polje v Minimax API
+                intra = r.get("Intrastat") or {}
+                mc = (intra.get("MassConverter") or
+                      intra.get("WeightConverter") or
+                      r.get("MassConverter") or
+                      r.get("WeightConverter") or
+                      r.get("MassPerUnit") or 1.0)
+                return {"item_id": item_id, "mass_converter": float(mc or 1.0)}
     except: pass
-    return 0
+    return {"item_id": 0, "mass_converter": 1.0}
+
+def _get_item_id_by_code(cli, code: str) -> int:
+    """Backwards compatible wrapper."""
+    return _get_item_data(cli, code)["item_id"]
 
 def _get_wh_id(cli):
     try:
@@ -412,7 +450,9 @@ def _send_draft(draft: dict) -> tuple:
                 continue
             rows_to_process = row.get("_split_rows", []) if row.get("_split") else [row]
             for r in rows_to_process:
-                item_id = _get_item_id_by_code(cli, r.get("item_code",""))
+                item_data = _get_item_data(cli, r.get("item_code",""))
+                item_id   = item_data["item_id"]
+                mass_conv = item_data["mass_converter"]
                 if not item_id: return None, f"Artikel '{r.get('item_code')}' ni najden"
                 qty   = float(r.get("quantity") or 0)
                 price = float(r.get("price") or 0)
@@ -437,15 +477,31 @@ def _send_draft(draft: dict) -> tuple:
                     sr["SellingPrice"] = sell_price
                 if sell_vrednost > 0:
                     sr["SellingValue"] = sell_vrednost
+                if r.get("tariff"):
+                    sr["CustomsTariffNumber"] = r["tariff"]
+                if r.get("country_of_origin"):
+                    sr["CountryOfOrigin"] = r["country_of_origin"]
+                # Masa v kg = količina × pretvornik za maso iz kartice artikla
+                net_wt = round(qty * mass_conv, 4)
+                if net_wt > 0:
+                    sr["NetWeight"] = net_wt
                 stock_rows.append(sr)
-        h    = draft["header"]
+        h        = draft["header"]
+        intra    = _get_intrastat(h.get("supplier_name",""))
         body = {
-            "StockEntryType":"P","StockEntrySubtype":"L","Status":"O",
-            "Date":        h["invoice_date"]+"T00:00:00",
-            "Description": f"{h.get('invoice_number','')} — {h.get('supplier_name','')}",
-            "Supplier":    {"ID": sup_id},
-            "WarehouseTo": {"ID": wh_id},
-            "StockEntryRows": stock_rows,
+            "StockEntryType":    "P",
+            "StockEntrySubtype": "L",
+            "Status":            "O",
+            "Date":              h["invoice_date"] + "T00:00:00",
+            "Description":       f"{h.get('invoice_number','')} — {h.get('supplier_name','')}",
+            "Supplier":          {"ID": sup_id},
+            "WarehouseTo":       {"ID": wh_id},
+            "CountryOfDispatch": intra["country_dispatch"],
+            "TransactionType":   intra["transaction"],
+            "DeliveryTerms":     intra["delivery"],
+            "PlaceOfDelivery":   intra["location"],
+            "TransportType":     intra["transport"],
+            "StockEntryRows":    stock_rows,
         }
         result = cli._post("/stockentry", body)
         return result.get("StockEntryId") or result.get("ID") or "?", None
