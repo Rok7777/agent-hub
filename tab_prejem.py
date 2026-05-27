@@ -853,6 +853,8 @@ def render():
                 errors = [("❌", f"Napaka branja: {draft['parse_error']}")]  # za bool(errors)
             else:
                 errors = _validate(h, draft.get("rows", []))
+                if draft.get("send_error"):
+                    errors = [("❌", f"Napaka Minimax: {draft['send_error']}")] + errors
 
             draft_exp_open = st.session_state.get(f"draft_exp_{draft_id}", bool(errors))
             with st.expander(lbl, expanded=draft_exp_open):
@@ -1164,12 +1166,14 @@ def render():
             prog.progress((i+1)/len(ready_ids), text="Prenašam …")
             entry_id, err = _send_draft(drafts[did])
             if err:
-                st.error(f"❌ {drafts[did]['header'].get('supplier_name','?')}: {err}")
+                drafts[did]["send_error"] = err
+                st.session_state["prejem_drafts"] = drafts
+                _save_drafts(drafts)
             else:
                 drafts[did]["sent_to_minimax"]  = True
                 drafts[did]["minimax_entry_id"] = entry_id
+                drafts[did].pop("send_error", None)
                 st.success(f"✅ {drafts[did]['header'].get('supplier_name','?')} → ID: {entry_id}")
-        prog.empty()
         st.session_state["prejem_drafts"] = drafts
         _save_drafts(drafts)
         st.rerun()
