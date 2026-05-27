@@ -454,18 +454,30 @@ def _get_wh_id(cli):
     return 0
 
 def _get_supplier_id(cli, name):
-    try:
-        name_up, page = name.upper(), 1
-        while True:
-            data = cli._get("/suppliers", params={"CurrentPage": page, "PageSize": 100})
-            rows = data.get("Rows", [])
-            for s in rows:
-                sn = (s.get("Name") or s.get("CompanyName") or "").upper()
-                if name_up in sn or sn in name_up:
-                    return s.get("SupplierId") or s.get("ID") or 0
-            if len(rows) < 100: break
-            page += 1
-    except: pass
+    # 1. Preveri ročno vnesene ID-je
+    manual = st.session_state.get("manual_sup_ids", {})
+    name_up = name.upper()
+    for key, sid in manual.items():
+        if key in name_up or name_up in key:
+            return sid
+
+    # 2. Poskusi različne Minimax endpointe za dobavitelje
+    for endpoint in ["/customers", "/izvajalci", "/subjects", "/suppliers"]:
+        try:
+            page = 1
+            while True:
+                data = cli._get(endpoint, params={"CurrentPage": page, "PageSize": 100})
+                rows = data.get("Rows", [])
+                for s in rows:
+                    sn = (s.get("Name") or s.get("CompanyName") or
+                          s.get("SubjectName") or "").upper()
+                    sid = (s.get("SupplierId") or s.get("SubjectId") or
+                           s.get("ID") or 0)
+                    if sid and (name_up in sn or sn in name_up):
+                        return sid
+                if len(rows) < 100: break
+                page += 1
+        except: continue
     return 0
 
 def _send_draft(draft: dict) -> tuple:
@@ -658,23 +670,17 @@ def render():
 
 
         st.divider()
-        if st.button("🔍 Poišči dobavitelje", use_container_width=True, key="btn_find_sup"):
-            try:
-                cli  = _get_client()
-                sups, page = [], 1
-                while True:
-                    data = cli._get("/suppliers", params={"CurrentPage": page, "PageSize": 100})
-                    rows = data.get("Rows", [])
-                    sups.extend(rows)
-                    if len(sups) >= data.get("TotalRows", 0) or not rows: break
-                    page += 1
-                st.sidebar.success(f"Najdeno {len(sups)} dobaviteljev:")
-                for s in sups:
-                    nm  = s.get("Name") or s.get("CompanyName") or ""
-                    sid = s.get("SupplierId") or s.get("ID") or 0
-                    st.sidebar.write(f"`{sid}` {nm}")
-            except Exception as e:
-                st.sidebar.error(f"Napaka: {e}")
+        with st.expander("🔧 Ročni ID dobavitelja", expanded=False):
+            st.caption("Če iskanje dobavitelja ne deluje, vnesite ID ročno.")
+            manual_sup_name = st.text_input("Ime dobavitelja", key="manual_sup_name",
+                                             placeholder="RIBOGOJNICA LIBO d.o.o.")
+            manual_sup_id   = st.number_input("Supplier ID (iz Minimaxa)", min_value=0,
+                                               value=0, key="manual_sup_id")
+            if st.button("💾 Shrani", key="btn_save_sup_id") and manual_sup_name and manual_sup_id > 0:
+                if "manual_sup_ids" not in st.session_state:
+                    st.session_state["manual_sup_ids"] = {}
+                st.session_state["manual_sup_ids"][manual_sup_name.upper()] = manual_sup_id
+                st.success(f"✅ {manual_sup_name} → ID: {manual_sup_id}")
     if "prejem_drafts" not in st.session_state:
         st.session_state["prejem_drafts"] = _load_drafts()
     if "prejem_file_store" not in st.session_state:
