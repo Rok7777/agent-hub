@@ -133,6 +133,22 @@ def _save_prices(prices: dict):
     except Exception:
         pass
 
+# Začetne znane cene — se dopolnjuje sproti
+_DEFAULT_PRICES = {
+    "POSSS0301": {
+        "RIBOGOJNICA LIBO D.O.O.": {"price": 6.50, "discount_pct": 0, "selling_price": 8.50, "updated": "2026-03-26"}
+    },
+    "POSSS0202": {
+        "RIBOGOJNICA LIBO D.O.O.": {"price": 11.00, "discount_pct": 0, "selling_price": 15.66, "updated": "2026-03-26"}
+    },
+    "LPOSS0202": {
+        "RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}
+    },
+    "LPOSS0102": {
+        "RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}
+    },
+}
+
 def _load_prices() -> dict:
     try:
         if os.path.exists(PRICES_FILE):
@@ -140,7 +156,9 @@ def _load_prices() -> dict:
                 return json.load(f)
     except Exception:
         pass
-    return {}
+    # Datoteka ne obstaja — ustvari jo z začetnimi cenami
+    _save_prices(_DEFAULT_PRICES)
+    return dict(_DEFAULT_PRICES)
 
 def _get_price(prices: dict, item_code: str, supplier: str) -> dict:
     """Vrne zadnje znane cene za artikel+dobavitelj ali {}.
