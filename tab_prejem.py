@@ -1162,7 +1162,6 @@ def render():
         disabled=not ready_ids, key="btn_send",
     ):
         prog = st.progress(0)
-        for i, did in enumerate(ready_ids):
         errors_send = []
         for i, did in enumerate(ready_ids):
             prog.progress((i+1)/len(ready_ids), text="Prenašam …")
