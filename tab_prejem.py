@@ -1163,21 +1163,29 @@ def render():
     ):
         prog = st.progress(0)
         for i, did in enumerate(ready_ids):
+        errors_send = []
+        for i, did in enumerate(ready_ids):
             prog.progress((i+1)/len(ready_ids), text="Prenašam …")
             entry_id, err = _send_draft(drafts[did])
             if err:
+                errors_send.append((did, err))
                 drafts[did]["send_error"] = err
-                st.session_state["prejem_drafts"] = drafts
-                _save_drafts(drafts)
+                st.session_state[f"draft_exp_{did}"] = True
             else:
                 drafts[did]["sent_to_minimax"]  = True
                 drafts[did]["minimax_entry_id"] = entry_id
                 drafts[did].pop("send_error", None)
                 st.success(f"✅ {drafts[did]['header'].get('supplier_name','?')} → ID: {entry_id}")
+        prog.empty()
         st.session_state["prejem_drafts"] = drafts
         _save_drafts(drafts)
-        st.rerun()
-
+        if errors_send:
+            for _did, _err in errors_send:
+                sup = drafts[_did]["header"].get("supplier_name","?")
+                st.error(f"❌ NAPAKA MINIMAX — {sup}: {_err}")
+            st.warning("⚠️ Popravite napake in poskusite znova.")
+        else:
+            st.rerun()
 
 
     if selected_draft_ids:
