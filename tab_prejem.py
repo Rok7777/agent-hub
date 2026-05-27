@@ -181,8 +181,12 @@ def _load_files() -> dict:
 # ─── Pomožne funkcije ─────────────────────────────────────────────────────────
 
 def _secret(key, default=""):
-    try:    return st.secrets[key]
-    except: return default
+    try:
+        return st.secrets[key]
+    except Exception:
+        pass
+    import os
+    return os.environ.get(key, default)
 
 def _lot_number(supplier_name: str, date_str: str) -> str:
     prefix = ""
