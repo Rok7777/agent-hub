@@ -143,8 +143,21 @@ def _load_prices() -> dict:
     return {}
 
 def _get_price(prices: dict, item_code: str, supplier: str) -> dict:
-    """Vrne zadnje znane cene za artikel+dobavitelj ali {}."""
-    return prices.get(item_code, {}).get(supplier.upper(), {})
+    """Vrne zadnje znane cene za artikel+dobavitelj ali {}.
+    Fuzzy matching — iščemo po delnem ujemanju imena dobavitelja."""
+    art_prices = prices.get(item_code, {})
+    if not art_prices:
+        return {}
+    sup_up = supplier.upper()
+    # Točno ujemanje
+    if sup_up in art_prices:
+        return art_prices[sup_up]
+    # Delno ujemanje — iščemo ali je katerikoli ključ vsebovan v imenu ali obratno
+    for key in art_prices:
+        key_words = [w for w in key.split() if len(w) > 3]
+        if any(w in sup_up for w in key_words):
+            return art_prices[key]
+    return {}
 
 def _set_price(prices: dict, item_code: str, supplier: str,
                price: float, discount_pct: float,
@@ -597,6 +610,12 @@ def render():
 
     with st.sidebar:
         st.header("⚙️ Nastavitve")
+        prices_loaded = st.session_state.get("prejem_prices", {})
+        if prices_loaded:
+            st.caption(f"💰 Cene v bazi: {len(prices_loaded)} artiklov")
+        else:
+            st.caption("💰 Cenovna baza: prazna")
+
         with st.expander("Minimax dostop", expanded=False):
             st.session_state["client_id"]     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID",""))
             st.session_state["client_secret"] = st.text_input("Client Secret",    value=_secret("MINIMAX_CLIENT_SECRET",""), type="password")
@@ -867,6 +886,18 @@ def render():
                             orig_key = f"orig_{draft_id}_{idx}"
                             if orig_key not in st.session_state:
                                 st.session_state[orig_key] = {k:v for k,v in row.items() if not k.startswith("_")}
+
+
+                            # Auto-fill cen iz zadnjega prejema (samo če je cena še 0)
+                            _prices  = st.session_state.get("prejem_prices", {})
+                            _sup     = draft["header"].get("supplier_name","")
+                            if row.get("item_code") and float(row.get("price") or 0) == 0:
+                                _cached = _get_price(_prices, row["item_code"], _sup)
+                                if _cached:
+                                    row["price"]         = _cached.get("price", 0)
+                                    row["discount_pct"]  = _cached.get("discount_pct", 0)
+                                    row["selling_price"] = _cached.get("selling_price", 0)
+                                    st.session_state["prejem_drafts"] = drafts
 
                             with st.form(key=f"form_art_{draft_id}_{idx}"):
 
