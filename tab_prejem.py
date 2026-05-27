@@ -94,10 +94,12 @@ REQUIRED_ROW = [
 # ─── Trajno shranjevanje osnutkov ────────────────────────────────────────────
 
 import pathlib as _pathlib
-DRAFTS_FILE = str(_pathlib.Path(__file__).parent / "prejem_osnutki.json")
+import os as _os
+_DATA_DIR   = _pathlib.Path(_os.environ.get("DATA_DIR", str(_pathlib.Path(__file__).parent)))
+DRAFTS_FILE = str(_DATA_DIR / "prejem_osnutki.json")
 
-FILES_FILE  = str(_pathlib.Path(__file__).parent / "prejem_files.json")
-PRICES_FILE = str(_pathlib.Path(__file__).parent / "prejem_cene.json")
+FILES_FILE  = str(_DATA_DIR / "prejem_files.json")
+PRICES_FILE = str(_DATA_DIR / "prejem_cene.json")
 
 def _save_prices(prices: dict):
     try:
