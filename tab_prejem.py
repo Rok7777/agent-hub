@@ -461,18 +461,27 @@ def _get_supplier_id(cli, name):
         if key in name_up or name_up in key:
             return sid
 
-    # 2. Poskusi različne Minimax endpointe za dobavitelje
-    for endpoint in ["/customers", "/izvajalci", "/subjects", "/suppliers"]:
+    # 2. /customers z Search parametrom (potrjeno da deluje)
+    try:
+        data = cli._get("/customers", params={"Search": name, "PageSize": 20})
+        rows = data.get("Rows", [])
+        for s in rows:
+            sn  = (s.get("Name") or s.get("CompanyName") or "").upper()
+            sid = s.get("CustomerID") or s.get("ID") or 0
+            if sid and (name_up in sn or sn in name_up):
+                return sid
+    except: pass
+
+    # 3. Fallback — preišči vse customers brez filtra
+    for endpoint in ["/customers", "/contacts"]:
         try:
             page = 1
             while True:
                 data = cli._get(endpoint, params={"CurrentPage": page, "PageSize": 100})
                 rows = data.get("Rows", [])
                 for s in rows:
-                    sn = (s.get("Name") or s.get("CompanyName") or
-                          s.get("SubjectName") or "").upper()
-                    sid = (s.get("SupplierId") or s.get("SubjectId") or
-                           s.get("ID") or 0)
+                    sn  = (s.get("Name") or s.get("CompanyName") or "").upper()
+                    sid = (s.get("CustomerID") or s.get("ID") or 0)
                     if sid and (name_up in sn or sn in name_up):
                         return sid
                 if len(rows) < 100: break
