@@ -615,6 +615,21 @@ def render():
             st.caption(f"💰 Cene v bazi: {len(prices_loaded)} artiklov")
         else:
             st.caption("💰 Cenovna baza: prazna")
+            uploaded_prices = st.file_uploader(
+                "Naloži prejem_cene.json",
+                type=["json"],
+                key="upload_cene",
+                label_visibility="collapsed",
+            )
+            if uploaded_prices:
+                try:
+                    data = json.loads(uploaded_prices.read().decode("utf-8"))
+                    _save_prices(data)
+                    st.session_state["prejem_prices"] = data
+                    st.sidebar.success(f"✅ Cene naložene: {len(data)} artiklov")
+                    st.rerun()
+                except Exception as e:
+                    st.sidebar.error(f"Napaka: {e}")
 
         with st.expander("Minimax dostop", expanded=False):
             st.session_state["client_id"]     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID",""))
