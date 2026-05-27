@@ -7,6 +7,7 @@ Moduli:
   minimax_client.py  — API klient (ureja chat "Ločeni procesi")
 """
 
+import os
 import streamlit as st
 
 st.set_page_config(
@@ -14,6 +15,32 @@ st.set_page_config(
     page_icon="🐟",
     layout="wide",
 )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GESLO ZAŠČITA
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _check_password():
+    correct = os.environ.get("APP_PASSWORD", "")
+    if not correct:
+        return True  # brez gesla če ni nastavljeno
+    if st.session_state.get("authenticated"):
+        return True
+    st.title("🐟 Agent Hub")
+    pwd = st.text_input("Geslo", type="password")
+    if st.button("Prijava"):
+        if pwd == correct:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("❌ Napačno geslo")
+    st.stop()
+
+_check_password()
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SESSION STATE
+# ══════════════════════════════════════════════════════════════════════════════
 
 if "aktiven_modul" not in st.session_state:
     st.session_state["aktiven_modul"] = None
