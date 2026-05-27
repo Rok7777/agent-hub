@@ -96,7 +96,42 @@ REQUIRED_ROW = [
 import pathlib as _pathlib
 DRAFTS_FILE = str(_pathlib.Path(__file__).parent / "prejem_osnutki.json")
 
-FILES_FILE = str(_pathlib.Path(__file__).parent / "prejem_files.json")
+FILES_FILE  = str(_pathlib.Path(__file__).parent / "prejem_files.json")
+PRICES_FILE = str(_pathlib.Path(__file__).parent / "prejem_cene.json")
+
+def _save_prices(prices: dict):
+    try:
+        with open(PRICES_FILE, "w", encoding="utf-8") as f:
+            json.dump(prices, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _load_prices() -> dict:
+    try:
+        if os.path.exists(PRICES_FILE):
+            with open(PRICES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _get_price(prices: dict, item_code: str, supplier: str) -> dict:
+    """Vrne zadnje znane cene za artikel+dobavitelj ali {}."""
+    return prices.get(item_code, {}).get(supplier.upper(), {})
+
+def _set_price(prices: dict, item_code: str, supplier: str,
+               price: float, discount_pct: float,
+               selling_price: float, date_str: str) -> dict:
+    """Shrani cene za artikel+dobavitelj."""
+    if item_code not in prices:
+        prices[item_code] = {}
+    prices[item_code][supplier.upper()] = {
+        "price":        price,
+        "discount_pct": discount_pct,
+        "selling_price": selling_price,
+        "updated":      date_str,
+    }
+    return prices
 
 def _save_drafts(drafts: dict):
     """Shrani osnutke v JSON datoteko — preživi reboot in osvežitev strani."""
@@ -511,6 +546,8 @@ def render():
         st.session_state["prejem_drafts"] = _load_drafts()
     if "prejem_file_store" not in st.session_state:
         st.session_state["prejem_file_store"] = _load_files()
+    if "prejem_prices" not in st.session_state:
+        st.session_state["prejem_prices"] = _load_prices()
 
     drafts     = st.session_state["prejem_drafts"]
     file_store = st.session_state["prejem_file_store"]
@@ -834,6 +871,15 @@ def render():
                                     row["discount_pct"]      = f_discount
                                     # Posodobi snapshot
                                     st.session_state[orig_key] = {k:v for k,v in row.items() if not k.startswith("_")}
+                                    # Shrani cene za prihodnje prejeme
+                                    if row.get("item_code") and f_price > 0:
+                                        prices   = st.session_state.get("prejem_prices", {})
+                                        supplier = draft["header"].get("supplier_name","")
+                                        date_str = draft["header"].get("invoice_date","")
+                                        prices   = _set_price(prices, row["item_code"], supplier,
+                                                              f_price, f_discount, f_sell, date_str)
+                                        st.session_state["prejem_prices"] = prices
+                                        _save_prices(prices)
                                     st.session_state[f"draft_exp_{draft_id}"] = True
                                     st.session_state["prejem_drafts"] = drafts
                                     _save_drafts(drafts)
