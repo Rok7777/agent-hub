@@ -656,6 +656,25 @@ def render():
             st.session_state["password"]      = st.text_input("Geslo aplikacije", value=_secret("MINIMAX_PASSWORD",""), type="password")
             st.session_state["org_id"]        = st.text_input("ID organizacije",  value=_secret("MINIMAX_ORG_ID","171038"))
 
+
+        st.divider()
+        if st.button("🔍 Poišči dobavitelje", use_container_width=True, key="btn_find_sup"):
+            try:
+                cli  = _get_client()
+                sups, page = [], 1
+                while True:
+                    data = cli._get("/suppliers", params={"CurrentPage": page, "PageSize": 100})
+                    rows = data.get("Rows", [])
+                    sups.extend(rows)
+                    if len(sups) >= data.get("TotalRows", 0) or not rows: break
+                    page += 1
+                st.sidebar.success(f"Najdeno {len(sups)} dobaviteljev:")
+                for s in sups:
+                    nm  = s.get("Name") or s.get("CompanyName") or ""
+                    sid = s.get("SupplierId") or s.get("ID") or 0
+                    st.sidebar.write(f"`{sid}` {nm}")
+            except Exception as e:
+                st.sidebar.error(f"Napaka: {e}")
     if "prejem_drafts" not in st.session_state:
         st.session_state["prejem_drafts"] = _load_drafts()
     if "prejem_file_store" not in st.session_state:
