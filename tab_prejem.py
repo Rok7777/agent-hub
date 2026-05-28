@@ -555,7 +555,7 @@ def _send_draft(draft: dict) -> tuple:
             "Status":            "O",
             "Date":              h["invoice_date"] + "T00:00:00",
             "Description":       f"{h.get('invoice_number','')} — {h.get('supplier_name','')}",
-            "Supplier":          {"ID": sup_id},
+            "Customer":          {"ID": sup_id},
             "WarehouseTo":       {"ID": wh_id},
             "CountryOfDispatch": intra["country_dispatch"],
             "TransactionType":   intra["transaction"],
