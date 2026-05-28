@@ -424,26 +424,17 @@ def _draft_status(draft: dict) -> str:
 # ─── Minimax prenos ───────────────────────────────────────────────────────────
 
 def _get_item_data(cli, code: str) -> dict:
-    """Vrne {"item_id": int, "mass_converter": float} za artikel po šifri.
-    Uporablja /items/itemsdata kot minimax_client.get_item_units()."""
+    """Vrne {"item_id": int, "mass_converter": float} za artikel po šifri."""
     try:
-        page = 1
-        while True:
-            data = cli._get("/items/itemsdata", params={"CurrentPage": page, "PageSize": 500})
-            rows = data.get("Rows", [])
-            for r in rows:
-                item_id   = r.get("ItemId") or (r.get("Item") or {}).get("ID") or 0
-                item_code = r.get("Code") or r.get("Sifra") or ""
-                if item_code.upper() == code.upper() and item_id:
-                    intra = r.get("Intrastat") or {}
-                    mc    = float(intra.get("MassConverter") or
-                                  r.get("MassConverter") or 1.0)
-                    return {"item_id": item_id, "mass_converter": mc}
-            total   = data.get("TotalRows", 0)
-            fetched = (page - 1) * 500 + len(rows)
-            if fetched >= total or not rows:
-                break
-            page += 1
+        data = cli._get("/items", params={"ItemCode": code, "CurrentPage": 1, "PageSize": 5})
+        for r in data.get("Rows", []):
+            # ItemId = ID za uporabo v dokumentih (kot v get_item_units)
+            item_id = r.get("ItemId") or r.get("ID") or 0
+            if item_id:
+                intra = r.get("Intrastat") or {}
+                mc    = float(intra.get("MassConverter") or
+                              r.get("MassConverter") or 1.0)
+                return {"item_id": item_id, "mass_converter": mc}
     except: pass
     return {"item_id": 0, "mass_converter": 1.0}
 
@@ -521,7 +512,6 @@ def _send_draft(draft: dict) -> tuple:
                     "Value":             nv,
                     "BatchNumber":       r.get("batch_number",""),
                     "UnitOfMeasurement": r.get("unit","kg"),
-                    "WarehouseTo":       {"ID": wh_id},
                 }
                 if sell_price > 0:
                     sr["SellingPrice"] = sell_price
