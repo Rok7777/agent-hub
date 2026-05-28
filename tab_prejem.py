@@ -518,7 +518,7 @@ def _send_draft(draft: dict) -> tuple:
                     "Mass":                    round(qty * mass_conv, 4),
                 }
                 stock_rows.append(sr)
-        intra    = _get_intrastat(h.get("supplier_name",""))
+        h    = draft["header"]
         body = {
             "StockEntryType":    "P",
             "StockEntrySubtype": "L",
