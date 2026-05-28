@@ -504,30 +504,20 @@ def _send_draft(draft: dict) -> tuple:
                 sell_vrednost = round(sell_price * qty, 4) if sell_price > 0 else 0
 
                 sr = {
-                    "Item":              {"ID": item_id},
-                    "Quantity":          qty,
-                    "Price":             price,
-                    "DiscountPercent":   disc,
-                    "PurchasePrice":     nc,
-                    "Value":             nv,
-                    "BatchNumber":       r.get("batch_number",""),
-                    "UnitOfMeasurement": r.get("unit","kg"),
-                    "WarehouseTo":       {"ID": wh_id},
+                    "Item":                    {"ID": item_id},
+                    "WarehouseTo":             {"ID": wh_id},
+                    "Quantity":                qty,
+                    "Price":                   price,
+                    "DiscountPercent":          disc,
+                    "Value":                   nv,
+                    "SellingPrice":            sell_price if sell_price > 0 else 0,
+                    "SellingPriceIncludesVAT": "D",
+                    "MarginPercent":           0,
+                    "BatchNumber":             r.get("batch_number",""),
+                    "SerialNumber":            "",
+                    "Mass":                    round(qty * mass_conv, 4),
                 }
-                if sell_price > 0:
-                    sr["SellingPrice"] = sell_price
-                if sell_vrednost > 0:
-                    sr["SellingValue"] = sell_vrednost
-                if r.get("tariff"):
-                    sr["CustomsTariffNumber"] = r["tariff"]
-                if r.get("country_of_origin"):
-                    sr["CountryOfOrigin"] = r["country_of_origin"]
-                # Masa v kg = količina × pretvornik za maso iz kartice artikla
-                net_wt = round(qty * mass_conv, 4)
-                if net_wt > 0:
-                    sr["NetWeight"] = net_wt
                 stock_rows.append(sr)
-        h        = draft["header"]
         intra    = _get_intrastat(h.get("supplier_name",""))
         body = {
             "StockEntryType":    "P",
@@ -536,12 +526,6 @@ def _send_draft(draft: dict) -> tuple:
             "Date":              h["invoice_date"] + "T00:00:00",
             "Description":       f"{h.get('invoice_number','')} — {h.get('supplier_name','')}",
             "Customer":          {"ID": sup_id},
-            "WarehouseTo":       {"ID": wh_id},
-            "CountryOfDispatch": intra["country_dispatch"],
-            "TransactionType":   intra["transaction"],
-            "DeliveryTerms":     intra["delivery"],
-            "PlaceOfDelivery":   intra["location"],
-            "TransportType":     intra["transport"],
             "StockEntryRows":    stock_rows,
         }
         result = cli._post("/stockentry", body)
