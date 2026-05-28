@@ -534,6 +534,9 @@ def _send_draft(draft: dict) -> tuple:
                 sell_price    = float(r.get("selling_price") or 0)
                 sell_vrednost = round(sell_price * qty, 4) if sell_price > 0 else 0
 
+                # Serija — fallback na LOT iz headerja če je vrstica prazna
+                batch = r.get("batch_number","") or h.get("lot_number","")
+
                 sr = {
                     "Item":                    {"ID": item_id},
                     "WarehouseTo":             {"ID": wh_id},
@@ -544,7 +547,7 @@ def _send_draft(draft: dict) -> tuple:
                     "SellingPrice":            sell_price if sell_price > 0 else 0,
                     "SellingPriceIncludesVAT": "D",
                     "MarginPercent":           0,
-                    "BatchNumber":             r.get("batch_number",""),
+                    "BatchNumber":             batch,
                     "SerialNumber":            "",
                     "Mass":                    round(qty * mass_conv, 4),
                 }
