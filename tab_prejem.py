@@ -668,6 +668,34 @@ def render():
 
 
         st.divider()
+        if st.button("🔍 Debug: Obstoječ P/L", use_container_width=True, key="btn_debug_pl"):
+            try:
+                cli  = _get_client()
+                # Poišči zadnji potrjen P/L dokument
+                data = cli._get("/stockentry", params={
+                    "StockEntryType":    "P",
+                    "StockEntrySubtype": "L",
+                    "Status":            "P",
+                    "CurrentPage":       1,
+                    "PageSize":          1,
+                })
+                rows = data.get("Rows", [])
+                if rows:
+                    eid    = rows[0].get("StockEntryId")
+                    detail = cli._get(f"/stockentry/{eid}")
+                    st.sidebar.write(f"**P/L dokument ID {eid} — header:**")
+                    # Pokaži header brez vrstic
+                    header_only = {k:v for k,v in detail.items() if k != "StockEntryRows"}
+                    st.sidebar.json(header_only)
+                    st.sidebar.write("**Prva vrstica (StockEntryRows[0]):**")
+                    rows_data = detail.get("StockEntryRows", [])
+                    if rows_data:
+                        st.sidebar.json(rows_data[0])
+                else:
+                    st.sidebar.warning("Ni najdenih P/L dokumentov")
+            except Exception as e:
+                st.sidebar.error(f"Napaka: {e}")
+
         if st.button("🔍 Debug: Poišči artikel", use_container_width=True, key="btn_debug_item"):
             try:
                 cli  = _get_client()
