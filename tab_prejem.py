@@ -688,6 +688,20 @@ def render():
 
 
         st.divider()
+        if st.button("🔍 Debug: Poišči stranko", use_container_width=True, key="btn_debug_stranka"):
+            try:
+                cli  = _get_client()
+                ime  = st.session_state.get("debug_stranka_ime", "LIBO")
+                # Poskusi /customers z Search
+                data = cli._get("/customers", params={"Search": ime, "PageSize": 10})
+                st.sidebar.write("**Odgovor /customers:**")
+                st.sidebar.json(data)
+            except Exception as e:
+                st.sidebar.error(f"Napaka: {e}")
+        st.session_state["debug_stranka_ime"] = st.sidebar.text_input(
+            "Ime za iskanje", value="LIBO", key="inp_debug_stranka"
+        )
+
         with st.expander("🔧 Ročni ID dobavitelja", expanded=False):
             st.caption("Če iskanje dobavitelja ne deluje, vnesite ID ročno.")
             manual_sup_name = st.text_input("Ime dobavitelja", key="manual_sup_name",
