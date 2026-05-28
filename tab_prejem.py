@@ -461,13 +461,22 @@ def _get_supplier_id(cli, name):
         if key in name_up or name_up in key:
             return sid
 
+    def _extract_id(s):
+        """Minimax SI — slovensko poimenovanje polj."""
+        return (s.get("CustomerID") or s.get("StrankaId") or
+                s.get("SubjectId") or s.get("ID") or 0)
+
+    def _extract_name(s):
+        return (s.get("Name") or s.get("Naziv") or
+                s.get("CompanyName") or s.get("NazivStranke") or "")
+
     # 2. /customers z Search parametrom (potrjeno da deluje)
     try:
         data = cli._get("/customers", params={"Search": name, "PageSize": 20})
         rows = data.get("Rows", [])
         for s in rows:
-            sn  = (s.get("Name") or s.get("CompanyName") or "").upper()
-            sid = s.get("CustomerID") or s.get("ID") or 0
+            sn  = _extract_name(s).upper()
+            sid = _extract_id(s)
             if sid and (name_up in sn or sn in name_up):
                 return sid
     except: pass
@@ -480,8 +489,8 @@ def _get_supplier_id(cli, name):
                 data = cli._get(endpoint, params={"CurrentPage": page, "PageSize": 100})
                 rows = data.get("Rows", [])
                 for s in rows:
-                    sn  = (s.get("Name") or s.get("CompanyName") or "").upper()
-                    sid = (s.get("CustomerID") or s.get("ID") or 0)
+                    sn  = _extract_name(s).upper()
+                    sid = _extract_id(s)
                     if sid and (name_up in sn or sn in name_up):
                         return sid
                 if len(rows) < 100: break
