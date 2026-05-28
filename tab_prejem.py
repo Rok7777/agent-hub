@@ -438,7 +438,11 @@ def _load_items_map(username, org_id):
     page   = 1
     while True:
         data = cli._get("/items", params={"CurrentPage": page, "PageSize": 500})
-        rows = data.get("Rows", [])
+        # /items lahko vrne seznam direktno ali dict z Rows (kot v get_item_units)
+        if isinstance(data, list):
+            rows = data
+        else:
+            rows = data.get("Rows", [])
         for r in rows:
             # Samo blago (ItemType=B), preskočimo storitve (S)
             if r.get("ItemType","") == "S":
