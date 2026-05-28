@@ -512,6 +512,7 @@ def _send_draft(draft: dict) -> tuple:
                     "Value":             nv,
                     "BatchNumber":       r.get("batch_number",""),
                     "UnitOfMeasurement": r.get("unit","kg"),
+                    "WarehouseTo":       {"ID": wh_id},
                 }
                 if sell_price > 0:
                     sr["SellingPrice"] = sell_price
@@ -667,6 +668,19 @@ def render():
 
 
         st.divider()
+        if st.button("🔍 Debug: Poišči artikel", use_container_width=True, key="btn_debug_item"):
+            try:
+                cli  = _get_client()
+                koda = st.session_state.get("debug_item_koda", "POSSS0301")
+                data = cli._get("/items", params={"ItemCode": koda, "CurrentPage": 1, "PageSize": 5})
+                st.sidebar.write(f"**Odgovor /items?ItemCode={koda}:**")
+                st.sidebar.json(data)
+            except Exception as e:
+                st.sidebar.error(f"Napaka: {e}")
+        st.session_state["debug_item_koda"] = st.sidebar.text_input(
+            "Šifra artikla", value="POSSS0301", key="inp_debug_item"
+        )
+
         if st.button("🔍 Debug: Poišči stranko", use_container_width=True, key="btn_debug_stranka"):
             try:
                 cli  = _get_client()
