@@ -516,6 +516,7 @@ def _send_draft(draft: dict) -> tuple:
         if not wh_id: return None, "Skladišče VP-CEN ni najdeno"
         sup_id = _get_supplier_id(cli, draft["header"].get("supplier_name",""))
         if not sup_id: return None, "Dobavitelj ni najden v Minimaxu"
+        h          = draft["header"]
         stock_rows = []
         for row in draft["rows"]:
             if row.get("_split_child"):
@@ -552,7 +553,6 @@ def _send_draft(draft: dict) -> tuple:
                     "Mass":                    round(qty * mass_conv, 4),
                 }
                 stock_rows.append(sr)
-        h    = draft["header"]
         body = {
             "StockEntryType":    "P",
             "StockEntrySubtype": "S",
