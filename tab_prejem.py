@@ -461,41 +461,24 @@ def _get_supplier_id(cli, name):
         if key in name_up or name_up in key:
             return sid
 
-    def _extract_id(s):
-        """Minimax SI — slovensko poimenovanje polj."""
-        return (s.get("CustomerID") or s.get("StrankaId") or
-                s.get("SubjectId") or s.get("ID") or 0)
-
-    def _extract_name(s):
-        return (s.get("Name") or s.get("Naziv") or
-                s.get("CompanyName") or s.get("NazivStranke") or "")
-
-    # 2. /customers z Search parametrom (potrjeno da deluje)
+    # Paginiraj skozi vse stranke in poišči po imenu
+    # CustomerId = pravilno ime polja (Minimax SI API)
     try:
-        data = cli._get("/customers", params={"Search": name, "PageSize": 20})
-        rows = data.get("Rows", [])
-        for s in rows:
-            sn  = _extract_name(s).upper()
-            sid = _extract_id(s)
-            if sid and (name_up in sn or sn in name_up):
-                return sid
+        page = 1
+        while True:
+            data = cli._get("/customers", params={"CurrentPage": page, "PageSize": 100})
+            rows = data.get("Rows", [])
+            for s in rows:
+                sn  = (s.get("Name") or "").upper()
+                sid = s.get("CustomerId") or 0
+                if sid and (name_up in sn or sn in name_up):
+                    return sid
+            total   = data.get("TotalRows", 0)
+            fetched = (page - 1) * 100 + len(rows)
+            if fetched >= total or not rows:
+                break
+            page += 1
     except: pass
-
-    # 3. Fallback — preišči vse customers brez filtra
-    for endpoint in ["/customers", "/contacts"]:
-        try:
-            page = 1
-            while True:
-                data = cli._get(endpoint, params={"CurrentPage": page, "PageSize": 100})
-                rows = data.get("Rows", [])
-                for s in rows:
-                    sn  = _extract_name(s).upper()
-                    sid = _extract_id(s)
-                    if sid and (name_up in sn or sn in name_up):
-                        return sid
-                if len(rows) < 100: break
-                page += 1
-        except: continue
     return 0
 
 def _send_draft(draft: dict) -> tuple:
