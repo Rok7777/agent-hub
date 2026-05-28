@@ -423,19 +423,46 @@ def _draft_status(draft: dict) -> str:
 
 # ─── Minimax prenos ───────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _load_items_map(username, org_id):
+    """Naloži vse artikle tipa B (blago) in vrne {Code: ItemId} mapo."""
+    from minimax_client import MinimaxClient
+    cli = MinimaxClient(
+        username=username,
+        password=_secret("MINIMAX_PASSWORD",""),
+        client_id=_secret("MINIMAX_CLIENT_ID",""),
+        client_secret=_secret("MINIMAX_CLIENT_SECRET",""),
+        org_id=int(org_id),
+    )
+    result = {}
+    page   = 1
+    while True:
+        data = cli._get("/items", params={"CurrentPage": page, "PageSize": 500})
+        rows = data.get("Rows", [])
+        for r in rows:
+            # Samo blago (ItemType=B), preskočimo storitve (S)
+            if r.get("ItemType","") == "S":
+                continue
+            code   = (r.get("Code") or "").strip()
+            iid    = r.get("ItemId") or 0
+            mc     = float(r.get("MassPerUnit") or 1.0)
+            if code and iid:
+                result[code.upper()] = {"item_id": iid, "mass_converter": mc}
+        total   = data.get("TotalRows", 0)
+        fetched = (page - 1) * 500 + len(rows)
+        if fetched >= total or not rows:
+            break
+        page += 1
+    return result
+
 def _get_item_data(cli, code: str) -> dict:
     """Vrne {"item_id": int, "mass_converter": float} za artikel po šifri."""
-    try:
-        data = cli._get("/items", params={"ItemCode": code, "CurrentPage": 1, "PageSize": 5})
-        for r in data.get("Rows", []):
-            # ItemId = ID za uporabo v dokumentih (kot v get_item_units)
-            item_id = r.get("ItemId") or r.get("ID") or 0
-            if item_id:
-                intra = r.get("Intrastat") or {}
-                mc    = float(intra.get("MassConverter") or
-                              r.get("MassConverter") or 1.0)
-                return {"item_id": item_id, "mass_converter": mc}
-    except: pass
+    username = _secret("MINIMAX_USERNAME", st.session_state.get("username",""))
+    org_id   = _secret("MINIMAX_ORG_ID",  st.session_state.get("org_id","171038"))
+    items_map = _load_items_map(username, org_id)
+    found = items_map.get(code.upper().strip())
+    if found:
+        return found
     return {"item_id": 0, "mass_converter": 1.0}
 
 def _get_item_id_by_code(cli, code: str) -> int:
