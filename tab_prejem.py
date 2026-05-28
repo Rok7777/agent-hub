@@ -562,6 +562,13 @@ def _send_draft(draft: dict) -> tuple:
             "Customer":          {"ID": sup_id},
             "StockEntryRows":    stock_rows,
         }
+        # Debug — začasno za diagnozo lota
+        import json as _json
+        st.session_state["last_post_body"] = _json.dumps(
+            [{k:v for k,v in r.items() if k in ["Item","BatchNumber","Quantity","WarehouseTo"]}
+             for r in body.get("StockEntryRows",[])],
+            ensure_ascii=False
+        )
         result = cli._post("/stockentry", body)
         if isinstance(result, list):
             r0       = result[0] if result else {}
@@ -807,8 +814,16 @@ def render():
         else:
             selected_files = []
             for fname in unprocessed:
-                if st.checkbox(f"📄 {fname}", value=True, key=f"chk_f_{fname}"):
-                    selected_files.append(fname)
+                fc1, fc2 = st.columns([9, 1])
+                with fc1:
+                    if st.checkbox(f"📄 {fname}", value=True, key=f"chk_f_{fname}"):
+                        selected_files.append(fname)
+                with fc2:
+                    if st.button("✕", key=f"rm_f_{fname}", help="Odstrani datoteko"):
+                        file_store.pop(fname, None)
+                        st.session_state["prejem_file_store"] = file_store
+                        _save_files(file_store)
+                        st.rerun()
 
             if st.button(f"🤖 Obdelaj z AI ({len(selected_files)})", type="primary",
                          use_container_width=True, disabled=not selected_files, key="btn_obdelaj"):
@@ -1285,6 +1300,10 @@ def render():
                 sup = drafts[_did]["header"].get("supplier_name","?")
                 st.error(f"❌ NAPAKA MINIMAX — {sup}: {_err}")
             st.warning("⚠️ Popravite napake in poskusite znova.")
+        # Debug POST body
+        if "last_post_body" in st.session_state:
+            with st.expander("🔍 Debug: POST vrstice (BatchNumber)"):
+                st.code(st.session_state["last_post_body"])
         else:
             st.rerun()
 
