@@ -681,29 +681,28 @@ def render():
         st.divider()
         if st.button("🔍 Debug: Obstoječ P/L", use_container_width=True, key="btn_debug_pl"):
             try:
-                cli  = _get_client()
-                # Poišči zadnji potrjen P/L dokument
-                data = cli._get("/stockentry", params={
-                    "StockEntryType":    "P",
-                    "StockEntrySubtype": "L",
-                    "Status":            "P",
-                    "CurrentPage":       1,
-                    "PageSize":          1,
-                })
-                rows = data.get("Rows", [])
-                if rows:
-                    eid    = rows[0].get("StockEntryId")
-                    detail = cli._get(f"/stockentry/{eid}")
-                    st.sidebar.write(f"**P/L dokument ID {eid} — header:**")
-                    # Pokaži header brez vrstic
-                    header_only = {k:v for k,v in detail.items() if k != "StockEntryRows"}
-                    st.sidebar.json(header_only)
-                    st.sidebar.write("**Prva vrstica (StockEntryRows[0]):**")
-                    rows_data = detail.get("StockEntryRows", [])
-                    if rows_data:
-                        st.sidebar.json(rows_data[0])
-                else:
-                    st.sidebar.warning("Ni najdenih P/L dokumentov")
+                cli = _get_client()
+                # Preizkusi vse subtipe da najdemo pravega za prejem od dobavitelja
+                for subtype in ["S", "L", "P", "R"]:
+                    data = cli._get("/stockentry", params={
+                        "StockEntryType":    "P",
+                        "StockEntrySubtype": subtype,
+                        "Status":            "P",
+                        "CurrentPage":       1,
+                        "PageSize":          3,
+                    })
+                    rows = data.get("Rows", [])
+                    if rows:
+                        eid    = rows[0].get("StockEntryId")
+                        detail = cli._get(f"/stockentry/{eid}")
+                        h_only = {k:v for k,v in detail.items() if k != "StockEntryRows"}
+                        sr     = (detail.get("StockEntryRows") or [{}])[0]
+                        st.sidebar.write(f"**Subtype={subtype}, ID={eid}:**")
+                        st.sidebar.write(f"Stranka: {h_only.get('Customer',{}).get('Name','')}")
+                        st.sidebar.write(f"WH_from: {sr.get('WarehouseFrom',{})}")
+                        st.sidebar.write(f"WH_to: {sr.get('WarehouseTo',{})}")
+                        st.sidebar.write(f"Opis: {h_only.get('Description','')[:50]}")
+                        st.sidebar.divider()
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
 
