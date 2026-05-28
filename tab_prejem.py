@@ -546,11 +546,11 @@ def _send_draft(draft: dict) -> tuple:
                     "DiscountPercent":          disc,
                     "Value":                   nv,
                     "SellingPrice":            sell_price if sell_price > 0 else 0,
-                    "SellingPriceIncludesVAT": "D",
+                    "SellingPriceIncludesVAT": "N",
                     "MarginPercent":           0,
                     "BatchNumber":             batch,
                     "SerialNumber":            "",
-                    "Mass":                    round(qty * mass_conv, 4),
+                    "Mass":                    0,
                 }
                 stock_rows.append(sr)
         body = {
