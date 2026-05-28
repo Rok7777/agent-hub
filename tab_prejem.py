@@ -426,18 +426,17 @@ def _draft_status(draft: dict) -> str:
 def _get_item_data(cli, code: str) -> dict:
     """Vrne {"item_id": int, "mass_converter": float} za artikel po šifri."""
     try:
-        data = cli._get("/items", params={"Code": code, "CurrentPage": 1, "PageSize": 5})
+        # Minimax SI: parameter ItemCode, polje ID
+        data = cli._get("/items", params={"ItemCode": code, "CurrentPage": 1, "PageSize": 5})
         for r in data.get("Rows", []):
-            if r.get("Code","").upper() == code.upper():
-                item_id = r.get("ItemId") or 0
-                # Pretvornik za maso — polje v Minimax API
-                intra = r.get("Intrastat") or {}
-                mc = (intra.get("MassConverter") or
-                      intra.get("WeightConverter") or
-                      r.get("MassConverter") or
-                      r.get("WeightConverter") or
-                      r.get("MassPerUnit") or 1.0)
-                return {"item_id": item_id, "mass_converter": float(mc or 1.0)}
+            item_id = r.get("ID") or r.get("ItemId") or 0
+            if not item_id:
+                continue
+            intra = r.get("Intrastat") or {}
+            mc = float(intra.get("MassConverter") or
+                       r.get("MassConverter") or
+                       r.get("WeightConverter") or 1.0)
+            return {"item_id": item_id, "mass_converter": mc}
     except: pass
     return {"item_id": 0, "mass_converter": 1.0}
 
