@@ -438,21 +438,21 @@ def _load_items_map(username, org_id):
     page   = 1
     while True:
         data = cli._get("/items", params={"CurrentPage": page, "PageSize": 500})
-        # /items lahko vrne seznam direktno ali dict z Rows (kot v get_item_units)
+        # /items lahko vrne seznam direktno ali dict z Rows
         if isinstance(data, list):
-            rows = data
+            rows  = data
+            total = len(data)
         else:
-            rows = data.get("Rows", [])
+            rows  = data.get("Rows", [])
+            total = data.get("TotalRows", 0)
         for r in rows:
-            # Samo blago (ItemType=B), preskočimo storitve (S)
             if r.get("ItemType","") == "S":
                 continue
-            code   = (r.get("Code") or "").strip()
-            iid    = r.get("ItemId") or 0
-            mc     = float(r.get("MassPerUnit") or 1.0)
+            code = (r.get("Code") or "").strip()
+            iid  = r.get("ItemId") or 0
+            mc   = float(r.get("MassPerUnit") or 1.0)
             if code and iid:
                 result[code.upper()] = {"item_id": iid, "mass_converter": mc}
-        total   = data.get("TotalRows", 0)
         fetched = (page - 1) * 500 + len(rows)
         if fetched >= total or not rows:
             break
@@ -560,7 +560,14 @@ def _send_draft(draft: dict) -> tuple:
             "StockEntryRows":    stock_rows,
         }
         result = cli._post("/stockentry", body)
-        return result.get("StockEntryId") or result.get("ID") or "?", None
+        if isinstance(result, list):
+            r0       = result[0] if result else {}
+            entry_id = r0.get("StockEntryId") or r0.get("ID") or "?"
+        elif isinstance(result, dict):
+            entry_id = result.get("StockEntryId") or result.get("ID") or "?"
+        else:
+            entry_id = str(result) if result else "?"
+        return entry_id, None
     except Exception as e:
         return None, str(e)
 
