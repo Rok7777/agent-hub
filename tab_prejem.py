@@ -548,7 +548,7 @@ def _send_draft(draft: dict) -> tuple:
         h    = draft["header"]
         body = {
             "StockEntryType":    "P",
-            "StockEntrySubtype": "L",
+            "StockEntrySubtype": "S",
             "Status":            "O",
             "Date":              h["invoice_date"] + "T00:00:00",
             "Description":       f"{h.get('invoice_number','')} — {h.get('supplier_name','')}",
