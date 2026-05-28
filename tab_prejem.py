@@ -424,19 +424,26 @@ def _draft_status(draft: dict) -> str:
 # ─── Minimax prenos ───────────────────────────────────────────────────────────
 
 def _get_item_data(cli, code: str) -> dict:
-    """Vrne {"item_id": int, "mass_converter": float} za artikel po šifri."""
+    """Vrne {"item_id": int, "mass_converter": float} za artikel po šifri.
+    Uporablja /items/itemsdata kot minimax_client.get_item_units()."""
     try:
-        # Minimax SI: parameter ItemCode, polje ID
-        data = cli._get("/items", params={"ItemCode": code, "CurrentPage": 1, "PageSize": 5})
-        for r in data.get("Rows", []):
-            item_id = r.get("ID") or r.get("ItemId") or 0
-            if not item_id:
-                continue
-            intra = r.get("Intrastat") or {}
-            mc = float(intra.get("MassConverter") or
-                       r.get("MassConverter") or
-                       r.get("WeightConverter") or 1.0)
-            return {"item_id": item_id, "mass_converter": mc}
+        page = 1
+        while True:
+            data = cli._get("/items/itemsdata", params={"CurrentPage": page, "PageSize": 500})
+            rows = data.get("Rows", [])
+            for r in rows:
+                item_id   = r.get("ItemId") or (r.get("Item") or {}).get("ID") or 0
+                item_code = r.get("Code") or r.get("Sifra") or ""
+                if item_code.upper() == code.upper() and item_id:
+                    intra = r.get("Intrastat") or {}
+                    mc    = float(intra.get("MassConverter") or
+                                  r.get("MassConverter") or 1.0)
+                    return {"item_id": item_id, "mass_converter": mc}
+            total   = data.get("TotalRows", 0)
+            fetched = (page - 1) * 500 + len(rows)
+            if fetched >= total or not rows:
+                break
+            page += 1
     except: pass
     return {"item_id": 0, "mass_converter": 1.0}
 
