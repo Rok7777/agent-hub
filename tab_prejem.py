@@ -190,6 +190,8 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
                     row["tariff"] = data["tariff"]
                 if data.get("country_of_origin") and not row.get("country_of_origin"):
                     row["country_of_origin"] = data["country_of_origin"]
+                if "default_discount" in data and float(row.get("discount_pct") or 0) == 0:
+                    row["discount_pct"] = data["default_discount"]
                 if data.get("needs_split"):
                     row["_needs_split_hint"] = True
                     row["_split_options"]    = data.get("split_options", [])
@@ -368,40 +370,66 @@ def _get_client() -> MinimaxClient:
 
 # ─── Claude Vision ────────────────────────────────────────────────────────────
 
-_PARSE_PROMPT = """Analiziraj to dobavnico / račun dobavitelja za ribe in morske sadeže.
-Dokument je lahko v slovenščini, italijanščini ali hrvaščini. Prevedite kjer je potrebno.
-Vrni SAMO čist JSON brez markdown backticks, brez komentarjev.
+_PARSE_PROMPT = """Ti si strokovnjak za branje dobavnic rib in morskih sadežev.
+Dokument je lahko DDT (Italia), dobavnica (HR, SI) ali račun v kateremkoli jeziku.
+Vrni SAMO čist JSON brez markdown, brez komentarjev.
 
 {
-  "supplier_name": "ime dobavitelja",
-  "invoice_number": "številka računa ali dobavnice",
+  "supplier_name": "polno ime dobavitelja",
+  "invoice_number": "številka DDT/računa/dobavnice",
   "invoice_date": "YYYY-MM-DD",
-  "datum_izlova": "YYYY-MM-DD datum izlova/pridelave če je naveden",
+  "datum_izlova": "YYYY-MM-DD če je naveden",
   "items": [
     {
-      "name": "naziv artikla kot piše na dobavnici",
-      "latin_name": "latinsko ime vrste (npr. Oncorhynchus mykiss) — poišči na dokumentu ali prepoznaj po vrsti ribe",
+      "name": "naziv artikla kot piše na dokumentu",
+      "latin_name": "latinsko ime vrste — poišči iz opisa ali po lastnem znanju",
       "quantity": 0.000,
       "unit": "kg",
       "price": 0.00,
-      "country_of_origin": "2-črkovna ISO koda (HR, IT, NO, SI...)",
-      "tariff": "carinska tarifa samo cifre brez presledkov",
-      "fao_zone": "FAO cona če je navedena (npr. 37.2.1, 27.VIII)",
-      "nacin_ulova": "način ulova preveden v slovenščino (Vlečne mreže, Parangal, Ribogojnica, Potegalke...)",
-      "kategorija": "sveže ali zamrznjeno ali odtaljeno",
-      "rok_trajanja": "datum roka trajanja/porabiti do v formatu DD.MM.YYYY če je naveden",
-      "lot_dobavitelja": "LOT za ta artikel če je naveden"
+      "discount_pct": 0.00,
+      "country_of_origin": "2-črkovna ISO koda",
+      "tariff": "carinska tarifa samo cifre",
+      "fao_zone": "FAO cona npr. 37.2.1 ali 34",
+      "nacin_ulova": "metoda v slovenščini",
+      "rok_trajanja": "DD.MM.YYYY ali prazno",
+      "lot_dobavitelja": "lot/serija iz dokumenta"
     }
   ]
 }
 
-Pravila:
-- invoice_date/datum_izlova = YYYY-MM-DD
-- rok_trajanja = DD.MM.YYYY (kot bo na etiketi)
-- country_of_origin = 2 črki ISO
-- tariff = samo cifre brez presledkov
-- latin_name: obvezno poišči — za postrv=Oncorhynchus mykiss, za brancina=Dicentrarchus labrax, orado=Sparus aurata, tune=Thunnus thynnus, hobotnico=Octopus vulgaris, losos=Salmo salar, sardele=Sardina pilchardus, skuša=Scomber scombrus
-- nacin_ulova: prevedi iz IT/HR v SL (reti da traino→Vlečne mreže, palangari→Parangal, sciabiche→Potegalke, rete→Mreže, allevamento/ribogojnica→Ribogojnica)"""
+NAVODILA ZA BRANJE:
+
+Količina in cena:
+- quantity = dejanska TEŽA v kg — na italijanskih DDT je to stolpec "Qtà", ne "Colli"
+- "Colli" = število embalaž → prezri za quantity
+- price = cena NA ENOTO (€/kg), ne skupna vrednost
+- discount_pct = popust točno kot piše na dokumentu, ne predpostavljaj
+
+Rok trajanja:
+- Iščeš "scadenza", "consumare entro", "best before", "porabiti do" — datumski podatek na živilu
+- "30 giorni", "60gg" pri plačilnih pogojih = ROK PLAČILA, to ni rok trajanja živila
+- Sveže ribe nimajo 30-dnevnega roka — tipično 3-7 dni od datuma izlova/dobave
+- Zamrznjene: rok je naveden na embalaži, pustite prazno če ni na dokumentu
+- Če rok trajanja ni eksplicitno naveden za živilo: pusti prazno
+
+Latinski naziv:
+- Poišči v opisu ali po lastnem znanju
+- Brancin=Dicentrarchus labrax, Orada=Sparus aurata, Klapavice=Mytilus galloprovincialis,
+  Tun rumenoplavuti=Thunnus albacares, Sardele=Sardina pilchardus, Zobatec=Dentex gibbosus,
+  Kočice=Ruditapes decussatus, Lepotke=Callista chione, Postrv=Oncorhynchus mykiss,
+  Losos=Salmo salar, Hobotnica=Octopus vulgaris, Skuša=Scomber scombrus
+
+FAO cona:
+- Preberi iz opisa artikla ali iz legende na dokumentu (A=Pescato/lovljeno, C=Allevato/gojeno)
+- Jadransko morje=37.2.1, Sredozemlje=37, Atlantik centro-orientale=34, Pacifik JV=87
+
+Način ulova (v slovenščini):
+- Palangari/Ami=Parangal, Reti da traino/Draghe=Vlečne mreže, Lampara/Circuizione=Potegalke,
+  Reti/Rete=Mreže, Allevato/Allevamento/Gojeno=pusti prazno (gojene ribe nimajo načina ulova)
+
+Lot dobavitelja: preberi iz stolpca "Lotte", "Lot", "Serija", "Batch"
+Carinska tarifa: preberi iz dokumenta ali po lastnem znanju za vrsto ribe
+Država porekla: 2-črkovna ISO koda (IT, HR, MA, ID, NO...)"""
 
 def _parse_claude(image_bytes: bytes, media_type: str = "image/jpeg"):
     try:
@@ -667,18 +695,30 @@ def _send_draft(draft: dict) -> tuple:
                     "MarginPercent":           0,
                     "BatchNumber":             batch,
                     "SerialNumber":            "",
-                    "Mass":                    0,
+                    "Mass":                    round(qty * mass_conv, 4),
                 }
+                if r.get("tariff"):
+                    sr["CustomsTariffNumber"] = r["tariff"]
+                if r.get("country_of_origin"):
+                    sr["CountryOfOrigin"] = r["country_of_origin"]
                 stock_rows.append(sr)
+        intra    = _get_intrastat(h.get("supplier_name",""))
+        is_foreign = intra.get("country_dispatch","SI").upper() != "SI"
         body = {
             "StockEntryType":    "P",
             "StockEntrySubtype": "S",
             "Status":            "O",
             "Date":              h["invoice_date"] + "T00:00:00",
-            "Description":       h.get('invoice_number',''),
+            "Description":       h.get("invoice_number",""),
             "Customer":          {"ID": sup_id},
             "StockEntryRows":    stock_rows,
         }
+        if is_foreign:
+            body["CountryOfDispatch"] = intra["country_dispatch"]
+            body["TransactionType"]   = intra["transaction"]
+            body["DeliveryTerms"]     = intra["delivery"]
+            body["PlaceOfDelivery"]   = intra["location"]
+            body["TransportType"]     = intra["transport"]
         # Korak 1: Ustvari dokument brez BatchNumber
         body_no_batch = dict(body)
         rows_no_batch = []
@@ -1191,15 +1231,17 @@ def render():
                                 st.session_state[orig_key] = {k:v for k,v in row.items() if not k.startswith("_")}
 
 
-                            # Auto-fill cen iz zadnjega prejema (samo če je cena še 0)
+                            # Auto-fill cen iz zadnjega prejema
                             _prices  = st.session_state.get("prejem_prices", {})
                             _sup     = draft["header"].get("supplier_name","")
-                            if row.get("item_code") and float(row.get("price") or 0) == 0:
+                            if row.get("item_code"):
                                 _cached = _get_price(_prices, row["item_code"], _sup)
                                 if _cached:
-                                    row["price"]         = _cached.get("price", 0)
-                                    row["discount_pct"]  = _cached.get("discount_pct", 0)
-                                    row["selling_price"] = _cached.get("selling_price", 0)
+                                    if float(row.get("price") or 0) == 0:
+                                        row["price"]        = _cached.get("price", 0)
+                                        row["discount_pct"] = _cached.get("discount_pct", 0)
+                                    if float(row.get("selling_price") or 0) == 0:
+                                        row["selling_price"] = _cached.get("selling_price", 0)
                                     st.session_state["prejem_drafts"] = drafts
 
                             with st.form(key=f"form_art_{draft_id}_{idx}"):
