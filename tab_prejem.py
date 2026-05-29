@@ -133,6 +133,24 @@ SUPPLIER_ITEM_MAPPINGS = {
             ],
         },
     },
+    "ALEMAR": {
+        "DENTICE GIBBOSO":  {"item_code":"ZOBSM1000","item_name":"(ZOBSM1000) ZOBATEC (debeloglavi), 1000-2000g, svež, FAO 34",
+                             "latinski_naziv":"Dentex gibbosus","fao_code":"34","nacin_ulova":"Parangal"},
+        "BRANZINO CROAZIA": {"item_code":"BRASH0400","item_name":"(BRASH0400) BRANCIN, 400-600g, svež, Hrvaška",
+                             "latinski_naziv":"Dicentrarchus labrax","fao_code":"GOJ_MORJE_HR","nacin_ulova":""},
+        "COZZA DI BOUCHOT": {"item_code":"PEDSB0000","item_name":"(PEDSB0000) KLAPAVICE, sveže, Bouchot, Francija",
+                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_FR","nacin_ulova":""},
+        "COZZA ITALIA":     {"item_code":"PEDSI0000","item_name":"(PEDSI0000) KLAPAVICE, sveže, Italija",
+                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_IT","nacin_ulova":""},
+        "FASOLARO":         {"item_code":"FAZSX0000","item_name":"(FAZSX0000) LEPOTKE, sveže, FAO 37.2.1",
+                             "latinski_naziv":"Callista chione","fao_code":"37.2.1","nacin_ulova":"Vlečne mreže"},
+        "SARDINA":          {"item_code":"SARSH0003","item_name":"(SARSH0003) SARDELE, sveže, FAO 37.1.3",
+                             "latinski_naziv":"Sardina pilchardus","fao_code":"37.1.3","nacin_ulova":"Potegalke"},
+        "FILONE TONNO":     {"item_code":"TUNSO0100","item_name":"(TUNSO0100) TUN (rumenoplavuti), filon, Premium, odtaljen, FAO 87",
+                             "latinski_naziv":"Thunnus albacares","fao_code":"87","nacin_ulova":"Vlečne mreže"},
+        "VONGOLE VERACI":   {"item_code":"VONSI0000","item_name":"(VONSI0000) KOČICE, sveže, Italija",
+                             "latinski_naziv":"Ruditapes decussatus","fao_code":"GOJ_MORJE_IT","nacin_ulova":""},
+    },
 }
 
 def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
@@ -152,13 +170,21 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
             if keyword.upper() in inv_name_up:
                 row["item_code"] = data.get("item_code") or ""
                 row["item_name"] = data.get("item_name") or ""
+                # Deklaracijski podatki iz mappinga (fallback)
+                if data.get("latinski_naziv") and not row.get("latinski_naziv"):
+                    row["latinski_naziv"] = data["latinski_naziv"]
+                if data.get("fao_code") and not row.get("fao_code"):
+                    row["fao_code"]  = data["fao_code"]
+                    row["fao_naziv"] = FAO_AREAS.get(data["fao_code"], data["fao_code"])
+                if "nacin_ulova" in data and not row.get("nacin_ulova"):
+                    row["nacin_ulova"] = data["nacin_ulova"]
                 if data.get("needs_split"):
                     row["_needs_split_hint"] = True
                     row["_split_options"]    = data.get("split_options", [])
                 break
     return rows
 OLTREON_INFO = "OltreCon d.o.o., Orehovlje 2F, 5291 Miren"
-VET_OZNAKA   = "SI 844 ES"
+VET_OZNAKA   = "SI-849 ES"
 
 STATUS_ICON  = {"ready": "🟢", "sent": "⚫", "error": "🔴"}
 
