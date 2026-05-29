@@ -35,54 +35,54 @@ SUPPLIER_INTRASTAT = {
     "FRULPESCA":       {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
 }
 
-# ─── FAO območja (celoten naziv v slovenščini) ───────────────────────────────
+# ─── FAO / Izvor rib (deklaracije) ──────────────────────────────────────────
 FAO_AREAS = {
-    "05":"05 – Sladkovodna tla Evrope",
-    "18":"18 – Arktik",
-    "21":"21 – Severozahodni Atlantik",
-    "27":"27 – Severovzhodni Atlantik",
-    "27.I":"27/I – SV Atlantik – Barentsovo morje",
-    "27.II":"27/II – SV Atlantik – Norveško morje",
-    "27.IIIa":"27/IIIa – SV Atlantik – Skagerrak",
-    "27.IIId":"27/IIId – SV Atlantik – Baltsko morje",
-    "27.IV":"27/IV – SV Atlantik – Severno morje",
-    "27.V":"27/V – SV Atlantik – Islandija",
-    "27.Va":"27/Va – SV Atlantik – Islandija",
-    "27.Vb":"27/Vb – SV Atlantik – Ferski otoki",
-    "27.VI":"27/VI – SV Atlantik – Keltsko morje sever",
-    "27.VIa":"27/VIa – SV Atlantik – Keltsko morje sever",
-    "27.VIb":"27/VIb – SV Atlantik – Rockall",
-    "27.VII":"27/VII – SV Atlantik – Keltsko morje jug",
-    "27.VIIa":"27/VIIa – SV Atlantik – Irsko morje",
-    "27.VIIf":"27/VIIf – SV Atlantik – Bristolski kanal",
-    "27.VIIg":"27/VIIg – SV Atlantik – Irska morska ravnica",
-    "27.VIII":"27/VIII – SV Atlantik – Baskijski zaliv",
+    # Gojeno
+    "GOJ_SLADKA_SI":  "Gojeno v sladki vodi, Slovenija",
+    "GOJ_SLADKA_IT":  "Gojeno v sladki vodi, Italija",
+    "GOJ_SLADKA_HR":  "Gojeno v sladki vodi, Hrvaška",
+    "GOJ_MORJE_HR":   "Gojeno v morju, Hrvaška",
+    "GOJ_MORJE_GR":   "Gojeno v morju, Grčija",
+    "GOJ_MORJE_TR":   "Gojeno v morju, Turčija",
+    "GOJ_MORJE_NO":   "Gojeno v morju, Norveška",
+    "GOJ_MORJE_IT":   "Gojeno v morju, Italija",
+    "GOJ_MORJE_ES":   "Gojeno v morju, Španija",
+    "GOJ_MORJE_PT":   "Gojeno v morju, Portugalska",
+    "GOJ_MORJE_FR":   "Gojeno v morju, Francija",
+    # Divje ulovljeno — Sredozemlje
+    "37":      "37 – Sredozemsko morje",
+    "37.1":    "37/1 – Sredozemsko morje – Zahodni del",
+    "37.1.1":  "37/1.1 – Sredozemsko morje – Balearsko morje",
+    "37.1.3":  "37/1.3 – Sredozemsko morje – Sardinija",
+    "37.2.1":  "37/2.1 – Sredozemsko morje – Jadransko morje",
+    "37.2.2":  "37/2.2 – Sredozemsko morje – Jonsko morje",
+    "37.3.1":  "37/3.1 – Sredozemsko morje – Egejsko morje",
+    # Divje — Atlantik
+    "27":      "27 – Severovzhodni Atlantik",
+    "27.IV":   "27/IV – SV Atlantik – Severno morje",
+    "27.VI":   "27/VI – SV Atlantik – Keltsko morje sever",
+    "27.VII":  "27/VII – SV Atlantik – Keltsko morje jug",
+    "27.VIIa": "27/VIIa – SV Atlantik – Irsko morje",
+    "27.VIIf": "27/VIIf – SV Atlantik – Bristolski kanal",
+    "27.VIII": "27/VIII – SV Atlantik – Baskijski zaliv",
     "27.VIIIa":"27/VIIIa – SV Atlantik – Baskijski zaliv sever",
-    "27.VIIIb":"27/VIIIb – SV Atlantik – Baskijski zaliv jug",
-    "27.IX":"27/IX – SV Atlantik – Portugalske vode",
-    "27.X":"27/X – SV Atlantik – Azori",
-    "27.XIVb":"27/XIVb – SV Atlantik – Grenlandija",
-    "34":"34 – Centralnovzhodni Atlantik",
-    "34.1.1":"34/1.1 – CZ Atlantik – Maroko",
-    "37":"37 – Sredozemsko morje",
-    "37.1":"37/1 – Sredozemsko morje – Zahodni del",
-    "37.1.1":"37/1.1 – Sredozemsko morje – Balearsko morje",
-    "37.1.3":"37/1.3 – Sredozemsko morje – Sardinija",
-    "37.2.1":"37/2.1 – Sredozemsko morje – Jadransko morje",
-    "37.2.2":"37/2.2 – Sredozemsko morje – Jonsko morje",
-    "37.3.1":"37/3.1 – Sredozemsko morje – Egejsko morje",
-    "41":"41 – Jugozahodni Atlantik",
-    "47":"47 – Jugovzhodni Atlantik",
-    "48":"48 – Atlantik – Antarktika",
-    "51":"51 – Zahodni Indijski ocean",
-    "57":"57 – Vzhodni Indijski ocean",
-    "61":"61 – Severozahodni Tihi ocean",
-    "67":"67 – Severovzhodni Tihi ocean",
-    "71":"71 – Centralnovzhodni Tihi ocean",
-    "77":"77 – Centralozahodni Tihi ocean",
-    "87":"87 – Jugovzhodni Tihi ocean",
-    "AKVA":"Akvakultura",
-    "RIBO":"Ribogojnica",
+    "27.IX":   "27/IX – SV Atlantik – Portugalske vode",
+    "27.X":    "27/X – SV Atlantik – Azori",
+    "21":      "21 – Severozahodni Atlantik",
+    "34":      "34 – Centralnovzhodni Atlantik",
+    "41":      "41 – Jugozahodni Atlantik",
+    "47":      "47 – Jugovzhodni Atlantik",
+    # Divje — Indijski ocean
+    "51":      "51 – Zahodni Indijski ocean",
+    "57":      "57 – Vzhodni Indijski ocean",
+    # Divje — Tihi ocean
+    "61":      "61 – Severozahodni Tihi ocean",
+    "67":      "67 – Severovzhodni Tihi ocean",
+    "71":      "71 – Centralnovzhodni Tihi ocean",
+    "77":      "77 – Centralozahodni Tihi ocean",
+    "87":      "87 – Jugovzhodni Tihi ocean",
+    # Sladkovoda
+    "05":      "05 – Sladkovodna tla Evrope",
 }
 
 def _fao_naziv(code: str) -> str:
@@ -329,33 +329,39 @@ def _get_client() -> MinimaxClient:
 # ─── Claude Vision ────────────────────────────────────────────────────────────
 
 _PARSE_PROMPT = """Analiziraj to dobavnico / račun dobavitelja za ribe in morske sadeže.
+Dokument je lahko v slovenščini, italijanščini ali hrvaščini. Prevedite kjer je potrebno.
 Vrni SAMO čist JSON brez markdown backticks, brez komentarjev.
 
 {
   "supplier_name": "ime dobavitelja",
   "invoice_number": "številka računa ali dobavnice",
   "invoice_date": "YYYY-MM-DD",
-  "lot_dobavitelja": "LOT številka dobavitelja če je navedena",
   "datum_izlova": "YYYY-MM-DD datum izlova/pridelave če je naveden",
-  "kraj_proizvoda": "kraj pridelave/izlova če je naveden",
   "items": [
     {
       "name": "naziv artikla kot piše na dobavnici",
-      "latin_name": "latinsko ime vrste če je navedeno",
+      "latin_name": "latinsko ime vrste (npr. Oncorhynchus mykiss) — poišči na dokumentu ali prepoznaj po vrsti ribe",
       "quantity": 0.000,
       "unit": "kg",
       "price": 0.00,
       "country_of_origin": "2-črkovna ISO koda (HR, IT, NO, SI...)",
       "tariff": "carinska tarifa samo cifre brez presledkov",
-      "fao_zone": "FAO cona če je navedena",
+      "fao_zone": "FAO cona če je navedena (npr. 37.2.1, 27.VIII)",
+      "nacin_ulova": "način ulova preveden v slovenščino (Vlečne mreže, Parangal, Ribogojnica, Potegalke...)",
       "kategorija": "sveže ali zamrznjeno ali odtaljeno",
-      "lot_dobavitelja": "LOT za ta artikel če je ločen od splošnega",
-      "datum_izlova": "YYYY-MM-DD datum izlova za ta artikel če je ločen"
+      "rok_trajanja": "datum roka trajanja/porabiti do v formatu DD.MM.YYYY če je naveden",
+      "lot_dobavitelja": "LOT za ta artikel če je naveden"
     }
   ]
 }
 
-Pravila: invoice_date/datum_izlova=YYYY-MM-DD, country_of_origin=2 črki, tariff=samo cifre."""
+Pravila:
+- invoice_date/datum_izlova = YYYY-MM-DD
+- rok_trajanja = DD.MM.YYYY (kot bo na etiketi)
+- country_of_origin = 2 črki ISO
+- tariff = samo cifre brez presledkov
+- latin_name: obvezno poišči — za postrv=Oncorhynchus mykiss, za brancina=Dicentrarchus labrax, orado=Sparus aurata, tune=Thunnus thynnus, hobotnico=Octopus vulgaris, losos=Salmo salar, sardele=Sardina pilchardus, skuša=Scomber scombrus
+- nacin_ulova: prevedi iz IT/HR v SL (reti da traino→Vlečne mreže, palangari→Parangal, sciabiche→Potegalke, rete→Mreže, allevamento/ribogojnica→Ribogojnica)"""
 
 def _parse_claude(image_bytes: bytes, media_type: str = "image/jpeg"):
     try:
@@ -419,34 +425,28 @@ def _generate_zpl(decl: dict) -> str:
     naziv  = esc(decl.get("naziv_artikla",""))
     lat    = esc(decl.get("latinski_naziv",""))
     lot    = esc(decl.get("lot_ours",""))
-    lot_d  = esc(decl.get("lot_supplier",""))
     fao    = esc(decl.get("fao_naziv",""))
     nacin  = esc(decl.get("nacin_ulova",""))
     rok    = esc(decl.get("rok_trajanja",""))
     temp   = esc(decl.get("temperatura","do +3\xb0C"))
+
+    nacin_line = f"^FO8,120^A0N,18,18^FDNacin ulova: {nacin}^FS\n" if nacin else ""
 
     return (
         "^XA\n"
         "^PW639\n"
         "^LL406\n"
         "^CI28\n"
-        # Prodaja header
         f"^FO8,5^A0N,15,15^FDProdaja: OltreCon d.o.o., Orehovlje 2F, 5291 Miren^FS\n"
         "^FO8,22^GB623,1,1^FS\n"
-        # Artikel
         f"^FO8,26^A0N,22,22^FD{naziv}^FS\n"
         f"^FO8,52^A0N,16,16^FD{lat}^FS\n"
         "^FO8,72^GB623,1,1^FS\n"
-        # LOT
         f"^FO8,76^A0N,18,18^FDLOT: {lot}^FS\n"
-        f"^FO320,76^A0N,18,18^FDLOT dob.: {lot_d}^FS\n"
-        # FAO + način
         f"^FO8,98^A0N,18,18^FDFAO: {fao}^FS\n"
-        f"^FO8,120^A0N,18,18^FDNacin ulova: {nacin}^FS\n"
-        # Rok + temp
+        + nacin_line +
         f"^FO8,142^A0N,18,18^FDRok trajanja: {rok}^FS\n"
         f"^FO8,164^A0N,18,18^FDHraniti pri temperaturi: {temp}^FS\n"
-        # Ovalni žig SI-849 ES — spodaj desno
         "^FO391,232^GE240,162,3,B^FS\n"
         "^FO415,276^A0N,22,22^FDSI-849^FS\n"
         "^FO432,302^A0N,22,22^FDES^FS\n"
@@ -949,7 +949,7 @@ def render():
                                 "inv_name":          item.get("name",""),
                                 "item_code":         "",
                                 "item_name":         "",
-                                "latin_name":        item.get("latin_name",""),
+                                "latinski_naziv":    item.get("latin_name",""),
                                 "quantity":          float(item.get("quantity") or 0),
                                 "unit":              item.get("unit","kg"),
                                 "price":             float(item.get("price") or 0),
@@ -958,10 +958,10 @@ def render():
                                 "country_of_origin": item.get("country_of_origin",""),
                                 "tariff":            item.get("tariff",""),
                                 "fao_zone":          item.get("fao_zone",""),
+                                "nacin_ulova":       item.get("nacin_ulova",""),
+                                "rok_trajanja":      item.get("rok_trajanja",""),
                                 "kategorija":        item.get("kategorija","sveže"),
-                                "lot_dobavitelja":   item.get("lot_dobavitelja", parsed.get("lot_dobavitelja","")),
                                 "datum_izlova":      item.get("datum_izlova", parsed.get("datum_izlova","")),
-                                "kraj_proizvoda":    parsed.get("kraj_proizvoda",""),
                             })
                         header = {
                             "supplier_name":   parsed.get("supplier_name",""),
@@ -1301,23 +1301,29 @@ def render():
                                 with st.expander(decl_label, expanded=False):
                                     dc1, dc2 = st.columns(2)
                                     with dc1:
-                                        decl["naziv_artikla"]  = st.text_input("Naziv artikla",     value=decl.get("naziv_artikla",""),  key=f"dna_{draft_id}_{di}")
-                                        decl["latinski_naziv"] = st.text_input("Latinski naziv",    value=decl.get("latinski_naziv",""), key=f"dln_{draft_id}_{di}")
-                                        decl["lot_ours"]       = st.text_input("LOT (naš)",         value=decl.get("lot_ours",""),       key=f"dlo_{draft_id}_{di}")
-                                        decl["lot_supplier"]   = st.text_input("LOT dobavitelja",   value=decl.get("lot_supplier",""),   key=f"dls_{draft_id}_{di}")
+                                        decl["naziv_artikla"]  = st.text_input("Naziv artikla",    value=decl.get("naziv_artikla",""),  key=f"dna_{draft_id}_{di}")
+                                        decl["latinski_naziv"] = st.text_input("Latinski naziv",   value=decl.get("latinski_naziv",""), key=f"dln_{draft_id}_{di}")
+                                        decl["lot_ours"]       = st.text_input("LOT (naš)",        value=decl.get("lot_ours",""),       key=f"dlo_{draft_id}_{di}")
+                                        decl["rok_trajanja"]   = st.text_input("Rok trajanja",     value=decl.get("rok_trajanja",""),   key=f"drt_{draft_id}_{di}")
+                                        decl["temperatura"]    = st.text_input("Hraniti pri temp.",value=decl.get("temperatura", _temperatura(decl.get("naziv_artikla",""))), key=f"dtp_{draft_id}_{di}")
                                     with dc2:
-                                        fao_codes = list(FAO_AREAS.keys())
-                                        fao_labels = [f"{k} — {v[:35]}" for k,v in FAO_AREAS.items()]
+                                        fao_codes  = list(FAO_AREAS.keys())
                                         cur_code   = decl.get("fao_code","")
                                         fao_idx    = fao_codes.index(cur_code) if cur_code in fao_codes else 0
-                                        sel_fao    = st.selectbox("FAO območje", options=fao_codes,
+                                        sel_fao    = st.selectbox("FAO / Izvor", options=fao_codes,
                                                         format_func=lambda k: FAO_AREAS.get(k,k),
                                                         index=fao_idx, key=f"dfao_{draft_id}_{di}")
-                                        decl["fao_code"]     = sel_fao
-                                        decl["fao_naziv"]    = _fao_naziv(sel_fao)
-                                        decl["nacin_ulova"]  = st.text_input("Način ulova",         value=decl.get("nacin_ulova",""),    key=f"dnu_{draft_id}_{di}")
-                                        decl["rok_trajanja"] = st.text_input("Rok trajanja",         value=decl.get("rok_trajanja",""),   key=f"drt_{draft_id}_{di}")
-                                        decl["temperatura"]  = st.text_input("Hraniti pri temp.",   value=decl.get("temperatura", _temperatura(decl.get("naziv_artikla",""))), key=f"dtp_{draft_id}_{di}")
+                                        decl["fao_code"]    = sel_fao
+                                        decl["fao_naziv"]   = FAO_AREAS.get(sel_fao, sel_fao)
+                                        # Način ulova — prazno pri gojenih
+                                        je_gojen = sel_fao.startswith("GOJ_")
+                                        decl["nacin_ulova"] = st.text_input(
+                                            "Način ulova",
+                                            value="" if je_gojen else decl.get("nacin_ulova",""),
+                                            disabled=je_gojen,
+                                            help="Pri gojenih ribah prazno" if je_gojen else "",
+                                            key=f"dnu_{draft_id}_{di}"
+                                        )
                                     st.caption(f"Vet. oznaka: {VET_OZNAKA}")
                             with d_col3:
                                 ind_copies = st.number_input(
