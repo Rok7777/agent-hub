@@ -95,6 +95,66 @@ def _temperatura(item_name: str) -> str:
         return "–18°C ali hladneje"
     return "do +3°C"
 
+def _import_mappings_csv(csv_text: str) -> tuple:
+    """Uvozi mappinge iz CSV teksta. Vrne (dodani, napake)."""
+    import csv, io
+    dodani, napake = [], []
+    reader = csv.DictReader(io.StringIO(csv_text))
+    for row in reader:
+        try:
+            sup   = (row.get("supplier_name") or row.get("dobavitelj","")).strip().upper()
+            kw    = (row.get("inv_name") or row.get("naziv_dob","")).strip().upper()
+            code  = (row.get("item_code") or row.get("mm_sifra","")).strip()
+            name  = (row.get("item_name") or row.get("mm_naziv","")).strip()
+            nc    = float((row.get("nc") or row.get("NC") or "0").replace(",",".").replace("€","").strip() or 0)
+            pc    = float((row.get("pc") or row.get("PC") or "0").replace(",",".").replace("€","").strip() or 0)
+            tariff   = (row.get("tariff") or row.get("tarifa","")).strip().replace(" ","")
+            country  = (row.get("country_of_origin") or row.get("dz_porekla","")).strip().upper()
+            latin    = (row.get("latin_name") or row.get("latinski_naziv","")).strip()
+            fao      = (row.get("fao") or row.get("fao_izvor","")).strip()
+            nacin    = (row.get("nacin_ulova","")).strip()
+            dispatch = (row.get("country_dispatch") or row.get("dz_odposlj","")).strip().upper()
+            delivery = (row.get("delivery_terms") or row.get("pogoji_dobave","")).strip().upper()
+
+            if not sup or not kw or not code:
+                napake.append(f"Manjka sup/kw/code: {row}")
+                continue
+
+            # SUPPLIER_ITEM_MAPPINGS
+            if sup not in SUPPLIER_ITEM_MAPPINGS:
+                SUPPLIER_ITEM_MAPPINGS[sup] = {}
+            SUPPLIER_ITEM_MAPPINGS[sup][kw] = {
+                "item_code": code, "item_name": name,
+                "latinski_naziv": latin, "fao_code": fao,
+                "nacin_ulova": nacin, "tariff": tariff,
+                "country_of_origin": country,
+            }
+
+            # _DEFAULT_PRICES
+            if code and nc > 0:
+                if code not in _DEFAULT_PRICES:
+                    _DEFAULT_PRICES[code] = {}
+                sup_key = sup.title()
+                _DEFAULT_PRICES[code][sup_key] = {
+                    "price": nc, "discount_pct": 0, "selling_price": pc,
+                    "updated": str(__import__("datetime").date.today())
+                }
+
+            # SUPPLIER_INTRASTAT
+            if dispatch and sup not in SUPPLIER_INTRASTAT:
+                SUPPLIER_INTRASTAT[sup.title()] = {
+                    "country_dispatch": dispatch,
+                    "transaction": "11",
+                    "delivery": delivery or "CPT",
+                    "location": "1",
+                    "transport": "3",
+                }
+
+            dodani.append(f"{sup} / {kw} → {code}")
+        except Exception as e:
+            napake.append(f"Napaka v vrstici: {e} — {row}")
+    return dodani, napake
+
 def _get_intrastat(supplier_name: str) -> dict:
     sup_up = supplier_name.upper()
     for key, val in SUPPLIER_INTRASTAT.items():
@@ -871,6 +931,22 @@ def render():
                     st.rerun()
                 except Exception as e:
                     st.sidebar.error(f"Napaka: {e}")
+
+        st.divider()
+        with st.expander("📥 Uvozi mappinge (CSV)", expanded=False):
+            st.caption("CSV iz Connections chata — stolpci: supplier_name, inv_name, item_code, item_name, nc, pc, tariff, country_of_origin, latin_name, fao, nacin_ulova, country_dispatch, delivery_terms")
+            csv_file = st.file_uploader("CSV datoteka", type=["csv"], key="csv_mappings")
+            if csv_file:
+                try:
+                    csv_text = csv_file.read().decode("utf-8-sig")
+                    dodani, napake = _import_mappings_csv(csv_text)
+                    if dodani:
+                        st.success(f"✅ Uvoženo {len(dodani)} artiklov")
+                        for d in dodani: st.write(f"  {d}")
+                    if napake:
+                        for n in napake: st.error(n)
+                except Exception as e:
+                    st.error(f"Napaka: {e}")
 
         st.divider()
         if st.button("📋 Znani artikli za Connections chat", use_container_width=True, key="btn_known_arts"):
