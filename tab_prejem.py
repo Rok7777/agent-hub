@@ -221,18 +221,20 @@ def _save_prices(prices: dict):
 
 # Začetne znane cene — se dopolnjuje sproti
 _DEFAULT_PRICES = {
-    "POSSS0301": {
-        "RIBOGOJNICA LIBO D.O.O.": {"price": 6.50, "discount_pct": 0, "selling_price": 8.50, "updated": "2026-03-26"}
-    },
-    "POSSS0202": {
-        "RIBOGOJNICA LIBO D.O.O.": {"price": 11.00, "discount_pct": 0, "selling_price": 15.66, "updated": "2026-03-26"}
-    },
-    "LPOSS0202": {
-        "RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}
-    },
-    "LPOSS0102": {
-        "RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}
-    },
+    # Libo
+    "POSSS0301": {"RIBOGOJNICA LIBO D.O.O.": {"price": 6.50,  "discount_pct": 0, "selling_price": 8.50,  "updated": "2026-03-26"}},
+    "POSSS0202": {"RIBOGOJNICA LIBO D.O.O.": {"price": 11.00, "discount_pct": 0, "selling_price": 15.66, "updated": "2026-03-26"}},
+    "LPOSS0202": {"RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}},
+    "LPOSS0102": {"RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}},
+    # Alemar
+    "ZOBSM1000": {"ALEMAR S.R.L.": {"price": 18.33, "discount_pct": 0, "selling_price": 29.92, "updated": "2026-05-21"}},
+    "BRASH0400": {"ALEMAR S.R.L.": {"price": 9.41,  "discount_pct": 0, "selling_price": 12.88, "updated": "2026-05-21"}},
+    "PEDSI0000": {"ALEMAR S.R.L.": {"price": 2.33,  "discount_pct": 0, "selling_price": 6.47,  "updated": "2026-05-21"}},
+    "PEDSB0000": {"ALEMAR S.R.L.": {"price": 5.14,  "discount_pct": 0, "selling_price": 5.69,  "updated": "2026-05-21"}},
+    "FAZSX0000": {"ALEMAR S.R.L.": {"price": 14.55, "discount_pct": 0, "selling_price": 19.71, "updated": "2026-05-21"}},
+    "SARSH0003": {"ALEMAR S.R.L.": {"price": 5.34,  "discount_pct": 0, "selling_price": 6.02,  "updated": "2026-05-21"}},
+    "TUNSO0100": {"ALEMAR S.R.L.": {"price": 18.82, "discount_pct": 0, "selling_price": 25.36, "updated": "2026-05-21"}},
+    "VONSI0000": {"ALEMAR S.R.L.": {"price": 16.98, "discount_pct": 0, "selling_price": 24.97, "updated": "2026-05-21"}},
 }
 
 def _load_prices() -> dict:
@@ -817,6 +819,21 @@ def render():
                     st.rerun()
                 except Exception as e:
                     st.sidebar.error(f"Napaka: {e}")
+
+        st.divider()
+        if st.button("📋 Znani artikli za Connections chat", use_container_width=True, key="btn_known_arts"):
+            lines = ["Ze znani artikli - ne porocaj znova:"]
+            for supplier, items in SUPPLIER_ITEM_MAPPINGS.items():
+                lines.append(f"{supplier}:")
+                for kw, data in items.items():
+                    if data.get("needs_split"):
+                        opts = " / ".join(o["item_code"] for o in data.get("split_options",[]))
+                        lines.append(f"  {kw} → {opts} (ročna delitev)")
+                    else:
+                        lines.append(f"  {kw} → {data.get('item_code','?')}")
+                lines.append("")
+            lines.append("Poroci SAMO artikle ki niso na tem seznamu.")
+            st.sidebar.code("\n".join(lines), language=None)
 
         with st.expander("Minimax dostop", expanded=False):
             st.session_state["client_id"]     = st.text_input("Client ID",        value=_secret("MINIMAX_CLIENT_ID",""))
