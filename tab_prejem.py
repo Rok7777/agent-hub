@@ -35,6 +35,66 @@ SUPPLIER_INTRASTAT = {
     "FRULPESCA":       {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
 }
 
+# ─── FAO območja (celoten naziv v slovenščini) ───────────────────────────────
+FAO_AREAS = {
+    "05":"05 – Sladkovodna tla Evrope",
+    "18":"18 – Arktik",
+    "21":"21 – Severozahodni Atlantik",
+    "27":"27 – Severovzhodni Atlantik",
+    "27.I":"27/I – SV Atlantik – Barentsovo morje",
+    "27.II":"27/II – SV Atlantik – Norveško morje",
+    "27.IIIa":"27/IIIa – SV Atlantik – Skagerrak",
+    "27.IIId":"27/IIId – SV Atlantik – Baltsko morje",
+    "27.IV":"27/IV – SV Atlantik – Severno morje",
+    "27.V":"27/V – SV Atlantik – Islandija",
+    "27.Va":"27/Va – SV Atlantik – Islandija",
+    "27.Vb":"27/Vb – SV Atlantik – Ferski otoki",
+    "27.VI":"27/VI – SV Atlantik – Keltsko morje sever",
+    "27.VIa":"27/VIa – SV Atlantik – Keltsko morje sever",
+    "27.VIb":"27/VIb – SV Atlantik – Rockall",
+    "27.VII":"27/VII – SV Atlantik – Keltsko morje jug",
+    "27.VIIa":"27/VIIa – SV Atlantik – Irsko morje",
+    "27.VIIf":"27/VIIf – SV Atlantik – Bristolski kanal",
+    "27.VIIg":"27/VIIg – SV Atlantik – Irska morska ravnica",
+    "27.VIII":"27/VIII – SV Atlantik – Baskijski zaliv",
+    "27.VIIIa":"27/VIIIa – SV Atlantik – Baskijski zaliv sever",
+    "27.VIIIb":"27/VIIIb – SV Atlantik – Baskijski zaliv jug",
+    "27.IX":"27/IX – SV Atlantik – Portugalske vode",
+    "27.X":"27/X – SV Atlantik – Azori",
+    "27.XIVb":"27/XIVb – SV Atlantik – Grenlandija",
+    "34":"34 – Centralnovzhodni Atlantik",
+    "34.1.1":"34/1.1 – CZ Atlantik – Maroko",
+    "37":"37 – Sredozemsko morje",
+    "37.1":"37/1 – Sredozemsko morje – Zahodni del",
+    "37.1.1":"37/1.1 – Sredozemsko morje – Balearsko morje",
+    "37.1.3":"37/1.3 – Sredozemsko morje – Sardinija",
+    "37.2.1":"37/2.1 – Sredozemsko morje – Jadransko morje",
+    "37.2.2":"37/2.2 – Sredozemsko morje – Jonsko morje",
+    "37.3.1":"37/3.1 – Sredozemsko morje – Egejsko morje",
+    "41":"41 – Jugozahodni Atlantik",
+    "47":"47 – Jugovzhodni Atlantik",
+    "48":"48 – Atlantik – Antarktika",
+    "51":"51 – Zahodni Indijski ocean",
+    "57":"57 – Vzhodni Indijski ocean",
+    "61":"61 – Severozahodni Tihi ocean",
+    "67":"67 – Severovzhodni Tihi ocean",
+    "71":"71 – Centralnovzhodni Tihi ocean",
+    "77":"77 – Centralozahodni Tihi ocean",
+    "87":"87 – Jugovzhodni Tihi ocean",
+    "AKVA":"Akvakultura",
+    "RIBO":"Ribogojnica",
+}
+
+def _fao_naziv(code: str) -> str:
+    code = (code or "").strip()
+    return FAO_AREAS.get(code, code)
+
+def _temperatura(item_name: str) -> str:
+    n = (item_name or "").lower()
+    if any(w in n for w in ["zamrzn"]):
+        return "–18°C ali hladneje"
+    return "do +3°C"
+
 def _get_intrastat(supplier_name: str) -> dict:
     sup_up = supplier_name.upper()
     for key, val in SUPPLIER_INTRASTAT.items():
@@ -327,58 +387,75 @@ def _kategorija_temperatura(kategorija: str) -> str:
     return "DO +4°C"
 
 def _build_declarations(header: dict, rows: list) -> list:
-    """Kreira deklaracije — ena na unikaten artikel."""
-    seen, decls = {}, []
-    lot_nas    = header.get("lot_number", "")
-    lot_dob    = header.get("lot_dobavitelja", "")
-    datum_izl  = header.get("datum_izlova", "")
-    kraj_prod  = header.get("kraj_proizvoda", "")
-
-    for row in rows:
-        key = row.get("item_code", "") or row.get("inv_name", "")
-        if key in seen: continue
-        seen[key] = True
-        kategorija = row.get("kategorija", "sveže")
+    """Kreira deklaracije — ena na unikaten artikel+lot."""
+    lot      = header.get("lot_number","")
+    seen     = set()
+    decls    = []
+    for r in rows:
+        code = r.get("item_code","")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        item_name = r.get("item_name","") or code
         decls.append({
-            "naziv_blaga":         f"{row.get('item_name') or row.get('inv_name','')} ({row.get('latin_name','')})",
-            "izdelek":             "",   # TODO: po vzorcu OltreCon
-            "drzava_porekla":      row.get("country_of_origin", ""),
-            "kraj_proizvoda":      kraj_prod or row.get("kraj_proizvoda", ""),
-            "dobavitelj":          OLTREON_INFO,
-            "lot":                 lot_nas,
-            "lot_dobavitelja":     lot_dob or row.get("lot_dobavitelja", ""),
-            "kategorija_svezosti": kategorija,
-            "porabiti_do":         "",   # TODO: izračun po vzorcu
-            "datum_izlova":        datum_izl or row.get("datum_izlova", ""),
-            "hraniti_temperatura": _kategorija_temperatura(kategorija),
-            "veterinarska_oznaka": VET_OZNAKA,
-            "item_code":           row.get("item_code", ""),
-            "item_name":           row.get("item_name") or row.get("inv_name", ""),
+            "item_code":       code,
+            "naziv_artikla":   item_name,
+            "latinski_naziv":  r.get("latinski_naziv",""),
+            "lot_ours":        r.get("batch_number","") or lot,
+            "lot_supplier":    r.get("lot_dobavitelja",""),
+            "fao_code":        r.get("fao_code",""),
+            "fao_naziv":       _fao_naziv(r.get("fao_code","")),
+            "nacin_ulova":     r.get("nacin_ulova",""),
+            "rok_trajanja":    r.get("rok_trajanja",""),
+            "temperatura":     _temperatura(item_name),
         })
     return decls
 
-def _generate_zpl(decl: dict) -> str:
-    """ZPL za Zebra GK420t — 8x5 cm. TODO: ovalni žig, IZDELEK, PORABITI DO."""
-    def _esc(s): return (s or "")[:60]
-    return f"""^XA
-^PW609
-^LL406
-^CI28
-^FO15,15^A0N,20,20^FDNAZIV BLAGA: {_esc(decl.get('naziv_blaga'))}^FS
-^FO15,40^A0N,18,18^FDIZDLEK: {_esc(decl.get('izdelek'))}^FS
-^FO15,65^A0N,18,18^FDDRZAVA POREKLA: {_esc(decl.get('drzava_porekla'))}^FS
-^FO15,88^A0N,18,18^FDKRAJ PROIZVODA: {_esc(decl.get('kraj_proizvoda'))}^FS
-^FO15,111^A0N,18,18^FDDOBAVITELJ: {_esc(decl.get('dobavitelj'))}^FS
-^FO15,134^A0N,18,18^FDLOT: {_esc(decl.get('lot'))}^FS
-^FO15,157^A0N,18,18^FDLOT DOBAVITELJA: {_esc(decl.get('lot_dobavitelja'))}^FS
-^FO15,180^A0N,18,18^FDKATEGORIJA SVEZOSTI: {_esc(decl.get('kategorija_svezosti'))}^FS
-^FO15,203^A0N,18,18^FDPORABITI DO: {_esc(decl.get('porabiti_do'))}^FS
-^FO15,226^A0N,18,18^FDDATUM IZLOVA: {_esc(decl.get('datum_izlova'))}^FS
-^FO15,249^A0N,18,18^FDHRANITI PRI TEMPERATURI: {_esc(decl.get('hraniti_temperatura'))}^FS
-^FO480,300^A0N,18,18^FD{_esc(decl.get('veterinarska_oznaka'))}^FS
-^XZ"""
 
-# ─── Validacija ───────────────────────────────────────────────────────────────
+def _generate_zpl(decl: dict) -> str:
+    """ZPL II za Zebra GK420t — 8cm × 5cm @ 203dpi (639×406 pik)."""
+    def esc(s): return (s or "").replace("^","").replace("~","")[:55]
+
+    naziv  = esc(decl.get("naziv_artikla",""))
+    lat    = esc(decl.get("latinski_naziv",""))
+    lot    = esc(decl.get("lot_ours",""))
+    lot_d  = esc(decl.get("lot_supplier",""))
+    fao    = esc(decl.get("fao_naziv",""))
+    nacin  = esc(decl.get("nacin_ulova",""))
+    rok    = esc(decl.get("rok_trajanja",""))
+    temp   = esc(decl.get("temperatura","do +3\xb0C"))
+
+    return (
+        "^XA\n"
+        "^PW639\n"
+        "^LL406\n"
+        "^CI28\n"
+        # Prodaja header
+        f"^FO8,5^A0N,15,15^FDProdaja: OltreCon d.o.o., Orehovlje 2F, 5291 Miren^FS\n"
+        "^FO8,22^GB623,1,1^FS\n"
+        # Artikel
+        f"^FO8,26^A0N,22,22^FD{naziv}^FS\n"
+        f"^FO8,52^A0N,16,16^FD{lat}^FS\n"
+        "^FO8,72^GB623,1,1^FS\n"
+        # LOT
+        f"^FO8,76^A0N,18,18^FDLOT: {lot}^FS\n"
+        f"^FO320,76^A0N,18,18^FDLOT dob.: {lot_d}^FS\n"
+        # FAO + način
+        f"^FO8,98^A0N,18,18^FDFAO: {fao}^FS\n"
+        f"^FO8,120^A0N,18,18^FDNacin ulova: {nacin}^FS\n"
+        # Rok + temp
+        f"^FO8,142^A0N,18,18^FDRok trajanja: {rok}^FS\n"
+        f"^FO8,164^A0N,18,18^FDHraniti pri temperaturi: {temp}^FS\n"
+        # Ovalni žig SI-849 ES — spodaj desno
+        "^FO391,232^GE240,162,3,B^FS\n"
+        "^FO415,276^A0N,22,22^FDSI-849^FS\n"
+        "^FO432,302^A0N,22,22^FDES^FS\n"
+        "^XZ"
+    )
+
+
+
+
 
 def _validate(header: dict, rows: list) -> list:
     errors = []
@@ -1218,24 +1295,29 @@ def render():
                                 d_sel = st.checkbox("", key=f"ds_{draft_id}_{di}")
                             with d_col2:
                                 # Naslov deklaracije: naziv artikla + Minimax šifra če je znana
-                                decl_title = decl.get('item_name') or decl.get('naziv_blaga','')
+                                decl_title = decl.get('naziv_artikla') or decl.get('item_code','')
                                 decl_code  = decl.get('item_code','')
                                 decl_label = f"🏷️ {decl_title}" + (f"  `{decl_code}`" if decl_code else "")
                                 with st.expander(decl_label, expanded=False):
                                     dc1, dc2 = st.columns(2)
                                     with dc1:
-                                        decl["naziv_blaga"]       = st.text_input("Naziv blaga",       value=decl.get("naziv_blaga",""),          key=f"dn_{draft_id}_{di}")
-                                        decl["izdelek"]           = st.text_input("Izdelek ⏳",        value=decl.get("izdelek",""),              key=f"di_{draft_id}_{di}")
-                                        decl["drzava_porekla"]    = st.text_input("Država porekla",    value=decl.get("drzava_porekla",""),       key=f"dd_{draft_id}_{di}")
-                                        decl["kraj_proizvoda"]    = st.text_input("Kraj proizvoda",    value=decl.get("kraj_proizvoda",""),       key=f"dk_{draft_id}_{di}")
-                                        decl["dobavitelj"]        = st.text_input("Dobavitelj",        value=decl.get("dobavitelj",OLTREON_INFO), key=f"ddo_{draft_id}_{di}")
+                                        decl["naziv_artikla"]  = st.text_input("Naziv artikla",     value=decl.get("naziv_artikla",""),  key=f"dna_{draft_id}_{di}")
+                                        decl["latinski_naziv"] = st.text_input("Latinski naziv",    value=decl.get("latinski_naziv",""), key=f"dln_{draft_id}_{di}")
+                                        decl["lot_ours"]       = st.text_input("LOT (naš)",         value=decl.get("lot_ours",""),       key=f"dlo_{draft_id}_{di}")
+                                        decl["lot_supplier"]   = st.text_input("LOT dobavitelja",   value=decl.get("lot_supplier",""),   key=f"dls_{draft_id}_{di}")
                                     with dc2:
-                                        decl["lot"]               = st.text_input("LOT (naš)",         value=decl.get("lot",""),                  key=f"dl_{draft_id}_{di}")
-                                        decl["lot_dobavitelja"]   = st.text_input("LOT dobavitelja",   value=decl.get("lot_dobavitelja",""),      key=f"dld_{draft_id}_{di}")
-                                        decl["kategorija_svezosti"] = st.text_input("Kategorija",      value=decl.get("kategorija_svezosti",""), key=f"dks_{draft_id}_{di}")
-                                        decl["porabiti_do"]       = st.text_input("Porabiti do ⏳",    value=decl.get("porabiti_do",""),          key=f"dp_{draft_id}_{di}")
-                                        decl["datum_izlova"]      = st.text_input("Datum izlova",      value=decl.get("datum_izlova",""),         key=f"diz_{draft_id}_{di}")
-                                        decl["hraniti_temperatura"] = st.text_input("Hraniti pri T.",  value=decl.get("hraniti_temperatura",""), key=f"dht_{draft_id}_{di}")
+                                        fao_codes = list(FAO_AREAS.keys())
+                                        fao_labels = [f"{k} — {v[:35]}" for k,v in FAO_AREAS.items()]
+                                        cur_code   = decl.get("fao_code","")
+                                        fao_idx    = fao_codes.index(cur_code) if cur_code in fao_codes else 0
+                                        sel_fao    = st.selectbox("FAO območje", options=fao_codes,
+                                                        format_func=lambda k: FAO_AREAS.get(k,k),
+                                                        index=fao_idx, key=f"dfao_{draft_id}_{di}")
+                                        decl["fao_code"]     = sel_fao
+                                        decl["fao_naziv"]    = _fao_naziv(sel_fao)
+                                        decl["nacin_ulova"]  = st.text_input("Način ulova",         value=decl.get("nacin_ulova",""),    key=f"dnu_{draft_id}_{di}")
+                                        decl["rok_trajanja"] = st.text_input("Rok trajanja",         value=decl.get("rok_trajanja",""),   key=f"drt_{draft_id}_{di}")
+                                        decl["temperatura"]  = st.text_input("Hraniti pri temp.",   value=decl.get("temperatura", _temperatura(decl.get("naziv_artikla",""))), key=f"dtp_{draft_id}_{di}")
                                     st.caption(f"Vet. oznaka: {VET_OZNAKA}")
                             with d_col3:
                                 ind_copies = st.number_input(
