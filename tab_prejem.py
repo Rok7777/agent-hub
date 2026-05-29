@@ -558,7 +558,7 @@ def _send_draft(draft: dict) -> tuple:
             "StockEntrySubtype": "S",
             "Status":            "O",
             "Date":              h["invoice_date"] + "T00:00:00",
-            "Description":       f"{h.get('invoice_number','')} — {h.get('supplier_name','')}",
+            "Description":       h.get('invoice_number',''),
             "Customer":          {"ID": sup_id},
             "StockEntryRows":    stock_rows,
         }
@@ -570,6 +570,11 @@ def _send_draft(draft: dict) -> tuple:
             ensure_ascii=False
         )
         result = cli._post("/stockentry", body)
+        # Shrani celoten odgovor za debug
+        st.session_state["last_post_response"] = _json.dumps(
+            result if not isinstance(result, list) else result[:2],
+            ensure_ascii=False, default=str
+        )
         if isinstance(result, list):
             r0       = result[0] if result else {}
             entry_id = r0.get("StockEntryId") or r0.get("ID") or "?"
@@ -1295,10 +1300,13 @@ def render():
                 sup = drafts[_did]["header"].get("supplier_name","?")
                 st.error(f"❌ NAPAKA MINIMAX — {sup}: {_err}")
             st.warning("⚠️ Popravite napake in poskusite znova.")
-        # Debug POST body
+        # Debug POST body + response
         if "last_post_body" in st.session_state:
             with st.expander("🔍 Debug: POST vrstice (BatchNumber)"):
                 st.code(st.session_state["last_post_body"])
+        if "last_post_response" in st.session_state:
+            with st.expander("🔍 Debug: POST odgovor (Minimax)"):
+                st.code(st.session_state["last_post_response"])
         else:
             st.rerun()
 
