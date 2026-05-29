@@ -562,27 +562,46 @@ def _send_draft(draft: dict) -> tuple:
             "Customer":          {"ID": sup_id},
             "StockEntryRows":    stock_rows,
         }
-        # Debug — začasno za diagnozo lota
-        import json as _json
-        st.session_state["last_post_body"] = _json.dumps(
-            [{k:v for k,v in r.items() if k in ["Item","BatchNumber","Quantity","WarehouseTo"]}
-             for r in body.get("StockEntryRows",[])],
-            ensure_ascii=False
-        )
-        result = cli._post("/stockentry", body)
-        # Shrani celoten odgovor za debug
-        st.session_state["last_post_response"] = _json.dumps(
-            result if not isinstance(result, list) else result[:2],
-            ensure_ascii=False, default=str
-        )
-        if isinstance(result, list):
-            r0       = result[0] if result else {}
-            entry_id = r0.get("StockEntryId") or r0.get("ID") or "?"
-        elif isinstance(result, dict):
-            entry_id = result.get("StockEntryId") or result.get("ID") or "?"
-        else:
-            entry_id = str(result) if result else "?"
-        return entry_id, None
+        # Korak 1: Ustvari dokument brez BatchNumber
+        body_no_batch = dict(body)
+        rows_no_batch = []
+        for sr in body["StockEntryRows"]:
+            r_copy = dict(sr)
+            r_copy.pop("BatchNumber", None)
+            rows_no_batch.append(r_copy)
+        body_no_batch["StockEntryRows"] = rows_no_batch
+
+        result = cli._post("/stockentry", body_no_batch)
+
+        # Korak 2: Poišči novo ustvarjen dokument — zadnji PS osnutek
+        found_id = None
+        for status in ["O", "V", ""]:
+            params = {
+                "StockEntryType":    "P",
+                "StockEntrySubtype": "S",
+                "CurrentPage":       1,
+                "PageSize":          10,
+            }
+            if status:
+                params["Status"] = status
+            search   = cli._get("/stockentry", params=params)
+            doc_rows = search.get("Rows", [])
+            if doc_rows:
+                # Vzemi prvega (najnovejšega)
+                found_id = doc_rows[0].get("StockEntryId")
+                break
+
+        # Korak 3: Posodobi z BatchNumber via PUT
+        if found_id:
+            detail   = cli._get(f"/stockentry/{found_id}")
+            old_rows = detail.get("StockEntryRows", [])
+            for i, sr in enumerate(old_rows):
+                if i < len(body["StockEntryRows"]):
+                    sr["BatchNumber"] = body["StockEntryRows"][i].get("BatchNumber","")
+            detail["StockEntryRows"] = old_rows
+            cli._put(f"/stockentry/{found_id}", detail)
+            return found_id, None
+        return "?", None
     except Exception as e:
         return None, str(e)
 
