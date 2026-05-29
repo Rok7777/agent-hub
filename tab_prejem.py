@@ -135,21 +135,29 @@ SUPPLIER_ITEM_MAPPINGS = {
     },
     "ALEMAR": {
         "DENTICE GIBBOSO":  {"item_code":"ZOBSM1000","item_name":"(ZOBSM1000) ZOBATEC (debeloglavi), 1000-2000g, svež, FAO 34",
-                             "latinski_naziv":"Dentex gibbosus","fao_code":"34","nacin_ulova":"Parangal"},
+                             "latinski_naziv":"Dentex gibbosus","fao_code":"34","nacin_ulova":"Parangal",
+                             "tariff":"03028300","country_of_origin":"MA"},
         "BRANZINO CROAZIA": {"item_code":"BRASH0400","item_name":"(BRASH0400) BRANCIN, 400-600g, svež, Hrvaška",
-                             "latinski_naziv":"Dicentrarchus labrax","fao_code":"GOJ_MORJE_HR","nacin_ulova":""},
+                             "latinski_naziv":"Dicentrarchus labrax","fao_code":"GOJ_MORJE_HR","nacin_ulova":"",
+                             "tariff":"03028410","country_of_origin":"HR"},
         "COZZA DI BOUCHOT": {"item_code":"PEDSB0000","item_name":"(PEDSB0000) KLAPAVICE, sveže, Bouchot, Francija",
-                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_FR","nacin_ulova":""},
+                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_FR","nacin_ulova":"",
+                             "tariff":"03073110","country_of_origin":"FR"},
         "COZZA ITALIA":     {"item_code":"PEDSI0000","item_name":"(PEDSI0000) KLAPAVICE, sveže, Italija",
-                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_IT","nacin_ulova":""},
+                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_IT","nacin_ulova":"",
+                             "tariff":"03073110","country_of_origin":"IT"},
         "FASOLARO":         {"item_code":"FAZSX0000","item_name":"(FAZSX0000) LEPOTKE, sveže, FAO 37.2.1",
-                             "latinski_naziv":"Callista chione","fao_code":"37.2.1","nacin_ulova":"Vlečne mreže"},
+                             "latinski_naziv":"Callista chione","fao_code":"37.2.1","nacin_ulova":"Vlečne mreže",
+                             "tariff":"16055390","country_of_origin":"IT"},
         "SARDINA":          {"item_code":"SARSH0003","item_name":"(SARSH0003) SARDELE, sveže, FAO 37.1.3",
-                             "latinski_naziv":"Sardina pilchardus","fao_code":"37.1.3","nacin_ulova":"Potegalke"},
+                             "latinski_naziv":"Sardina pilchardus","fao_code":"37.1.3","nacin_ulova":"Potegalke",
+                             "tariff":"03024310","country_of_origin":"IT"},
         "FILONE TONNO":     {"item_code":"TUNSO0100","item_name":"(TUNSO0100) TUN (rumenoplavuti), filon, Premium, odtaljen, FAO 87",
-                             "latinski_naziv":"Thunnus albacares","fao_code":"87","nacin_ulova":"Vlečne mreže"},
+                             "latinski_naziv":"Thunnus albacares","fao_code":"87","nacin_ulova":"Vlečne mreže",
+                             "tariff":"03023290","country_of_origin":"ID"},
         "VONGOLE VERACI":   {"item_code":"VONSI0000","item_name":"(VONSI0000) KOČICE, sveže, Italija",
-                             "latinski_naziv":"Ruditapes decussatus","fao_code":"GOJ_MORJE_IT","nacin_ulova":""},
+                             "latinski_naziv":"Ruditapes decussatus","fao_code":"GOJ_MORJE_IT","nacin_ulova":"",
+                             "tariff":"16055390","country_of_origin":"IT"},
     },
 }
 
@@ -178,6 +186,10 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
                     row["fao_naziv"] = FAO_AREAS.get(data["fao_code"], data["fao_code"])
                 if "nacin_ulova" in data and not row.get("nacin_ulova"):
                     row["nacin_ulova"] = data["nacin_ulova"]
+                if data.get("tariff") and not row.get("tariff"):
+                    row["tariff"] = data["tariff"]
+                if data.get("country_of_origin") and not row.get("country_of_origin"):
+                    row["country_of_origin"] = data["country_of_origin"]
                 if data.get("needs_split"):
                     row["_needs_split_hint"] = True
                     row["_split_options"]    = data.get("split_options", [])
@@ -227,14 +239,14 @@ _DEFAULT_PRICES = {
     "LPOSS0202": {"RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}},
     "LPOSS0102": {"RIBOGOJNICA LIBO D.O.O.": {"price": 12.00, "discount_pct": 0, "selling_price": 15.60, "updated": "2026-03-26"}},
     # Alemar
-    "ZOBSM1000": {"ALEMAR S.R.L.": {"price": 18.33, "discount_pct": 0, "selling_price": 29.92, "updated": "2026-05-21"}},
-    "BRASH0400": {"ALEMAR S.R.L.": {"price": 9.41,  "discount_pct": 0, "selling_price": 12.88, "updated": "2026-05-21"}},
-    "PEDSI0000": {"ALEMAR S.R.L.": {"price": 2.33,  "discount_pct": 0, "selling_price": 6.47,  "updated": "2026-05-21"}},
-    "PEDSB0000": {"ALEMAR S.R.L.": {"price": 5.14,  "discount_pct": 0, "selling_price": 5.69,  "updated": "2026-05-21"}},
-    "FAZSX0000": {"ALEMAR S.R.L.": {"price": 14.55, "discount_pct": 0, "selling_price": 19.71, "updated": "2026-05-21"}},
-    "SARSH0003": {"ALEMAR S.R.L.": {"price": 5.34,  "discount_pct": 0, "selling_price": 6.02,  "updated": "2026-05-21"}},
-    "TUNSO0100": {"ALEMAR S.R.L.": {"price": 18.82, "discount_pct": 0, "selling_price": 25.36, "updated": "2026-05-21"}},
-    "VONSI0000": {"ALEMAR S.R.L.": {"price": 16.98, "discount_pct": 0, "selling_price": 24.97, "updated": "2026-05-21"}},
+    "ZOBSM1000": {"ALEMAR S.R.L.": {"price": 18.33, "discount_pct": 0, "selling_price": 27.32, "updated": "2026-05-21"}},
+    "BRASH0400": {"ALEMAR S.R.L.": {"price": 9.41,  "discount_pct": 0, "selling_price": 11.76, "updated": "2026-05-21"}},
+    "PEDSI0000": {"ALEMAR S.R.L.": {"price": 2.33,  "discount_pct": 0, "selling_price": 5.91,  "updated": "2026-05-21"}},
+    "PEDSB0000": {"ALEMAR S.R.L.": {"price": 5.14,  "discount_pct": 0, "selling_price": 5.20,  "updated": "2026-05-21"}},
+    "FAZSX0000": {"ALEMAR S.R.L.": {"price": 14.55, "discount_pct": 0, "selling_price": 18.00, "updated": "2026-05-21"}},
+    "SARSH0003": {"ALEMAR S.R.L.": {"price": 5.34,  "discount_pct": 0, "selling_price": 5.50,  "updated": "2026-05-21"}},
+    "TUNSO0100": {"ALEMAR S.R.L.": {"price": 18.82, "discount_pct": 0, "selling_price": 23.16, "updated": "2026-05-21"}},
+    "VONSI0000": {"ALEMAR S.R.L.": {"price": 16.98, "discount_pct": 0, "selling_price": 22.80, "updated": "2026-05-21"}},
 }
 
 def _load_prices() -> dict:
