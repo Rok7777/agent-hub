@@ -241,9 +241,10 @@ def render():
             with col1:
                 st.subheader(loc_name)
             with col2:
-                find_btn = st.button("\U0001f50d Poi\u0161\u010di osnutke", key=f"find_{loc_key}", use_container_width=True)
-            with col3:
-                if st.button("\U0001f5d1\ufe0f Po\u010disti cache", key=f"clear_{loc_key}", use_container_width=True):
+                # Počisti cache — rdeča, mora biti kliknjena pred iskanjem
+                cache_key = f"cache_cleared_{loc_key}"
+                if st.button("🗑️ Počisti cache", key=f"clear_{loc_key}",
+                             use_container_width=True, type="primary"):
                     try:
                         _get_stock_cached.clear()
                         _get_pl_historical_cached.clear()
@@ -253,9 +254,20 @@ def render():
                         if k.startswith("stock_cache_") or k == "item_units_cache":
                             del st.session_state[k]
                     st.session_state.pop(f"multi_result_{loc_key}", None)
-                    st.success("Cache po\u010di\u0161\u010den!")
+                    st.session_state[cache_key] = True
+                    st.success("Cache počiščen!")
+            with col3:
+                cache_ok = st.session_state.get(cache_key, False)
+                find_btn = st.button(
+                    "🔍 Poišči osnutke",
+                    key=f"find_{loc_key}",
+                    use_container_width=True,
+                    disabled=not cache_ok,
+                    help="" if cache_ok else "Najprej klikni 'Počisti cache'",
+                )
 
             if find_btn:
+                st.session_state[cache_key] = False  # reset — naslednjič spet počisti
                 if not check_config(): st.stop()
                 if an_id == 0:
                     with st.spinner("I\u0161\u010dem analitike..."):
