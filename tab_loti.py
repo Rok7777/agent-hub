@@ -79,7 +79,9 @@ def render():
             try:
                 return st.secrets[key]
             except Exception:
-                return default
+                pass
+            import os
+            return os.environ.get(key, default)
 
         with st.expander("Minimax dostop", expanded=True):
             st.caption("Podatki odjemalca (iz emaila Minimax podpore):")
