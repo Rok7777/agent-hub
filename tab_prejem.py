@@ -236,6 +236,16 @@ REQUIRED_HEADER = [
     ("invoice_date",  "⚠️", "Datum manjka"),
     ("invoice_number","⚠️", "Številka dobavnice manjka"),
 ]
+REQUIRED_ROW = [
+    ("item_code",  "❌", "Šifra artikla manjka"),
+    ("quantity",   "⚠️", "Količina ni določena"),
+    ("price",      "⚠️", "Nabavna cena ni določena"),
+]
+REQUIRED_ROW = [
+    ("item_code",  "❌", "Šifra artikla manjka"),
+    ("quantity",   "⚠️", "Količina ni določena"),
+    ("price",      "⚠️", "Nabavna cena ni določena"),
+]
 SUPPLIER_ITEM_MAPPINGS = {
     "LIBO": {
         "OČIŠČENA": {
