@@ -1113,6 +1113,19 @@ def render():
                 st.success(f"✅ {manual_sup_name} → ID: {manual_sup_id}")
     if "prejem_drafts" not in st.session_state:
         st.session_state["prejem_drafts"] = _load_drafts()
+
+    # Avtomatsko reapliciraj mappinge na vse osnutke pri vsakem zagonu
+    drafts_changed = False
+    for _did, _draft in st.session_state["prejem_drafts"].items():
+        if _draft.get("parse_error"):
+            continue
+        _sup  = _draft.get("header", {}).get("supplier_name", "")
+        _rows = _draft.get("rows", [])
+        # Vedno reapliciraj — tudi če zamenjamo mapping
+        _draft["rows"] = _apply_supplier_mapping(_sup, [dict(r) for r in _rows])
+        drafts_changed = True
+    if drafts_changed:
+        _save_drafts(st.session_state["prejem_drafts"])
     if "prejem_file_store" not in st.session_state:
         st.session_state["prejem_file_store"] = _load_files()
     if "prejem_prices" not in st.session_state:
