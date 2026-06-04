@@ -274,7 +274,8 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
     for row in rows:
         inv_name_up = row.get("inv_name", "").upper()
         for keyword, data in mapping.items():
-            if keyword.upper() in inv_name_up:
+            kw_words = [w for w in keyword.upper().split() if len(w) > 2]
+            if kw_words and all(w in inv_name_up for w in kw_words):
                 row["item_code"] = data.get("item_code") or ""
                 row["item_name"] = data.get("item_name") or ""
                 # Deklaracijski podatki iz mappinga (fallback)
