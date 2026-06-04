@@ -227,6 +227,15 @@ STATUS_ICON = {
     "warning": "🟡",
 }
 # Znani mappingi po dobaviteljih (dopolnjujemo sproti)
+
+OLTREON_INFO = "OltreCon d.o.o., Orehovlje 2F, 5291 Miren"
+VET_OZNAKA   = "SI-849 ES"
+
+REQUIRED_HEADER = [
+    ("supplier_name", "⚠️", "Ime dobavitelja manjka"),
+    ("invoice_date",  "⚠️", "Datum manjka"),
+    ("invoice_number","⚠️", "Številka dobavnice manjka"),
+]
 SUPPLIER_ITEM_MAPPINGS = {
     "LIBO": {
         "OČIŠČENA": {
