@@ -211,6 +211,13 @@ SUPPLIER_PREFIXES = {
 
 VP_CEN_CODE  = "VP-CEN"
 
+
+STATUS_ICON = {
+    "ready":   "🟢",
+    "error":   "🔴",
+    "sent":    "🔵",
+    "warning": "🟡",
+}
 # Znani mappingi po dobaviteljih (dopolnjujemo sproti)
 SUPPLIER_ITEM_MAPPINGS = {
     "LIBO": {
