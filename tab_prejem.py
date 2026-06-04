@@ -261,13 +261,13 @@ SUPPLIER_ITEM_MAPPINGS = {
 }
 
 def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
-    """Aplicira znane mappinge po dobavitelju na liste artiklov."""
-    sup_up = supplier_name.upper()
-    mapping = None
+    """Aplicira znane mappinge po dobavitelju — združi VSE ujemajoče (ALEMAR + ALEMAR S.R.L.)."""
+    sup_up  = supplier_name.upper()
+    mapping = {}
     for key, val in SUPPLIER_ITEM_MAPPINGS.items():
-        if key in sup_up:
-            mapping = val
-            break
+        core = key.upper().replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
+        if core and (core in sup_up or sup_up in key.upper()):
+            mapping.update(val)  # združi vse ujemajoče
     if not mapping:
         return rows
 
