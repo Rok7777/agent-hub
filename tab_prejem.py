@@ -352,15 +352,20 @@ _DEFAULT_PRICES = {
 }
 
 def _load_prices() -> dict:
+    """Naloži cene: DEFAULT_PRICES kot baza + merge s shranjenimi (shranjene imajo prioriteto)."""
+    merged = {k: dict(v) for k, v in _DEFAULT_PRICES.items()}
     try:
         if os.path.exists(PRICES_FILE):
             with open(PRICES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                saved = json.load(f)
+            for code, sups in saved.items():
+                if code not in merged:
+                    merged[code] = {}
+                merged[code].update(sups)
     except Exception:
         pass
-    # Datoteka ne obstaja — ustvari jo z začetnimi cenami
-    _save_prices(_DEFAULT_PRICES)
-    return dict(_DEFAULT_PRICES)
+    _save_prices(merged)
+    return merged
 
 def _get_price(prices: dict, item_code: str, supplier: str) -> dict:
     """Vrne zadnje znane cene za artikel+dobavitelj ali {}.
