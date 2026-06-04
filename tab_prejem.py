@@ -997,17 +997,29 @@ def render():
                     st.error(f"Napaka: {e}")
 
         st.divider()
-        if st.button("🔍 Debug: Mappingi", use_container_width=True, key="btn_debug_map"):
-            sup_filter = st.session_state.get("debug_sup_filter","ALEMAR")
-            result = []
-            for sup, items in SUPPLIER_ITEM_MAPPINGS.items():
-                if sup_filter.upper() in sup.upper():
-                    result.append(f"**{sup}** ({len(items)} kw):")
-                    for kw, data in items.items():
-                        result.append(f"  `{kw}` → {data.get('item_code','?')}")
-            st.sidebar.write("\n".join(result) if result else "Ni najdeno")
-            st.sidebar.caption(f"Skupaj dobaviteljev: {len(SUPPLIER_ITEM_MAPPINGS)}")
-        st.session_state["debug_sup_filter"] = st.sidebar.text_input("Dobavitelj za debug", value="ALEMAR", key="inp_debug_sup")
+        tc1, tc2 = st.sidebar.columns(2)
+        test_sup = tc1.text_input("Dobavitelj", value="ALEMAR", key="inp_test_sup")
+        test_art = tc2.text_input("Naziv artikla", value="BRANZINO CROAZIA 1000/1500", key="inp_test_art")
+        if st.button("🔍 Testiraj keyword", use_container_width=True, key="btn_test_kw"):
+            sup_up = test_sup.upper()
+            mapping = {}
+            for key, val in SUPPLIER_ITEM_MAPPINGS.items():
+                core = key.upper().replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
+                if core and (core in sup_up or sup_up in key.upper()):
+                    mapping.update(val)
+            inv_up = test_art.upper()
+            sorted_kw = sorted(mapping.items(), key=lambda x: len([w for w in x[0].split() if len(w)>2]), reverse=True)
+            found = None
+            for kw, data in sorted_kw:
+                kw_words = [w for w in kw.upper().split() if len(w) > 2]
+                if kw_words and all(w in inv_up for w in kw_words):
+                    found = (kw, data)
+                    break
+            if found:
+                st.sidebar.success(f"✅ `{found[0]}` → **{found[1].get('item_code')}** {found[1].get('item_name','')[:40]}")
+            else:
+                st.sidebar.error(f"❌ Ni ujemanja za '{test_art}' pri {test_sup}")
+                st.sidebar.caption(f"Dobavitelj ima {len(mapping)} keywordov")
 
         if st.button("📋 Znani artikli za Connections chat", use_container_width=True, key="btn_known_arts"):
             lines = ["Ze znani artikli - ne porocaj znova:"]
