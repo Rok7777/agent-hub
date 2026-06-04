@@ -273,8 +273,10 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
 
     for row in rows:
         inv_name_up = row.get("inv_name", "").upper()
-        for keyword, data in mapping.items():
-            kw_words = [w for w in keyword.upper().split() if len(w) > 2]
+        inv_name_up = row.get("inv_name", "").upper()
+        # Razvrsti po specifičnosti — daljši keyword (več besed) ima prioriteto
+        sorted_kw = sorted(mapping.items(), key=lambda x: len([w for w in x[0].split() if len(w)>2]), reverse=True)
+        for keyword, data in sorted_kw:
             if kw_words and all(w in inv_name_up for w in kw_words):
                 row["item_code"] = data.get("item_code") or ""
                 row["item_name"] = data.get("item_name") or ""
