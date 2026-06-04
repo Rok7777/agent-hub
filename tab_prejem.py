@@ -989,6 +989,18 @@ def render():
                     st.error(f"Napaka: {e}")
 
         st.divider()
+        if st.button("🔍 Debug: Mappingi", use_container_width=True, key="btn_debug_map"):
+            sup_filter = st.session_state.get("debug_sup_filter","ALEMAR")
+            result = []
+            for sup, items in SUPPLIER_ITEM_MAPPINGS.items():
+                if sup_filter.upper() in sup.upper():
+                    result.append(f"**{sup}** ({len(items)} kw):")
+                    for kw, data in items.items():
+                        result.append(f"  `{kw}` → {data.get('item_code','?')}")
+            st.sidebar.write("\n".join(result) if result else "Ni najdeno")
+            st.sidebar.caption(f"Skupaj dobaviteljev: {len(SUPPLIER_ITEM_MAPPINGS)}")
+        st.session_state["debug_sup_filter"] = st.sidebar.text_input("Dobavitelj za debug", value="ALEMAR", key="inp_debug_sup")
+
         if st.button("📋 Znani artikli za Connections chat", use_container_width=True, key="btn_known_arts"):
             lines = ["Ze znani artikli - ne porocaj znova:"]
             for supplier, items in SUPPLIER_ITEM_MAPPINGS.items():
