@@ -981,6 +981,24 @@ def render():
                     st.sidebar.error(f"Napaka: {e}")
 
         st.divider()
+        if st.button("🗑️ Počisti uvožene mappinge", use_container_width=True, key="btn_clear_mappings"):
+            try:
+                if os.path.exists(MAPPINGS_FILE):
+                    os.remove(MAPPINGS_FILE)
+                # Ponastavi na samo hardkodirane
+                extra_keys = [k for k in SUPPLIER_ITEM_MAPPINGS if k not in
+                              ["LIBO", "ALEMAR", "RIBOGOJNICA LIBO D.O.O."]]
+                for k in extra_keys:
+                    del SUPPLIER_ITEM_MAPPINGS[k]
+                # Počisti tudi Alemar CSV verzijo
+                for k in list(SUPPLIER_ITEM_MAPPINGS.keys()):
+                    if "ALEMAR" in k.upper() and k != "ALEMAR":
+                        del SUPPLIER_ITEM_MAPPINGS[k]
+                st.sidebar.success("✅ Uvoženi mappingi počiščeni — ostanejo samo hardkodirani")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"Napaka: {e}")
+
         with st.expander("📥 Uvozi mappinge (CSV)", expanded=False):
             st.caption("CSV iz Connections chata — stolpci: supplier_name, inv_name, item_code, item_name, nc, pc, tariff, country_of_origin, latin_name, fao, nacin_ulova, country_dispatch, delivery_terms")
             csv_file = st.file_uploader("CSV datoteka", type=["csv"], key="csv_mappings")
