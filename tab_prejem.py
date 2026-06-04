@@ -95,6 +95,36 @@ def _temperatura(item_name: str) -> str:
         return "–18°C ali hladneje"
     return "do +3°C"
 
+def _save_mappings(extra: dict):
+    """Shrani uvožene mappinge (poleg hardkodiranih) na disk."""
+    try:
+        with open(MAPPINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(extra, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _load_mappings() -> dict:
+    """Naloži uvožene mappinge z diska."""
+    try:
+        if os.path.exists(MAPPINGS_FILE):
+            with open(MAPPINGS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _merge_mappings():
+    """Združi hardkodirane + uvožene mappinge."""
+    extra = _load_mappings()
+    for sup, items in extra.items():
+        if sup not in SUPPLIER_ITEM_MAPPINGS:
+            SUPPLIER_ITEM_MAPPINGS[sup] = {}
+        for kw, data in items.items():
+            SUPPLIER_ITEM_MAPPINGS[sup][kw] = data
+
+# Naloži ob zagonu
+_merge_mappings()
+
 def _import_mappings_csv(csv_text: str) -> tuple:
     """Uvozi mappinge iz CSV teksta. Vrne (dodani, napake)."""
     import csv, io
@@ -153,6 +183,15 @@ def _import_mappings_csv(csv_text: str) -> tuple:
             dodani.append(f"{sup} / {kw} → {code}")
         except Exception as e:
             napake.append(f"Napaka v vrstici: {e} — {row}")
+    # Shrani uvožene na disk (brez hardkodiranih)
+    extra = _load_mappings()
+    for sup, items in SUPPLIER_ITEM_MAPPINGS.items():
+        # Shrani samo tiste ki niso v osnovnem hardkodiranem slovarju
+        for kw, data in items.items():
+            if sup not in extra:
+                extra[sup] = {}
+            extra[sup][kw] = data
+    _save_mappings(extra)
     return dodani, napake
 
 def _get_intrastat(supplier_name: str) -> dict:
@@ -284,7 +323,8 @@ _DATA_DIR   = _pathlib.Path(_os.environ.get("DATA_DIR", str(_pathlib.Path(__file
 DRAFTS_FILE = str(_DATA_DIR / "prejem_osnutki.json")
 
 FILES_FILE  = str(_DATA_DIR / "prejem_files.json")
-PRICES_FILE = str(_DATA_DIR / "prejem_cene.json")
+PRICES_FILE    = str(_DATA_DIR / "prejem_cene.json")
+MAPPINGS_FILE  = str(_DATA_DIR / "prejem_mappings.json")
 
 def _save_prices(prices: dict):
     try:
