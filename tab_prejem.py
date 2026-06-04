@@ -122,8 +122,16 @@ def _merge_mappings():
         for kw, data in items.items():
             SUPPLIER_ITEM_MAPPINGS[sup][kw] = data
 
-# Naloži ob zagonu
-_merge_mappings()
+def _get_effective_mappings() -> dict:
+    """Vedno vrne hardkodirani + uvoženi iz datoteke — zanesljivo."""
+    merged = {}
+    for sup, items in SUPPLIER_ITEM_MAPPINGS.items():
+        merged[sup] = dict(items)
+    for sup, items in _load_mappings().items():
+        if sup not in merged:
+            merged[sup] = {}
+        merged[sup].update(items)
+    return merged
 
 def _import_mappings_csv(csv_text: str) -> tuple:
     """Uvozi mappinge iz CSV teksta. Vrne (dodani, napake)."""
@@ -269,9 +277,10 @@ SUPPLIER_ITEM_MAPPINGS = {
 
 def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
     """Aplicira znane mappinge po dobavitelju — združi VSE ujemajoče (ALEMAR + ALEMAR S.R.L.)."""
-    sup_up  = supplier_name.upper()
-    mapping = {}
-    for key, val in SUPPLIER_ITEM_MAPPINGS.items():
+    sup_up    = supplier_name.upper()
+    all_maps  = _get_effective_mappings()
+    mapping   = {}
+    for key, val in all_maps.items():
         core = key.upper().replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
         if core and (core in sup_up or sup_up in key.upper()):
             mapping.update(val)
@@ -964,14 +973,7 @@ def render():
                 if os.path.exists(MAPPINGS_FILE):
                     os.remove(MAPPINGS_FILE)
                 # Ponastavi na samo hardkodirane
-                extra_keys = [k for k in SUPPLIER_ITEM_MAPPINGS if k not in
-                              ["LIBO", "ALEMAR", "RIBOGOJNICA LIBO D.O.O."]]
-                for k in extra_keys:
-                    del SUPPLIER_ITEM_MAPPINGS[k]
-                # Počisti tudi Alemar CSV verzijo
-                for k in list(SUPPLIER_ITEM_MAPPINGS.keys()):
-                    if "ALEMAR" in k.upper() and k != "ALEMAR":
-                        del SUPPLIER_ITEM_MAPPINGS[k]
+                pass  # datoteka je bila že zbrisana
                 st.sidebar.success("✅ Uvoženi mappingi počiščeni — ostanejo samo hardkodirani")
                 st.rerun()
             except Exception as e:
@@ -999,7 +1001,7 @@ def render():
         if st.button("🔍 Testiraj keyword", use_container_width=True, key="btn_test_kw"):
             sup_up = test_sup.upper()
             mapping = {}
-            for key, val in SUPPLIER_ITEM_MAPPINGS.items():
+            for key, val in _get_effective_mappings().items():
                 core = key.upper().replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
                 if core and (core in sup_up or sup_up in key.upper()):
                     mapping.update(val)
@@ -1019,7 +1021,7 @@ def render():
 
         if st.button("📋 Znani artikli za Connections chat", use_container_width=True, key="btn_known_arts"):
             lines = ["Ze znani artikli - ne porocaj znova:"]
-            for supplier, items in SUPPLIER_ITEM_MAPPINGS.items():
+            for supplier, items in _get_effective_mappings().items():
                 lines.append(f"{supplier}:")
                 for kw, data in items.items():
                     if data.get("needs_split"):
