@@ -267,20 +267,22 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
     for key, val in SUPPLIER_ITEM_MAPPINGS.items():
         core = key.upper().replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
         if core and (core in sup_up or sup_up in key.upper()):
-            mapping.update(val)  # združi vse ujemajoče
+            mapping.update(val)
     if not mapping:
         return rows
 
+    # Razvrsti po specifičnosti — daljši keyword ima prioriteto
+    sorted_kw = sorted(mapping.items(),
+                       key=lambda x: len([w for w in x[0].split() if len(w) > 2]),
+                       reverse=True)
+
     for row in rows:
         inv_name_up = row.get("inv_name", "").upper()
-        inv_name_up = row.get("inv_name", "").upper()
-        # Razvrsti po specifičnosti — daljši keyword (več besed) ima prioriteto
-        sorted_kw = sorted(mapping.items(), key=lambda x: len([w for w in x[0].split() if len(w)>2]), reverse=True)
         for keyword, data in sorted_kw:
+            kw_words = [w for w in keyword.upper().split() if len(w) > 2]
             if kw_words and all(w in inv_name_up for w in kw_words):
                 row["item_code"] = data.get("item_code") or ""
                 row["item_name"] = data.get("item_name") or ""
-                # Deklaracijski podatki iz mappinga (fallback)
                 if data.get("latinski_naziv") and not row.get("latinski_naziv"):
                     row["latinski_naziv"] = data["latinski_naziv"]
                 if data.get("fao_code") and not row.get("fao_code"):
@@ -292,42 +294,11 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
                     row["tariff"] = data["tariff"]
                 if data.get("country_of_origin") and not row.get("country_of_origin"):
                     row["country_of_origin"] = data["country_of_origin"]
-                if "default_discount" in data and float(row.get("discount_pct") or 0) == 0:
-                    row["discount_pct"] = data["default_discount"]
                 if data.get("needs_split"):
                     row["_needs_split_hint"] = True
                     row["_split_options"]    = data.get("split_options", [])
                 break
     return rows
-OLTREON_INFO = "OltreCon d.o.o., Orehovlje 2F, 5291 Miren"
-VET_OZNAKA   = "SI-849 ES"
-
-STATUS_ICON  = {"ready": "🟢", "sent": "⚫", "error": "🔴"}
-
-REQUIRED_HEADER = [
-    ("supplier_name",  "❌", "Dobavitelj ni vpisan"),
-    ("invoice_date",   "❌", "Datum dobavnice manjka"),
-    ("invoice_number", "❌", "Številka dobavnice manjka"),
-]
-REQUIRED_ROW = [
-    ("item_code",          "❌", "Šifra artikla manjka"),
-    ("quantity",           "❌", "Količina mora biti > 0"),
-    ("batch_number",       "❌", "Serija (lot) manjka"),
-    ("price",              "⚠️", "Nabavna cena ni določena"),
-    ("country_of_origin",  "⚠️", "Država porekla manjka"),
-    ("tariff",             "⚠️", "Carinska tarifa manjka"),
-]
-
-# ─── Trajno shranjevanje osnutkov ────────────────────────────────────────────
-
-import pathlib as _pathlib
-import os as _os
-_DATA_DIR   = _pathlib.Path(_os.environ.get("DATA_DIR", str(_pathlib.Path(__file__).parent)))
-DRAFTS_FILE = str(_DATA_DIR / "prejem_osnutki.json")
-
-FILES_FILE  = str(_DATA_DIR / "prejem_files.json")
-PRICES_FILE    = str(_DATA_DIR / "prejem_cene.json")
-MAPPINGS_FILE  = str(_DATA_DIR / "prejem_mappings.json")
 
 def _save_prices(prices: dict):
     try:
