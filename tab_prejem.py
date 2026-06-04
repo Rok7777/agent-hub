@@ -1124,18 +1124,7 @@ def render():
     if "prejem_drafts" not in st.session_state:
         st.session_state["prejem_drafts"] = _load_drafts()
 
-    # Avtomatsko reapliciraj mappinge na vse osnutke pri vsakem zagonu
-    drafts_changed = False
-    for _did, _draft in st.session_state["prejem_drafts"].items():
-        if _draft.get("parse_error"):
-            continue
-        _sup  = _draft.get("header", {}).get("supplier_name", "")
-        _rows = _draft.get("rows", [])
-        # Vedno reapliciraj — tudi če zamenjamo mapping
-        _draft["rows"] = _apply_supplier_mapping(_sup, [dict(r) for r in _rows])
-        drafts_changed = True
-    if drafts_changed:
-        _save_drafts(st.session_state["prejem_drafts"])
+
     if "prejem_file_store" not in st.session_state:
         st.session_state["prejem_file_store"] = _load_files()
     if "prejem_prices" not in st.session_state:
@@ -1388,6 +1377,15 @@ def render():
                         # Preskoči split pod-vrstice (legacy — ne bi smelo biti)
                         if row.get("_split_child"):
                             continue
+
+                        # Apliciraj mapping pri prikazu če artikel ni določen
+                        if not row.get("item_code"):
+                            _sup = draft["header"].get("supplier_name","")
+                            _upd = _apply_supplier_mapping(_sup, [dict(row)])
+                            if _upd and _upd[0].get("item_code"):
+                                row.update(_upd[0])
+                                drafts[draft_id]["rows"][idx] = row
+                                _save_drafts(drafts)
 
                         matched, data_ok = _art_status(row)
                         s1       = "🟢" if matched  else "🔴"
