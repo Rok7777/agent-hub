@@ -138,7 +138,25 @@ def _import_mappings_csv(csv_text: str) -> tuple:
     import csv, io
     dodani, napake = [], []
     reader = csv.DictReader(io.StringIO(csv_text))
-    for row in reader:
+    rows_list = list(reader)
+
+    # Najprej počisti obstoječe za dobavitelje ki so v CSV-ju
+    extra = _load_mappings()
+    suppliers_in_csv = set()
+    for row in rows_list:
+        sup = (row.get("supplier_name") or row.get("dobavitelj","")).strip().upper()
+        if sup:
+            suppliers_in_csv.add(sup)
+    for sup in suppliers_in_csv:
+        # Počisti vse variante tega dobavitelja v extra (ne hardkodiranih)
+        for key in list(extra.keys()):
+            core_key = key.upper().replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
+            core_sup = sup.replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
+            if core_key and core_sup and (core_key in core_sup or core_sup in core_key):
+                del extra[key]
+    _save_mappings(extra)
+
+    for row in rows_list:
         try:
             sup   = (row.get("supplier_name") or row.get("dobavitelj","")).strip().upper()
             kw    = (row.get("inv_name") or row.get("naziv_dob","")).strip().upper()
@@ -158,15 +176,19 @@ def _import_mappings_csv(csv_text: str) -> tuple:
                 napake.append(f"Manjka sup/kw/code: {row}")
                 continue
 
-            # SUPPLIER_ITEM_MAPPINGS
-            if sup not in SUPPLIER_ITEM_MAPPINGS:
-                SUPPLIER_ITEM_MAPPINGS[sup] = {}
-            SUPPLIER_ITEM_MAPPINGS[sup][kw] = {
+            # Posodobi extra (datoteka) in SUPPLIER_ITEM_MAPPINGS (spomin)
+            entry = {
                 "item_code": code, "item_name": name,
                 "latinski_naziv": latin, "fao_code": fao,
                 "nacin_ulova": nacin, "tariff": tariff,
                 "country_of_origin": country,
             }
+            if sup not in extra:
+                extra[sup] = {}
+            extra[sup][kw] = entry
+            if sup not in SUPPLIER_ITEM_MAPPINGS:
+                SUPPLIER_ITEM_MAPPINGS[sup] = {}
+            SUPPLIER_ITEM_MAPPINGS[sup][kw] = entry
 
             # _DEFAULT_PRICES
             if code and nc > 0:
@@ -191,14 +213,7 @@ def _import_mappings_csv(csv_text: str) -> tuple:
             dodani.append(f"{sup} / {kw} → {code}")
         except Exception as e:
             napake.append(f"Napaka v vrstici: {e} — {row}")
-    # Shrani uvožene na disk (brez hardkodiranih)
-    extra = _load_mappings()
-    for sup, items in SUPPLIER_ITEM_MAPPINGS.items():
-        # Shrani samo tiste ki niso v osnovnem hardkodiranem slovarju
-        for kw, data in items.items():
-            if sup not in extra:
-                extra[sup] = {}
-            extra[sup][kw] = data
+    # extra je že posodobljen med uvozom — samo shrani
     _save_mappings(extra)
     return dodani, napake
 
