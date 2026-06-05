@@ -1,16 +1,18 @@
 """
 Skupne nastavitve in helper funkcije za vse tabove.
 """
+import os
 import streamlit as st
 from minimax_client import MinimaxClient
+
 
 def _secret(key, default=""):
     try:
         return st.secrets[key]
     except Exception:
         pass
-    import os
     return os.environ.get(key, default)
+
 
 def get_client() -> MinimaxClient:
     return MinimaxClient(
@@ -21,6 +23,7 @@ def get_client() -> MinimaxClient:
         org_id        = int(st.session_state.get("org_id",    _secret("MINIMAX_ORG_ID", "171038"))),
     )
 
+
 def check_config() -> bool:
     required = ["username", "password", "client_id", "client_secret", "org_id"]
     missing  = [k for k in required if not st.session_state.get(k) and not _secret(f"MINIMAX_{k.upper()}", "")]
@@ -28,6 +31,7 @@ def check_config() -> bool:
         st.warning("⚠️ Izpolnite vse nastavitve API v stranski vrstici.")
         return False
     return True
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def resolve_ids(_username, _password, _client_id, _client_secret, _org_id):
@@ -48,6 +52,7 @@ def resolve_ids(_username, _password, _client_id, _client_secret, _org_id):
     except Exception: pass
     return wh_map, an_map
 
+
 def get_wh_id(loc_key: str) -> int:
     wh_codes = {
         "MPK1": st.session_state.get("wh_mpk1", _secret("WH_MPK1", "MP-K1")),
@@ -57,15 +62,16 @@ def get_wh_id(loc_key: str) -> int:
     }
     code = wh_codes.get(loc_key, "").strip().upper()
     if not code: return 0
-    u = st.session_state.get("username", "")
-    p = st.session_state.get("password", "")
-    ci = st.session_state.get("client_id", "")
-    cs = st.session_state.get("client_secret", "")
-    oi = st.session_state.get("org_id", "")
+    u  = st.session_state.get("username",      _secret("MINIMAX_USERNAME", ""))
+    p  = st.session_state.get("password",      _secret("MINIMAX_PASSWORD", ""))
+    ci = st.session_state.get("client_id",     _secret("MINIMAX_CLIENT_ID", ""))
+    cs = st.session_state.get("client_secret", _secret("MINIMAX_CLIENT_SECRET", ""))
+    oi = st.session_state.get("org_id",        _secret("MINIMAX_ORG_ID", "171038"))
     if all([u, p, ci, cs, oi]):
         wh_map, _ = resolve_ids(u, p, ci, cs, oi)
         return wh_map.get(code, 0)
     return 0
+
 
 def get_an_id(loc_key: str) -> int:
     an_codes = {
@@ -76,11 +82,11 @@ def get_an_id(loc_key: str) -> int:
     }
     code = an_codes.get(loc_key, "").strip().upper()
     if not code: return 0
-    u = st.session_state.get("username", "")
-    p = st.session_state.get("password", "")
-    ci = st.session_state.get("client_id", "")
-    cs = st.session_state.get("client_secret", "")
-    oi = st.session_state.get("org_id", "")
+    u  = st.session_state.get("username",      _secret("MINIMAX_USERNAME", ""))
+    p  = st.session_state.get("password",      _secret("MINIMAX_PASSWORD", ""))
+    ci = st.session_state.get("client_id",     _secret("MINIMAX_CLIENT_ID", ""))
+    cs = st.session_state.get("client_secret", _secret("MINIMAX_CLIENT_SECRET", ""))
+    oi = st.session_state.get("org_id",        _secret("MINIMAX_ORG_ID", "171038"))
     if all([u, p, ci, cs, oi]):
         _, an_map = resolve_ids(u, p, ci, cs, oi)
         return an_map.get(code, 0)
