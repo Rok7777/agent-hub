@@ -1409,10 +1409,19 @@ def render():
                         mm_naziv = row.get("item_name","")
                         mm_label = (f"   ·—·   {mm_naziv}" if mm_naziv else f"  ({row.get('item_code','')})") if matched else "   — artikel manjka"
 
-                        with st.expander(
+                        exp_col, del_col = st.columns([20, 1])
+                        with del_col:
+                            if st.button("✕", key=f"del_row_{draft_id}_{idx}",
+                                         help="Odstrani ta artikel iz osnutka"):
+                                drafts[draft_id]["rows"].pop(idx)
+                                st.session_state["prejem_drafts"] = drafts
+                                _save_drafts(drafts)
+                                st.rerun()
+                        with exp_col:
+                         with st.expander(
                             f"{s1}{s2} {idx+1}. {row['inv_name']}  ({qty_disp} {row.get('unit','kg')}){mm_label}",
                             expanded=False
-                        ):
+                         ):
                             if row.get("latin_name"):
                                 st.caption(f"🔬 *{row['latin_name']}*")
 
