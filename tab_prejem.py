@@ -15,6 +15,14 @@ from datetime import datetime
 
 from minimax_client import MinimaxClient
 
+# ─── Poti do datotek ─────────────────────────────────────────────────────────
+import pathlib as _pathlib
+_DATA_DIR     = _pathlib.Path(__import__("os").environ.get("DATA_DIR", str(_pathlib.Path(__file__).parent)))
+DRAFTS_FILE   = str(_DATA_DIR / "prejem_osnutki.json")
+FILES_FILE    = str(_DATA_DIR / "prejem_files.json")
+PRICES_FILE   = str(_DATA_DIR / "prejem_cene.json")
+MAPPINGS_FILE = str(_DATA_DIR / "prejem_mappings.json")
+
 # ─── Konstante ────────────────────────────────────────────────────────────────
 
 # Intrastat podatki po dobaviteljih — dopolniti sproti
