@@ -999,6 +999,17 @@ def render():
     button[data-testid="stNumberInputStepUp"] {
         display: none !important;
     }
+    /* Večja pisava v expander naslovih osnutkov */
+    [data-testid="stExpander"] summary p {
+        font-size: 1.05rem !important;
+        font-weight: 500 !important;
+        line-height: 1.5 !important;
+    }
+    /* Poudarjen rob expanders */
+    [data-testid="stExpander"] {
+        border-left: 3px solid #e0e0e0 !important;
+        margin-bottom: 4px !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -1320,7 +1331,7 @@ def render():
     # ═══════════════════════════════════════════════════════════
     # SEZNAM OSNUTKOV
     # ═══════════════════════════════════════════════════════════
-    st.subheader("📋 Osnutki")
+    st.markdown("## 📋 Osnutki")
     st.markdown(f"{STATUS_ICON['ready']} Pripravljen &nbsp;&nbsp;"
                 f"{STATUS_ICON['error']} Pomanjkljiv &nbsp;&nbsp;"
                 f"{STATUS_ICON['sent']} Poslan v Minimax", unsafe_allow_html=True)
@@ -1378,11 +1389,12 @@ def render():
             sel = st.checkbox("", key=f"sel_d_{draft_id}")
             if sel: selected_draft_ids.append(draft_id)
         with col_exp:
-            lbl = (f"{icon} **{h.get('supplier_name') or fname}**  ·  "
-                   f"{h.get('invoice_date','?')}  ·  #{h.get('invoice_number','?')}  ·  "
-                   f"{len(draft.get('rows',[]))} artikov  ·  "
-                   f"{len(draft.get('declarations',[]))} deklaracij"
-                   + (f"  ·  Minimax ID: {draft.get('minimax_entry_id')}" if draft.get("sent_to_minimax") else ""))
+            lbl = (f"{icon} **{h.get('supplier_name') or fname}**"
+                   f"  ·  {h.get('invoice_date','?')}"
+                   f"  ·  #{h.get('invoice_number','?')}"
+                   f"  ·  {len(draft.get('rows',[]))} artikov"
+                   f"  ·  {len(draft.get('declarations',[]))} deklaracij"
+                   + (f"  ·  ✅ Minimax ID: {draft.get('minimax_entry_id')}" if draft.get("sent_to_minimax") else ""))
 
             # Drži expander odprt po form submitu
             # Validacija PRED expander — potrebujemo za expanded parameter
