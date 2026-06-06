@@ -1546,33 +1546,31 @@ def render():
                                     _save_drafts(drafts)
                                     st.rerun()
 
+                            # ── Iskanje artikla — ZUNAJ forme (Enter ne zapre vrstice) ──
+                            search_q = st.text_input(
+                                "Minimax artikel — ključne besede, loči z  /",
+                                value="",
+                                placeholder="npr: postrv/file/svež  ali  LPOSS  ali  150-300",
+                                key=f"sq_{draft_id}_{idx}",
+                            )
+                            filtered = _search_articles(search_q, all_opts)
+                            f_labels = ["— izberi —"] + [
+                                f"{o['item_code']}  {o['item_name']}" for o in filtered
+                            ]
+                            curr_code = row.get("item_code","")
+                            curr_idx  = next(
+                                (i+1 for i,o in enumerate(filtered) if o["item_code"]==curr_code), 0
+                            )
+                            sel_art = st.selectbox(
+                                "Izberi artikel iz rezultatov",
+                                f_labels, index=curr_idx,
+                                key=f"sel_{draft_id}_{idx}",
+                                label_visibility="collapsed",
+                            )
+
                             with st.form(key=f"form_art_{draft_id}_{idx}"):
-
-                                # ── Iskanje artikla ──────────────────────
-                                search_q = st.text_input(
-                                    "Minimax artikel — ključne besede, loči z  /",
-                                    value="",
-                                    placeholder="npr: postrv/file/svež  ali  LPOSS  ali  150-300",
-                                    key=f"sq_{draft_id}_{idx}",
-                                )
-                                filtered = _search_articles(search_q, all_opts)
-                                f_labels = ["— izberi —"] + [
-                                    f"{o['item_code']}  {o['item_name']}" for o in filtered
-                                ]
-                                curr_code = row.get("item_code","")
-                                curr_idx  = next(
-                                    (i+1 for i,o in enumerate(filtered) if o["item_code"]==curr_code), 0
-                                )
-                                sel_art = st.selectbox(
-                                    "Izberi artikel iz rezultatov",
-                                    f_labels, index=curr_idx,
-                                    key=f"sel_{draft_id}_{idx}",
-                                    label_visibility="collapsed",
-                                )
-
                                 # ── Polja ────────────────────────────────
                                 cc1,cc2,cc3,cc4 = st.columns(4)
-                                # ── Polja ────────────────────────────────
                                 cc1,cc2,cc3,cc4 = st.columns(4)
                                 with cc1:
                                     f_qty      = st.number_input(_flabel("Količina",         row.get("quantity")),       value=float(row.get("quantity") or 0),       min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
