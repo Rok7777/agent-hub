@@ -1377,12 +1377,16 @@ def render():
                         # Normaliziraj ime dobavitelja na uradno Minimax ime
                         _raw_sup = parsed.get("supplier_name","")
                         _canon   = _get_supplier_canonical(_raw_sup) if _raw_sup else _raw_sup
+                        # LOT dobavitelja: header level ali prvi item-level
+                        _lot_dob = parsed.get("lot_dobavitelja","") or next(
+                            (it.get("lot_dobavitelja","") for it in parsed.get("items",[]) if it.get("lot_dobavitelja")), ""
+                        )
                         header = {
                             "supplier_name":   _canon,
                             "invoice_number":  parsed.get("invoice_number",""),
                             "invoice_date":    parsed.get("invoice_date",""),
                             "lot_number":      lot,
-                            "lot_dobavitelja": parsed.get("lot_dobavitelja",""),
+                            "lot_dobavitelja": _lot_dob,
                             "datum_izlova":    parsed.get("datum_izlova",""),
                             "kraj_proizvoda":  parsed.get("kraj_proizvoda",""),
                         }
@@ -1496,7 +1500,7 @@ def render():
                     st.divider()
 
                 # Header — ena vrstica
-                hc1,hc2,hc3,hc4,hc5 = st.columns([3,2,2,2,2])
+                hc1,hc2,hc3,hc4,hc5,hc6,hc7 = st.columns([3,2,2,2,2,2,1.5])
                 with hc1:
                     h["supplier_name"]   = st.text_input("Dobavitelj", value=h.get("supplier_name",""), key=f"sup_{draft_id}")
                 with hc2:
@@ -1514,8 +1518,10 @@ def render():
                     h["lot_dobavitelja"] = st.text_input("LOT dobavitelja", value=h.get("lot_dobavitelja",""), key=f"lotd_{draft_id}")
                 with hc5:
                     h["datum_izlova"]    = st.text_input("Datum izlova", value=h.get("datum_izlova",""), key=f"izlov_{draft_id}")
-
-                st.info(f"🏷️ Naš LOT: **{h.get('lot_number','?')}**  ·  Skladišče: **VP-CEN**")
+                with hc6:
+                    st.text_input("🏷️ Naš LOT", value=h.get("lot_number","?"), disabled=True, key=f"lot_disp_{draft_id}")
+                with hc7:
+                    st.text_input("Skladišče", value="VP-CEN", disabled=True, key=f"wh_disp_{draft_id}")
 
                 # ── Tabs: Artikli | Deklaracije ───────────────────────────
                 tab_art, tab_decl = st.tabs(["🐟 Artikli", "🏷️ Deklaracije"])
