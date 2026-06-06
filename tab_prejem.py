@@ -831,6 +831,39 @@ def _get_supplier_id(cli, name):
     except: pass
     return 0
 
+def _get_supplier_canonical(name: str) -> str:
+    """Poišče uradno ime stranke v Minimaxu. Vrne Minimax ime ali originalno."""
+    try:
+        cli    = _get_client()
+        name_up = name.upper()
+        page   = 1
+        while True:
+            data = cli._get("/customers", params={"CurrentPage": page, "PageSize": 100})
+            rows = data.get("Rows", [])
+            for s in rows:
+                sn  = (s.get("Name") or "").upper()
+                sid = s.get("CustomerId") or 0
+                if not sid:
+                    continue
+                # Normaliziraj obe imeni za primerjavo
+                import re
+                def _nrm(x):
+                    x = x.upper()
+                    for r in ["S.R.L.","D.O.O.","S.P.","SRL","DOO"]:
+                        x = x.replace(r," ")
+                    return set(w for w in re.sub(r'[,.()/+\-]',' ',x).split() if len(w)>2)
+                common = _nrm(name_up) & _nrm(sn)
+                if common and max(len(w) for w in common) > 3:
+                    return s.get("Name","") or name  # vrni uradno Minimax ime
+            total   = data.get("TotalRows", 0)
+            fetched = (page-1)*100 + len(rows)
+            if fetched >= total or not rows:
+                break
+            page += 1
+    except Exception:
+        pass
+    return name  # če ni najdeno, vrni originalno
+
 def _send_draft(draft: dict) -> tuple:
     try:
         cli    = _get_client()
@@ -1304,8 +1337,11 @@ def render():
                                 "kategorija":        item.get("kategorija","sveže"),
                                 "datum_izlova":      item.get("datum_izlova", parsed.get("datum_izlova","")),
                             })
+                        # Normaliziraj ime dobavitelja na uradno Minimax ime
+                        _raw_sup = parsed.get("supplier_name","")
+                        _canon   = _get_supplier_canonical(_raw_sup) if _raw_sup else _raw_sup
                         header = {
-                            "supplier_name":   parsed.get("supplier_name",""),
+                            "supplier_name":   _canon,
                             "invoice_number":  parsed.get("invoice_number",""),
                             "invoice_date":    parsed.get("invoice_date",""),
                             "lot_number":      lot,
