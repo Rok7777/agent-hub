@@ -375,10 +375,16 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
                     row["fao_naziv"] = FAO_AREAS.get(data["fao_code"], data["fao_code"])
                 if "nacin_ulova" in data and not row.get("nacin_ulova"):
                     row["nacin_ulova"] = data["nacin_ulova"]
-                if data.get("tariff") and not row.get("tariff"):
-                    row["tariff"] = data["tariff"]
-                if data.get("country_of_origin") and not row.get("country_of_origin"):
-                    row["country_of_origin"] = data["country_of_origin"]
+                # Tarifa in poreklo samo za tuje dobavitelje (ne SI)
+                _intra = _get_intrastat(supplier_name)
+                if _intra.get("country_dispatch","").upper() != "SI":
+                    if data.get("tariff") and not row.get("tariff"):
+                        row["tariff"] = data["tariff"]
+                    if data.get("country_of_origin") and not row.get("country_of_origin"):
+                        row["country_of_origin"] = data["country_of_origin"]
+                else:
+                    row["tariff"]            = ""
+                    row["country_of_origin"] = ""
                 if data.get("needs_split"):
                     row["_needs_split_hint"] = True
                     row["_split_options"]    = data.get("split_options", [])
@@ -861,10 +867,12 @@ def _send_draft(draft: dict) -> tuple:
                     "SerialNumber":            "",
                     "Mass":                    round(qty * mass_conv, 4),
                 }
-                if r.get("tariff"):
-                    sr["CustomsTariffNumber"] = r["tariff"]
-                if r.get("country_of_origin"):
-                    sr["CountryOfOrigin"] = r["country_of_origin"]
+                # Intrastat samo za tuje dobavitelje
+                if is_foreign:
+                    if r.get("tariff"):
+                        sr["CustomsTariffNumber"] = r["tariff"]
+                    if r.get("country_of_origin"):
+                        sr["CountryOfOrigin"] = r["country_of_origin"]
                 stock_rows.append(sr)
         intra    = _get_intrastat(h.get("supplier_name",""))
         is_foreign = intra.get("country_dispatch","SI").upper() != "SI"
