@@ -345,8 +345,20 @@ def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
     all_maps  = _get_effective_mappings()
     mapping   = {}
     for key, val in all_maps.items():
-        core = key.upper().replace("S.R.L.","").replace("D.O.O.","").replace("SRL","").replace("DOO","").strip().rstrip("., ")
-        if core and (core in sup_up or sup_up in key.upper()):
+        key_up = key.upper()
+        # Normaliziraj: odstrani pravne oblike in ločila
+        def _norm(s):
+            import re
+            s = s.upper()
+            for x in ["S.R.L.","D.O.O.","S.P.","SRL","DOO","SP","UNIPERSONALE","D.D."]:
+                s = s.replace(x, " ")
+            s = re.sub(r'[,.\-/\()+]', ' ', s)
+            return set(w for w in s.split() if len(w) > 2)
+        key_words = _norm(key_up)
+        sup_words = _norm(sup_up)
+        # Ujemanje: vsaj 1 skupna beseda daljša od 3 znakov
+        common = key_words & sup_words
+        if common and max(len(w) for w in common) > 3:
             mapping.update(val)
     if not mapping:
         return rows
