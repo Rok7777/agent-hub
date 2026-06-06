@@ -156,6 +156,139 @@ def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
         return {}, str(e)
 
 
+def _tabela_v_tekst(df) -> str:
+    """Pretvori pandas DataFrame v berljivo besedilo za AI."""
+    import pandas as pd
+    # Odstrani povsem prazne vrstice in stolpce
+    df = df.dropna(how="all").dropna(axis=1, how="all")
+    # Zapolni NaN z praznim nizom
+    df = df.fillna("")
+    # Pretvori v markdown tabelo
+    try:
+        return df.to_markdown(index=False)
+    except Exception:
+        return df.to_string(index=False)
+
+
+def _parse_excel_claude(file_bytes: bytes, fname: str) -> tuple:
+    """Prebere Excel cenik z AI. Vrne (dict, napaka)."""
+    try:
+        import pandas as pd
+        import io
+        xf = pd.ExcelFile(io.BytesIO(file_bytes))
+        listi = xf.sheet_names
+
+        # Izberi list — vzami prvega ki ima vsaj 3 vrstice in 2 stolpca
+        izbran_list = None
+        izbran_df   = None
+        for list_ime in listi:
+            df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=list_ime, header=None)
+            df = df.dropna(how="all").dropna(axis=1, how="all")
+            if len(df) >= 3 and len(df.columns) >= 2:
+                # Poskusi zaznati glavo (prva vrstica z besedilom)
+                for hi in range(min(5, len(df))):
+                    row = df.iloc[hi]
+                    non_empty = row.dropna().astype(str).str.strip().str.len() > 0
+                    if non_empty.sum() >= 2:
+                        df.columns = df.iloc[hi]
+                        df = df.iloc[hi+1:].reset_index(drop=True)
+                        break
+                izbran_list = list_ime
+                izbran_df   = df
+                break
+
+        if izbran_df is None:
+            return {}, f"Excel '{fname}' nima ustreznih listov s podatki"
+
+        tabela_txt = _tabela_v_tekst(izbran_df)
+        prompt = _parse_prompt() + f"\n\nDatoteka: {fname} (list: {izbran_list})\n\nVsebina tabele:\n{tabela_txt}"
+
+        import anthropic
+        api_key = _secret("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return {}, "ANTHROPIC_API_KEY ni nastavljen"
+        client = anthropic.Anthropic(api_key=api_key)
+        resp   = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip().replace("```json", "").replace("```", "").strip()
+        return json.loads(raw), None
+    except json.JSONDecodeError as e:
+        return {}, f"JSON napaka: {e}"
+    except ImportError:
+        return {}, "Manjka knjižnica 'openpyxl' — dodaj v requirements.txt"
+    except Exception as e:
+        return {}, str(e)
+
+
+def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
+    """Prebere CSV cenik z AI. Vrne (dict, napaka)."""
+    try:
+        import pandas as pd
+        import io
+
+        # Poskusi različne ločila in enkodinge
+        df = None
+        for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1250"]:
+            for sep in [",", ";", "\t", "|"]:
+                try:
+                    df = pd.read_csv(io.BytesIO(file_bytes), sep=sep, encoding=enc,
+                                     on_bad_lines="skip")
+                    if len(df.columns) >= 2 and len(df) >= 2:
+                        break
+                except Exception:
+                    continue
+            if df is not None and len(df.columns) >= 2:
+                break
+
+        if df is None or len(df.columns) < 2:
+            return {}, f"CSV '{fname}' ni bilo mogoče prebrati"
+
+        df = df.dropna(how="all").dropna(axis=1, how="all").fillna("")
+        tabela_txt = _tabela_v_tekst(df)
+        prompt = _parse_prompt() + f"\n\nDatoteka: {fname}\n\nVsebina tabele:\n{tabela_txt}"
+
+        import anthropic
+        api_key = _secret("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return {}, "ANTHROPIC_API_KEY ni nastavljen"
+        client = anthropic.Anthropic(api_key=api_key)
+        resp   = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = resp.content[0].text.strip().replace("```json", "").replace("```", "").strip()
+        return json.loads(raw), None
+    except json.JSONDecodeError as e:
+        return {}, f"JSON napaka: {e}"
+    except Exception as e:
+        return {}, str(e)
+
+
+def _parse_cenik(file_bytes: bytes, fname: str, ftype: str) -> tuple:
+    """Router — izbere pravi parser glede na tip datoteke."""
+    ft = ftype.lower()
+    if "pdf" in ft:
+        return _parse_pdf_claude(file_bytes)
+    elif "excel" in ft or "spreadsheet" in ft or fname.lower().endswith((".xlsx", ".xls")):
+        return _parse_excel_claude(file_bytes, fname)
+    elif "csv" in ft or fname.lower().endswith(".csv"):
+        return _parse_csv_claude(file_bytes, fname)
+    else:
+        # Poskusi po končnici
+        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+        if ext == "pdf":
+            return _parse_pdf_claude(file_bytes)
+        elif ext in ("xlsx", "xls"):
+            return _parse_excel_claude(file_bytes, fname)
+        elif ext == "csv":
+            return _parse_csv_claude(file_bytes, fname)
+        return {}, f"Neznan format: {fname}"
+
+
 def _poisci_najboljso_ceno(tedni: list, teden_id: str, naziv_query: str) -> list:
     """Za dani artikel poišče vse cene pri vseh dobaviteljih v tednu."""
     teden = next((t for t in tedni if t["id"] == teden_id), None)
@@ -600,24 +733,24 @@ def render():
             # ════════════════════════════════════════
             with tab_dob:
 
-                # Upload PDF
+                # Upload — PDF, Excel, CSV
                 _tid = teden['id']
                 _up_reset_n = st.session_state.get(f"up_reset_{_tid}", 0)
                 upload_key = f"up_{_tid}_{_up_reset_n}"
-                pdfs = st.file_uploader(
-                    "Naloži cenike dobaviteljev (PDF)",
-                    type=["pdf"],
+                nalozene = st.file_uploader(
+                    "Naloži cenike dobaviteljev (PDF, Excel, CSV)",
+                    type=["pdf", "xlsx", "xls", "csv"],
                     accept_multiple_files=True,
                     key=upload_key,
                     label_visibility="collapsed",
                 )
 
-                if pdfs:
+                if nalozene:
                     prog = st.progress(0)
-                    for i, f in enumerate(pdfs):
-                        prog.progress((i + 1) / len(pdfs), text=f"Berem {f.name} …")
-                        pdf_bytes = f.read()
-                        parsed, err = _parse_pdf_claude(pdf_bytes)
+                    for i, f in enumerate(nalozene):
+                        prog.progress((i + 1) / len(nalozene), text=f"Berem {f.name} …")
+                        file_bytes = f.read()
+                        parsed, err = _parse_cenik(file_bytes, f.name, f.type)
                         if err or not parsed:
                             st.error(f"❌ {f.name}: {err or 'AI ni vrnil podatkov'}")
                             continue
