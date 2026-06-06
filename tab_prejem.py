@@ -1095,40 +1095,50 @@ def render():
         border-left: 3px solid #D4A96A !important;
         margin-bottom: 4px !important;
     }
-    /* Zmanjšaj vertikalni razmak med elementi */
-    div[data-testid="stVerticalBlock"] > div {
-        gap: 0.3rem !important;
-    }
-    div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
-        gap: 0.2rem !important;
-    }
-    /* Zmanjšaj padding nad labeli */
-    label[data-testid="stWidgetLabel"] {
+    /* Zmanjšaj vertikalni razmak */
+    div[data-testid="stVerticalBlock"] > div { gap: 0.15rem !important; }
+    div[data-testid="column"] > div[data-testid="stVerticalBlock"] { gap: 0.1rem !important; }
+    /* Labeli manjši, temnejši */
+    label[data-testid="stWidgetLabel"] p {
         margin-bottom: 0px !important;
         padding-bottom: 0px !important;
-        font-size: 0.78rem !important;
-        color: #555 !important;
+        font-size: 0.75rem !important;
+        color: #333 !important;
+        font-weight: 600 !important;
     }
-    /* Poudarjene meje okenc */
+    /* Okenca — večja pisava, temno besedilo, poudarjen rob */
     input[type="text"], input[type="number"] {
-        border: 1.5px solid #C0A882 !important;
+        border: 2px solid #8B6914 !important;
         border-radius: 4px !important;
-        padding: 4px 8px !important;
-        font-size: 0.88rem !important;
+        padding: 3px 7px !important;
+        font-size: 0.92rem !important;
+        color: #111 !important;
+        background: #fff !important;
     }
     input[type="text"]:focus, input[type="number"]:focus {
         border: 2px solid #D4A96A !important;
-        box-shadow: 0 0 0 2px rgba(212,169,106,0.2) !important;
+        box-shadow: 0 0 0 2px rgba(212,169,106,0.25) !important;
     }
-    /* Selectbox poudarjen */
+    input:disabled {
+        background: #f0f0f0 !important;
+        color: #444 !important;
+    }
+    /* Selectbox */
     div[data-baseweb="select"] > div {
-        border: 1.5px solid #C0A882 !important;
+        border: 2px solid #8B6914 !important;
         border-radius: 4px !important;
-        font-size: 0.88rem !important;
+        font-size: 0.92rem !important;
+        color: #111 !important;
     }
-    div[data-baseweb="select"] > div:focus-within {
-        border: 2px solid #D4A96A !important;
+    /* Checkboxes — črni kvadratek */
+    input[type="checkbox"] {
+        width: 18px !important;
+        height: 18px !important;
+        accent-color: #1a1a1a !important;
+        cursor: pointer !important;
     }
+    /* Zmanjšaj padding v columns */
+    div[data-testid="column"] { padding: 0 3px !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -1864,8 +1874,8 @@ def render():
                                 decl_code  = decl.get("item_code","")
                                 decl_label = f"🏷️ {decl_title}" + (f"  `{decl_code}`" if decl_code else "")
                                 with st.expander(decl_label, expanded=False):
-                                    # Vrstica 1: Naziv | Latinski | LOT | Rok | Temp
-                                    dr1 = st.columns([2,2,1.5,1.5,1.5])
+                                    # Vrstica 1: Naziv | Latinski | LOT | Rok uporabe | Temp.
+                                    dr1 = st.columns([3, 3, 1, 1, 1])
                                     with dr1[0]:
                                         decl["naziv_artikla"]  = st.text_input("Naziv", value=decl.get("naziv_artikla",""), key=f"dna_{draft_id}_{di}")
                                     with dr1[1]:
