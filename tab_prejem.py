@@ -1814,48 +1814,52 @@ def render():
                         # ── Posamezne deklaracije ─────────────────────────
                         selected_decls = []
                         for di, decl in enumerate(decls):
-                            d_col1, d_col2, d_col3 = st.columns([0.5, 5, 1.5])
+                            # Checkbox | Naziv+šifra | Kopije (kvadratek)
+                            d_col1, d_col2, d_col3 = st.columns([0.4, 8, 0.6])
                             with d_col1:
                                 d_sel = st.checkbox("", key=f"ds_{draft_id}_{di}")
-                            with d_col2:
-                                # Naslov deklaracije: naziv artikla + Minimax šifra če je znana
-                                decl_title = decl.get('naziv_artikla') or decl.get('item_code','')
-                                decl_code  = decl.get('item_code','')
-                                decl_label = f"🏷️ {decl_title}" + (f"  `{decl_code}`" if decl_code else "")
-                                with st.expander(decl_label, expanded=False):
-                                    dc1, dc2 = st.columns(2)
-                                    with dc1:
-                                        decl["naziv_artikla"]  = st.text_input("Naziv artikla",    value=decl.get("naziv_artikla",""),  key=f"dna_{draft_id}_{di}")
-                                        decl["latinski_naziv"] = st.text_input("Latinski naziv",   value=decl.get("latinski_naziv",""), key=f"dln_{draft_id}_{di}")
-                                        decl["lot_ours"]       = st.text_input("LOT (naš)",        value=decl.get("lot_ours",""),       key=f"dlo_{draft_id}_{di}")
-                                        decl["rok_trajanja"]   = st.text_input("Rok trajanja",     value=decl.get("rok_trajanja",""),   key=f"drt_{draft_id}_{di}")
-                                        decl["temperatura"]    = st.text_input("Hraniti pri temp.",value=decl.get("temperatura", _temperatura(decl.get("naziv_artikla",""))), key=f"dtp_{draft_id}_{di}")
-                                    with dc2:
-                                        fao_codes  = list(FAO_AREAS.keys())
-                                        cur_code   = decl.get("fao_code","")
-                                        fao_idx    = fao_codes.index(cur_code) if cur_code in fao_codes else 0
-                                        sel_fao    = st.selectbox("FAO / Izvor", options=fao_codes,
-                                                        format_func=lambda k: FAO_AREAS.get(k,k),
-                                                        index=fao_idx, key=f"dfao_{draft_id}_{di}")
-                                        decl["fao_code"]    = sel_fao
-                                        decl["fao_naziv"]   = FAO_AREAS.get(sel_fao, sel_fao)
-                                        # Način ulova — prazno pri gojenih
-                                        je_gojen = sel_fao.startswith("GOJ_")
-                                        decl["nacin_ulova"] = st.text_input(
-                                            "Način ulova",
-                                            value="" if je_gojen else decl.get("nacin_ulova",""),
-                                            disabled=je_gojen,
-                                            help="Pri gojenih ribah prazno" if je_gojen else "",
-                                            key=f"dnu_{draft_id}_{di}"
-                                        )
-                                    st.caption(f"Vet. oznaka: {VET_OZNAKA}")
                             with d_col3:
                                 ind_copies = st.number_input(
-                                    "Kopije", min_value=1, max_value=99,
+                                    "N", min_value=1, max_value=99,
                                     value=int(st.session_state.get(f"ic_{draft_id}_{di}", master_copies)),
                                     key=f"ic_{draft_id}_{di}",
                                     label_visibility="collapsed",
                                 )
+                            with d_col2:
+                                decl_title = decl.get("naziv_artikla") or decl.get("item_code","")
+                                decl_code  = decl.get("item_code","")
+                                decl_label = f"🏷️ {decl_title}" + (f"  `{decl_code}`" if decl_code else "")
+                                with st.expander(decl_label, expanded=False):
+                                    # Vrstica 1: Naziv | Latinski | LOT | Rok | Temp
+                                    dr1 = st.columns([2,2,1.5,1.5,1.5])
+                                    with dr1[0]:
+                                        decl["naziv_artikla"]  = st.text_input("Naziv", value=decl.get("naziv_artikla",""), key=f"dna_{draft_id}_{di}")
+                                    with dr1[1]:
+                                        decl["latinski_naziv"] = st.text_input("Latinsko ime", value=decl.get("latinski_naziv",""), key=f"dln_{draft_id}_{di}")
+                                    with dr1[2]:
+                                        decl["lot_ours"]       = st.text_input("LOT", value=decl.get("lot_ours",""), key=f"dlo_{draft_id}_{di}")
+                                    with dr1[3]:
+                                        decl["rok_trajanja"]   = st.text_input("Rok", value=decl.get("rok_trajanja",""), key=f"drt_{draft_id}_{di}")
+                                    with dr1[4]:
+                                        decl["temperatura"]    = st.text_input("Temp.", value=decl.get("temperatura", _temperatura(decl.get("naziv_artikla",""))), key=f"dtp_{draft_id}_{di}")
+                                    # Vrstica 2: FAO/Izvor | Način ulova | Vet. oznaka
+                                    dr2 = st.columns([3, 2, 1.5])
+                                    with dr2[0]:
+                                        fao_codes = list(FAO_AREAS.keys())
+                                        cur_code  = decl.get("fao_code","")
+                                        fao_idx   = fao_codes.index(cur_code) if cur_code in fao_codes else 0
+                                        sel_fao   = st.selectbox("FAO / Izvor", options=fao_codes,
+                                                        format_func=lambda k: FAO_AREAS.get(k,k),
+                                                        index=fao_idx, key=f"dfao_{draft_id}_{di}")
+                                        decl["fao_code"]  = sel_fao
+                                        decl["fao_naziv"] = FAO_AREAS.get(sel_fao, sel_fao)
+                                    with dr2[1]:
+                                        je_gojen = sel_fao.startswith("GOJ_") or sel_fao.startswith("PREL_")
+                                        decl["nacin_ulova"] = st.text_input("Način ulova",
+                                            value="" if je_gojen else decl.get("nacin_ulova",""),
+                                            disabled=je_gojen, key=f"dnu_{draft_id}_{di}")
+                                    with dr2[2]:
+                                        st.text_input("Vet. oz.", value=VET_OZNAKA, disabled=True, key=f"vet_{draft_id}_{di}")
                             if d_sel:
                                 selected_decls.append((di, decl, ind_copies))
 
