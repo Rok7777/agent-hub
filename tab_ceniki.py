@@ -125,7 +125,31 @@ Poreklo: 2-črkovna ISO koda (HR, IT, NO, TR, GR, SI, ES, MA...)
 Če ni navedeno, sklepaj po dobavitelju in vrsti ribe."""
 
 
-def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
+def _fmt_datum(d: str) -> str:
+    """Pretvori YYYY-MM-DD v DD.MM.LLLL za prikaz. Neznane formate vrne nespremenjene."""
+    if not d:
+        return d
+    try:
+        return datetime.strptime(d[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+    except Exception:
+        return d
+
+
+def _parse_datum_input(d) -> str:
+    """Pretvori date objekt ali niz v YYYY-MM-DD za shranjevanje."""
+    if hasattr(d, "strftime"):
+        return d.strftime("%Y-%m-%d")
+    if isinstance(d, str):
+        # Poskusi DD.MM.YYYY → YYYY-MM-DD
+        for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(d.strip(), fmt).strftime("%Y-%m-%d")
+            except Exception:
+                continue
+    return str(d)
+
+
+
     """Prebere PDF cenik z Claude Vision. Vrne (dict, napaka)."""
     try:
         import anthropic
@@ -464,7 +488,7 @@ def _render_analiza(tedni: list, trenutni_idx: int, teden_id: str):
     hist_labeli = []
     for t_idx in pretekli_idx:
         t = tedni[t_idx]
-        hist_labeli.append(t.get("datum_od", f"-{trenutni_idx - t_idx}t")[:10])
+        hist_labeli.append(_fmt_datum(t.get("datum_od", f"-{trenutni_idx - t_idx}t")))
     # Dopolni z "—" če je manj kot N tednov
     while len(hist_labeli) < N:
         hist_labeli.insert(0, "—")
@@ -612,7 +636,7 @@ def _render_analiza(tedni: list, trenutni_idx: int, teden_id: str):
 
             # ── Gumb: Kopiraj za WhatsApp/email ───────────────────────────
             lines = [
-                f"🐟 TEDNA AKCIJA — POCENI RIBE ({tedni[trenutni_idx].get('datum_od','?')} – {tedni[trenutni_idx].get('datum_do','?')})",
+                f"🐟 TEDNA AKCIJA — POCENI RIBE ({_fmt_datum(tedni[trenutni_idx].get('datum_od','?'))} – {_fmt_datum(tedni[trenutni_idx].get('datum_do','?'))})",
                 "",
             ]
             for d, t in push_artikli:
@@ -679,7 +703,7 @@ def render():
             d_do = st.date_input("Do", value=date.today(), key="nt_do")
 
         if st.button("➕ Ustvari nov teden", use_container_width=True, key="btn_nov_teden"):
-            nov = _nov_teden(str(d_od), str(d_do))
+            nov = _nov_teden(_parse_datum_input(d_od), _parse_datum_input(d_do))
             tedni.append(nov)
             tedni.sort(key=lambda t: t.get("datum_od", ""))
             st.session_state["ceniki_tedni"] = tedni
@@ -700,7 +724,7 @@ def render():
     for t_idx, teden in enumerate(tedni):
         st_info = _prestej_artiklov(teden)
         teden_label = (
-            f"📅 {teden['datum_od']} – {teden['datum_do']}  ·  "
+            f"📅 {_fmt_datum(teden['datum_od'])} – {_fmt_datum(teden['datum_do'])}  ·  "
             f"{len(teden.get('ceniki_dob', []))} dobaviteljev  ·  "
             f"{st_info['dobavitelji']} artiklov  ·  "
             f"HIT: {st_info.get('HIT',0)}  HoReCa: {st_info.get('HoReCa',0)}  Ostali: {st_info.get('Ostali',0)}"
@@ -717,7 +741,7 @@ def render():
                     _save_ceniki(tedni)
                     st.rerun()
             with col_info:
-                st.caption(f"ID: {teden['id']}  ·  Ustvarjen: {teden.get('ustvarjen','?')}")
+                st.caption(f"ID: {teden['id']}  ·  Ustvarjen: {_fmt_datum(teden.get('ustvarjen','?'))}")
 
             # ── Tabs ────────────────────────────────────────────────────────
             tab_dob, tab_hit, tab_horeca, tab_ostali, tab_analiza = st.tabs([
@@ -788,7 +812,7 @@ def render():
                     for c_idx, cenik in enumerate(teden["ceniki_dob"]):
                         c_label = (
                             f"🏭 **{cenik['dobavitelj']}**  ·  "
-                            f"{cenik.get('datum','?')}  ·  "
+                            f"{_fmt_datum(cenik.get('datum','?'))}  ·  "
                             f"{len(cenik.get('artikli',[]))} artiklov  ·  "
                             f"{cenik.get('fname','')}"
                         )
