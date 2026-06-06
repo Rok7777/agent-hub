@@ -994,6 +994,7 @@ def _art_status(row: dict) -> tuple:
     data_ok   = (
         float(row.get("quantity") or 0) > 0 and
         float(row.get("price") or 0) > 0 and
+        float(row.get("selling_price") or 0) > 0 and
         bool(row.get("batch_number"))
     )
     return matched, (matched and data_ok)
@@ -1050,19 +1051,18 @@ def render():
         font-weight: 500 !important;
         line-height: 1.5 !important;
     }
-    /* Svetlo bež ozadje za osnutke dobavnic */
-    [data-testid="stExpander"] > div[data-testid="stExpanderDetails"] {
+    /* Bež ozadje za vse expander vsebine */
+    details > div {
         background-color: #FFF8F0 !important;
-        border-radius: 6px !important;
-        padding: 8px !important;
+        border-radius: 0 0 6px 6px !important;
     }
-    /* Belo ozadje za artikel-expander znotraj */
-    [data-testid="stExpander"] [data-testid="stExpander"] > div[data-testid="stExpanderDetails"] {
+    /* Belo ozadje za vnorjene expanderje (artikli) */
+    details details > div {
         background-color: #FFFFFF !important;
         border: 1px solid #E8DDD0 !important;
     }
-    /* Rob osnutka */
-    [data-testid="stExpander"] {
+    /* Zlati levi rob za osnutke */
+    details {
         border-left: 3px solid #D4A96A !important;
         margin-bottom: 6px !important;
     }
@@ -1633,16 +1633,20 @@ def render():
                                                     index=["kg","kos","zaboj","l","kom"].index(row.get("unit","kg")) if row.get("unit","kg") in ["kg","kos","zaboj","l","kom"] else 0,
                                                     key=f"unit_{draft_id}_{idx}")
                                 with r1c3:
-                                    f_price    = st.number_input(_flabel("NC €/enoto", row.get("price")), value=float(row.get("price") or 0), min_value=0.0, step=0.0001, format="%.4f", key=f"price_{draft_id}_{idx}")
+                                    _nc_disp = st.session_state.get(f"price_{draft_id}_{idx}", row.get("price") or 0)
+                                    f_price    = st.number_input(_flabel("NC €/enoto", _nc_disp), value=float(row.get("price") or 0), min_value=0.0, step=0.0001, format="%.4f", key=f"price_{draft_id}_{idx}")
                                 with r1c4:
                                     _disc_val  = float(row.get("discount_pct") or 0)
                                     _nv        = round(float(row.get("quantity") or 0) * float(row.get("price") or 0) * (1 - _disc_val/100), 2)
-                                    st.text_input("NV €", value=f"{_nv:.2f}", disabled=True, key=f"nv_{draft_id}_{idx}")
+                                    st.caption("NV €")
+                                    st.markdown(f"**{_nv:.2f} €**")
                                 with r1c5:
-                                    f_sell     = st.number_input(_flabel("PC €/enoto", row.get("selling_price")), value=float(row.get("selling_price") or 0), min_value=0.0, step=0.0001, format="%.4f", key=f"sell_{draft_id}_{idx}")
+                                    _pc_disp = st.session_state.get(f"sell_{draft_id}_{idx}", row.get("selling_price") or 0)
+                                    f_sell     = st.number_input(_flabel("PC €/enoto", _pc_disp), value=float(row.get("selling_price") or 0), min_value=0.0, step=0.0001, format="%.4f", key=f"sell_{draft_id}_{idx}")
                                 with r1c6:
                                     _pv        = round(float(row.get("quantity") or 0) * float(row.get("selling_price") or 0), 2)
-                                    st.text_input("PV €", value=f"{_pv:.2f}", disabled=True, key=f"pv_{draft_id}_{idx}")
+                                    st.caption("PV €")
+                                    st.markdown(f"**{_pv:.2f} €**")
 
                                 # ── Vrstica 1b: Marža (uredljiva → PC se izračuna ob Potrdi) ──
                                 mz1, mz2 = st.columns([2, 9.5])
