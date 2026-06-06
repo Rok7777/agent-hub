@@ -712,6 +712,18 @@ def render():
 
         st.divider()
         st.caption(f"Skupaj tednov: {len(tedni)}")
+        if tedni:
+            st.markdown("**Tedni:**")
+            for t in tedni:
+                sc1, sc2 = st.columns([5, 1])
+                with sc1:
+                    st.caption(f"📅 {_fmt_datum(t['datum_od'])} – {_fmt_datum(t['datum_do'])}")
+                with sc2:
+                    if st.button("✕", key=f"sb_del_{t['id']}", help="Izbriši teden"):
+                        tedni = [x for x in tedni if x["id"] != t["id"]]
+                        st.session_state["ceniki_tedni"] = tedni
+                        _save_ceniki(tedni)
+                        st.rerun()
 
     # ═══════════════════════════════════════
     # GLAVNI PRIKAZ
@@ -732,16 +744,8 @@ def render():
 
         with st.expander(teden_label, expanded=(t_idx == len(tedni) - 1)):
 
-            # Gumb za brisanje tedna
-            col_del, col_info = st.columns([1, 6])
-            with col_del:
-                if st.button("🗑️ Izbriši teden", key=f"del_teden_{teden['id']}"):
-                    tedni = [t for t in tedni if t["id"] != teden["id"]]
-                    st.session_state["ceniki_tedni"] = tedni
-                    _save_ceniki(tedni)
-                    st.rerun()
-            with col_info:
-                st.caption(f"ID: {teden['id']}  ·  Ustvarjen: {_fmt_datum(teden.get('ustvarjen','?'))}")
+            # Info vrstica
+            st.caption(f"ID: {teden['id']}  ·  Ustvarjen: {_fmt_datum(teden.get('ustvarjen','?'))}")
 
             # ── Tabs ────────────────────────────────────────────────────────
             tab_dob, tab_hit, tab_horeca, tab_ostali, tab_analiza = st.tabs([
