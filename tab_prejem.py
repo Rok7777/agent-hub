@@ -643,9 +643,14 @@ def _kategorija_temperatura(kategorija: str) -> str:
     if "zamrz" in k: return "DO -18°C"
     return "DO +4°C"
 
+# Dobavitelji pri katerih so artikli predelani proizvodi → PREL_SI
+_PREL_SI_SUPPLIERS = {"FORMIO", "CERKVENIK"}
+
 def _build_declarations(header: dict, rows: list) -> list:
     """Kreira deklaracije — ena na unikaten artikel+lot."""
     lot      = header.get("lot_number","")
+    sup_up   = (header.get("supplier_name","") or "").upper()
+    is_prel  = any(s in sup_up for s in _PREL_SI_SUPPLIERS)
     seen     = set()
     decls    = []
     for r in rows:
@@ -654,14 +659,18 @@ def _build_declarations(header: dict, rows: list) -> list:
             continue
         seen.add(code)
         item_name = r.get("item_name","") or code
+        # Za predelane proizvode (Formio, Cerkvenik): default FAO = PREL_SI
+        fao_code = r.get("fao_code","")
+        if not fao_code and is_prel:
+            fao_code = "PREL_SI"
         decls.append({
             "item_code":       code,
             "naziv_artikla":   item_name,
             "latinski_naziv":  r.get("latinski_naziv",""),
             "lot_ours":        r.get("batch_number","") or lot,
             "lot_supplier":    r.get("lot_dobavitelja",""),
-            "fao_code":        r.get("fao_code",""),
-            "fao_naziv":       _fao_naziv(r.get("fao_code","")),
+            "fao_code":        fao_code,
+            "fao_naziv":       _fao_naziv(fao_code),
             "nacin_ulova":     r.get("nacin_ulova",""),
             "rok_trajanja":    r.get("rok_trajanja",""),
             "temperatura":     _temperatura(item_name),
@@ -1519,7 +1528,7 @@ def render():
                 with hc5:
                     h["datum_izlova"]    = st.text_input("Datum izlova", value=h.get("datum_izlova",""), key=f"izlov_{draft_id}")
                 with hc6:
-                    st.text_input("🏷️ Naš LOT", value=h.get("lot_number","?"), disabled=True, key=f"lot_disp_{draft_id}")
+                    h["lot_number"] = st.text_input("🏷️ Naš LOT", value=h.get("lot_number","?"), key=f"lot_disp_{draft_id}")
                 with hc7:
                     st.text_input("Skladišče", value="VP-CEN", disabled=True, key=f"wh_disp_{draft_id}")
 
@@ -1752,22 +1761,7 @@ def render():
                                     _save_drafts(drafts)
                                     st.rerun()
 
-                            # ➕ Dodaj vrstico (za split skupino)
-                            if row.get("_split_parent"):
-                                if st.button("➕ Dodaj vrstico", key=f"add_row_{draft_id}_{idx}",
-                                             help="Dodaj še eno vrstico v to split skupino"):
-                                    nr = dict(row)
-                                    nr.update({
-                                        "item_code": "",
-                                        "item_name": "",
-                                        "quantity":  0.0,
-                                        "_split_parent": True,
-                                        "_split_group": row.get("_split_group", idx),
-                                    })
-                                    drafts[draft_id]["rows"].insert(idx + 1, nr)
-                                    st.session_state["prejem_drafts"] = drafts
-                                    _save_drafts(drafts)
-                                    st.rerun()
+
 
                     # Skupna vrednost
                     if draft["rows"]:
