@@ -1035,6 +1035,23 @@ def _search_articles(query: str, options: list) -> list:
 
 # ─── RENDER ───────────────────────────────────────────────────────────────────
 
+def _calc_pc(draft_id, idx):
+    """Callback: NC ali marža spremenjena → preračunaj PC."""
+    nc   = float(st.session_state.get(f"price_{draft_id}_{idx}") or 0)
+    disc = float(st.session_state.get(f"disc_{draft_id}_{idx}") or 0)
+    mz   = float(st.session_state.get(f"marza_{draft_id}_{idx}") or 0)
+    nc_c = nc * (1 - disc / 100)
+    st.session_state[f"sell_{draft_id}_{idx}"] = round(nc_c * (1 + mz / 100), 4)
+
+def _calc_marza(draft_id, idx):
+    """Callback: PC spremenjen → preračunaj marža%."""
+    nc   = float(st.session_state.get(f"price_{draft_id}_{idx}") or 0)
+    disc = float(st.session_state.get(f"disc_{draft_id}_{idx}") or 0)
+    pc   = float(st.session_state.get(f"sell_{draft_id}_{idx}") or 0)
+    nc_c = nc * (1 - disc / 100)
+    if nc_c > 0:
+        st.session_state[f"marza_{draft_id}_{idx}"] = round((pc - nc_c) / nc_c * 100, 2)
+
 def render():
     st.caption("Skeniranje dobavnic dobavitelja → P/L osnutek v VP-CEN + deklaracije")
 
@@ -1622,50 +1639,66 @@ def render():
                                 label_visibility="collapsed",
                             )
 
+                            # ── Cenovni vnosi ZUNAJ forme (real-time izračun) ────
+                            r1c1,r1c2,r1c3,r1c4,r1c5,r1c6 = st.columns([2,1.5,2,2,2,2])
+                            with r1c1:
+                                f_qty  = st.number_input(_flabel("Količina", row.get("quantity")), value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
+                            with r1c2:
+                                _me_opts = ["kg","kos","zaboj","l","kom"]
+                                f_unit = st.selectbox(_flabel("ME", row.get("unit")), options=_me_opts,
+                                            index=_me_opts.index(row.get("unit","kg")) if row.get("unit","kg") in _me_opts else 0,
+                                            key=f"unit_{draft_id}_{idx}")
+                            with r1c3:
+                                _nc_disp = st.session_state.get(f"price_{draft_id}_{idx}", row.get("price") or 0)
+                                f_price = st.number_input(_flabel("NC €/enoto", _nc_disp),
+                                            value=float(row.get("price") or 0), min_value=0.0, step=0.0001, format="%.4f",
+                                            key=f"price_{draft_id}_{idx}",
+                                            on_change=_calc_pc, args=(draft_id, idx))
+                            with r1c4:
+                                _nc_v  = float(st.session_state.get(f"price_{draft_id}_{idx}") or row.get("price") or 0)
+                                _dc_v  = float(st.session_state.get(f"disc_{draft_id}_{idx}") or row.get("discount_pct") or 0)
+                                _nv    = round(f_qty * _nc_v * (1 - _dc_v/100), 2)
+                                st.caption("NV €")
+                                st.markdown(f"**{_nv:.2f} €**")
+                            with r1c5:
+                                _pc_disp = st.session_state.get(f"sell_{draft_id}_{idx}", row.get("selling_price") or 0)
+                                f_sell = st.number_input(_flabel("PC €/enoto", _pc_disp),
+                                            value=float(row.get("selling_price") or 0), min_value=0.0, step=0.0001, format="%.4f",
+                                            key=f"sell_{draft_id}_{idx}",
+                                            on_change=_calc_marza, args=(draft_id, idx))
+                            with r1c6:
+                                _pc_v  = float(st.session_state.get(f"sell_{draft_id}_{idx}") or row.get("selling_price") or 0)
+                                _pv    = round(f_qty * _pc_v, 2)
+                                st.caption("PV €")
+                                st.markdown(f"**{_pv:.2f} €**")
+
+                            # ── Marža + % popusta ZUNAJ forme ───────────────────────
+                            mzc1, mzc2, mzc3 = st.columns([2, 2, 7.5])
+                            with mzc1:
+                                _nc_c    = float(st.session_state.get(f"price_{draft_id}_{idx}") or row.get("price") or 0)
+                                _dc_c    = float(st.session_state.get(f"disc_{draft_id}_{idx}") or row.get("discount_pct") or 0)
+                                _pc_c    = float(st.session_state.get(f"sell_{draft_id}_{idx}") or row.get("selling_price") or 0)
+                                _nc_net  = _nc_c * (1 - _dc_c/100)
+                                _mz_def  = round((_pc_c - _nc_net)/_nc_net*100, 2) if _nc_net > 0 and _pc_c > 0 else float(row.get("marza_pct") or 0)
+                                f_marza  = st.number_input("📊 Marža %", value=_mz_def,
+                                            min_value=0.0, max_value=500.0, step=0.1, format="%.1f",
+                                            key=f"marza_{draft_id}_{idx}",
+                                            on_change=_calc_pc, args=(draft_id, idx))
+                            with mzc2:
+                                f_discount = st.number_input("% popusta", value=float(row.get("discount_pct") or 0),
+                                            min_value=0.0, max_value=100.0, step=0.01, format="%.2f",
+                                            key=f"disc_{draft_id}_{idx}",
+                                            on_change=_calc_pc, args=(draft_id, idx))
+
                             with st.form(key=f"form_art_{draft_id}_{idx}"):
-                                # ── Vrstica 1: Količina | ME | NC | NV | PC | PV ────────
-                                r1c1,r1c2,r1c3,r1c4,r1c5,r1c6 = st.columns([2,1.5,2,2,2,2])
-                                with r1c1:
-                                    f_qty      = st.number_input(_flabel("Količina", row.get("quantity")), value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
-                                with r1c2:
-                                    f_unit     = st.selectbox(_flabel("ME", row.get("unit")),
-                                                    options=["kg","kos","zaboj","l","kom"],
-                                                    index=["kg","kos","zaboj","l","kom"].index(row.get("unit","kg")) if row.get("unit","kg") in ["kg","kos","zaboj","l","kom"] else 0,
-                                                    key=f"unit_{draft_id}_{idx}")
-                                with r1c3:
-                                    _nc_disp = st.session_state.get(f"price_{draft_id}_{idx}", row.get("price") or 0)
-                                    f_price    = st.number_input(_flabel("NC €/enoto", _nc_disp), value=float(row.get("price") or 0), min_value=0.0, step=0.0001, format="%.4f", key=f"price_{draft_id}_{idx}")
-                                with r1c4:
-                                    _disc_val  = float(row.get("discount_pct") or 0)
-                                    _nv        = round(float(row.get("quantity") or 0) * float(row.get("price") or 0) * (1 - _disc_val/100), 2)
-                                    st.caption("NV €")
-                                    st.markdown(f"**{_nv:.2f} €**")
-                                with r1c5:
-                                    _pc_disp = st.session_state.get(f"sell_{draft_id}_{idx}", row.get("selling_price") or 0)
-                                    f_sell     = st.number_input(_flabel("PC €/enoto", _pc_disp), value=float(row.get("selling_price") or 0), min_value=0.0, step=0.0001, format="%.4f", key=f"sell_{draft_id}_{idx}")
-                                with r1c6:
-                                    _pv        = round(float(row.get("quantity") or 0) * float(row.get("selling_price") or 0), 2)
-                                    st.caption("PV €")
-                                    st.markdown(f"**{_pv:.2f} €**")
-
-                                # ── Vrstica 1b: Marža (uredljiva → PC se izračuna ob Potrdi) ──
-                                mz1, mz2 = st.columns([2, 9.5])
-                                with mz1:
-                                    _nc_disc_cur = float(row.get("price") or 0) * (1 - float(row.get("discount_pct") or 0) / 100)
-                                    _pc_cur      = float(row.get("selling_price") or 0)
-                                    _marza_def   = round((_pc_cur - _nc_disc_cur) / _nc_disc_cur * 100, 2) if _nc_disc_cur > 0 and _pc_cur > 0 else float(row.get("marza_pct") or 0)
-                                    f_marza      = st.number_input("📊 Marža %", value=_marza_def, min_value=0.0, max_value=500.0, step=0.1, format="%.1f", key=f"marza_{draft_id}_{idx}", help="Vnesite marža % → PC se izračuna ob Potrdi")
-
-                                # ── Vrstica 2: % popusta | Serija | Država | Tarifa ───
-                                r2c1,r2c2,r2c3,r2c4 = st.columns(4)
+                                # ── Serija | Država | Tarifa ─────────────────────────
+                                r2c1,r2c2,r2c3 = st.columns(3)
                                 with r2c1:
-                                    f_discount = st.number_input("% popusta", value=float(row.get("discount_pct") or 0), min_value=0.0, max_value=100.0, step=0.01, format="%.2f", key=f"disc_{draft_id}_{idx}")
+                                    f_batch   = st.text_input(_flabel("Serija / Lot", row.get("batch_number")), value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
                                 with r2c2:
-                                    f_batch    = st.text_input(_flabel("Serija / Lot", row.get("batch_number")), value=row.get("batch_number",""), key=f"batch_{draft_id}_{idx}")
+                                    f_country = st.text_input(_flabel("Država (2 črkoven)", row.get("country_of_origin")), value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
                                 with r2c3:
-                                    f_country  = st.text_input(_flabel("Država (2 črkoven)", row.get("country_of_origin")), value=row.get("country_of_origin",""), key=f"cntry_{draft_id}_{idx}")
-                                with r2c4:
-                                    f_tariff   = st.text_input(_flabel("Carinska tarifa", row.get("tariff")), value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
+                                    f_tariff  = st.text_input(_flabel("Carinska tarifa", row.get("tariff")), value=row.get("tariff",""), key=f"tariff_{draft_id}_{idx}")
                                 # ── Gumbi ────────────────────────────────
                                 gb1, gb2 = st.columns(2)
                                 with gb1:
@@ -1680,20 +1713,17 @@ def render():
                                         name_part = sel_art[len(code):].strip()
                                         row["item_code"] = code
                                         row["item_name"] = name_part
-                                    row["quantity"]          = f_qty
-                                    row["unit"]              = f_unit
-                                    row["price"]             = f_price
-                                    row["discount_pct"]      = f_discount
+                                    # Preberi vrednosti iz session_state (polja so zunaj forme)
+                                    _ss = st.session_state
+                                    row["quantity"]          = float(_ss.get(f"qty_{draft_id}_{idx}") or f_qty)
+                                    row["unit"]              = _ss.get(f"unit_{draft_id}_{idx}", f_unit)
+                                    row["price"]             = float(_ss.get(f"price_{draft_id}_{idx}") or 0)
+                                    row["discount_pct"]      = float(_ss.get(f"disc_{draft_id}_{idx}") or 0)
+                                    row["selling_price"]     = float(_ss.get(f"sell_{draft_id}_{idx}") or 0)
+                                    row["marza_pct"]         = float(_ss.get(f"marza_{draft_id}_{idx}") or 0)
                                     row["batch_number"]      = f_batch
                                     row["country_of_origin"] = f_country
                                     row["tariff"]            = f_tariff
-                                    row["marza_pct"]         = f_marza
-                                    # Izračun PC iz marže če PC=0 ali je marža spremenjena
-                                    _nc_clean = f_price * (1 - f_discount / 100) if f_discount else f_price
-                                    if f_marza > 0 and _nc_clean > 0:
-                                        row["selling_price"] = round(_nc_clean * (1 + f_marza / 100), 4)
-                                    else:
-                                        row["selling_price"] = f_sell
                                     # Posodobi snapshot
                                     st.session_state[orig_key] = {k:v for k,v in row.items() if not k.startswith("_")}
                                     # Shrani cene za prihodnje prejeme
