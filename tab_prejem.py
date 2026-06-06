@@ -91,6 +91,14 @@ FAO_AREAS = {
     "87":      "87 – Jugovzhodni Tihi ocean",
     # Sladkovoda
     "05":      "05 – Sladkovodna tla Evrope",
+    # Predelani ribiški proizvodi (bakala, namazi, konzerve...)
+    "PREL_SI": "Predelano v Sloveniji",
+    "PREL_IT": "Predelano v Italiji",
+    "PREL_HR": "Predelano v Hrvaški",
+    "PREL_ES": "Predelano v Španiji",
+    "PREL_PT": "Predelano v Portugalski",
+    "PREL_NO": "Predelano v Norveški",
+    "PREL_FR": "Predelano v Franciji",
 }
 
 def _fao_naziv(code: str) -> str:
@@ -1473,8 +1481,12 @@ def render():
                                     if float(row.get("price") or 0) == 0:
                                         row["price"]        = _cached.get("price", 0)
                                         row["discount_pct"] = _cached.get("discount_pct", 0)
+                                        # Sinhroniziraj session_state widget
+                                        st.session_state[f"price_{draft_id}_{idx}"] = float(_cached.get("price", 0))
+                                        st.session_state[f"disc_{draft_id}_{idx}"]  = float(_cached.get("discount_pct", 0))
                                     if float(row.get("selling_price") or 0) == 0:
                                         row["selling_price"] = _cached.get("selling_price", 0)
+                                        st.session_state[f"sell_{draft_id}_{idx}"] = float(_cached.get("selling_price", 0))
                                     st.session_state["prejem_drafts"] = drafts
 
                             # Split UI za artikel ki potrebuje delitev
