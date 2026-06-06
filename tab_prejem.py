@@ -988,14 +988,17 @@ def _flabel(label: str, val) -> str:
         return f"🔴 {label}"
     return f"✅ {label}"
 
-def _art_status(row: dict) -> tuple:
+def _art_status(row: dict, supplier_name: str = "") -> tuple:
     """Vrne (ujemanje_ok, podatki_ok) za prikaz dveh statusnih ikon."""
-    matched   = bool(row.get("item_code")) or bool(row.get("_needs_split_hint"))
-    data_ok   = (
+    matched  = bool(row.get("item_code")) or bool(row.get("_needs_split_hint"))
+    intra    = _get_intrastat(supplier_name)
+    is_foreign = intra.get("country_dispatch","SI").upper() != "SI"
+    data_ok  = (
         float(row.get("quantity") or 0) > 0 and
         float(row.get("price") or 0) > 0 and
         float(row.get("selling_price") or 0) > 0 and
-        bool(row.get("batch_number"))
+        bool(row.get("batch_number")) and
+        (bool(row.get("country_of_origin")) and bool(row.get("tariff")) if is_foreign else True)
     )
     return matched, (matched and data_ok)
 
@@ -1541,7 +1544,7 @@ def render():
                                     drafts[draft_id]["rows"][idx] = row
                                     _save_drafts(drafts)
 
-                        matched, data_ok = _art_status(row)
+                        matched, data_ok = _art_status(row, draft["header"].get("supplier_name",""))
                         s1       = "🟢" if matched  else "🔴"
                         s2       = "🟢" if data_ok  else "🔴"
                         qty_disp = float(row.get("quantity") or 0)
