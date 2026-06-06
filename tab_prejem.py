@@ -193,10 +193,29 @@ def _import_mappings_csv(csv_text: str) -> tuple:
             }
             if sup not in extra:
                 extra[sup] = {}
-            extra[sup][kw] = entry
+            # Če keyword že obstaja z drugim item_code → pretvori v split
+            existing = extra[sup].get(kw)
+            if existing and existing.get("item_code") and existing["item_code"] != code:
+                if not existing.get("needs_split"):
+                    extra[sup][kw] = {
+                        "item_code": None,
+                        "item_name": f"⚠️ Razdeliti: {existing['item_code']} / {code}",
+                        "needs_split": True,
+                        "split_options": [
+                            {"item_code": existing["item_code"], "item_name": existing.get("item_name","")},
+                            {"item_code": code, "item_name": name},
+                        ],
+                        "tariff": tariff or existing.get("tariff",""),
+                        "country_of_origin": country or existing.get("country_of_origin",""),
+                    }
+                else:
+                    # Dodaj v obstoječe split opcije
+                    extra[sup][kw]["split_options"].append({"item_code": code, "item_name": name})
+            else:
+                extra[sup][kw] = entry
             if sup not in SUPPLIER_ITEM_MAPPINGS:
                 SUPPLIER_ITEM_MAPPINGS[sup] = {}
-            SUPPLIER_ITEM_MAPPINGS[sup][kw] = entry
+            SUPPLIER_ITEM_MAPPINGS[sup][kw] = extra[sup][kw]
 
             # _DEFAULT_PRICES
             if code and nc > 0:
@@ -1455,6 +1474,44 @@ def render():
                                     if float(row.get("selling_price") or 0) == 0:
                                         row["selling_price"] = _cached.get("selling_price", 0)
                                     st.session_state["prejem_drafts"] = drafts
+
+                            # Split UI za artikel ki potrebuje delitev
+                            if row.get("_needs_split_hint") and not row.get("_split"):
+                                split_opts = row.get("_split_options", [])
+                                orig_qty   = float(row.get("quantity") or 0)
+                                st.info("⚡ Razdelite količino na dva artikla:")
+                                s_cols = st.columns(len(split_opts))
+                                split_qtys = []
+                                for si, opt in enumerate(split_opts):
+                                    with s_cols[si]:
+                                        sq = st.number_input(
+                                            f"{opt['item_code']}",
+                                            value=0.0, min_value=0.0, step=0.001, format="%.3f",
+                                            key=f"splitq_{draft_id}_{idx}_{si}"
+                                        )
+                                        split_qtys.append(sq)
+                                qty_sum = round(sum(split_qtys), 3)
+                                st.caption(f"Skupaj: {qty_sum} / {orig_qty} kg")
+                                if abs(qty_sum - orig_qty) < 0.001 and qty_sum > 0:
+                                    if st.button("✅ Potrdi delitev", key=f"split_ok_{draft_id}_{idx}"):
+                                        split_rows = []
+                                        for si, opt in enumerate(split_opts):
+                                            if split_qtys[si] > 0:
+                                                nr = dict(row)
+                                                nr.update({"item_code": opt["item_code"],
+                                                           "item_name": opt["item_name"],
+                                                           "quantity":  split_qtys[si],
+                                                           "_split_child": True})
+                                                split_rows.append(nr)
+                                        row["_split"]      = True
+                                        row["_split_rows"] = split_rows
+                                        row["_orig_qty"]   = orig_qty
+                                        drafts[draft_id]["rows"][idx] = row
+                                        st.session_state["prejem_drafts"] = drafts
+                                        _save_drafts(drafts)
+                                        st.rerun()
+                                elif qty_sum > 0:
+                                    st.warning(f"Vsota {qty_sum} ≠ skupaj {orig_qty} kg")
 
                             with st.form(key=f"form_art_{draft_id}_{idx}"):
 
