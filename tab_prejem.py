@@ -964,7 +964,7 @@ def _art_status(row: dict) -> tuple:
 def _get_article_options() -> list:
     """Vrne vse znane artikle iz mappingov za iskanje."""
     articles, seen = [], set()
-    for sup_mapping in SUPPLIER_ITEM_MAPPINGS.values():
+    for sup_mapping in _get_effective_mappings().values():
         for keyword, data in sup_mapping.items():
             for opt in data.get("split_options", []):
                 if opt["item_code"] not in seen:
@@ -1519,43 +1519,32 @@ def render():
                                         st.session_state[f"sell_{draft_id}_{idx}"] = float(_cached.get("selling_price", 0))
                                     st.session_state["prejem_drafts"] = drafts
 
-                            # Split UI za artikel ki potrebuje delitev
+                            # Split UI — razširi v dve normalni vrstici z iskalnikoma
                             if row.get("_needs_split_hint") and not row.get("_split"):
                                 split_opts = row.get("_split_options", [])
                                 orig_qty   = float(row.get("quantity") or 0)
-                                st.info("⚡ Razdelite količino na dva artikla:")
-                                s_cols = st.columns(len(split_opts))
-                                split_qtys = []
-                                for si, opt in enumerate(split_opts):
-                                    with s_cols[si]:
-                                        sq = st.number_input(
-                                            f"{opt['item_code']}",
-                                            value=0.0, min_value=0.0, step=0.001, format="%.3f",
-                                            key=f"splitq_{draft_id}_{idx}_{si}"
-                                        )
-                                        split_qtys.append(sq)
-                                qty_sum = round(sum(split_qtys), 3)
-                                st.caption(f"Skupaj: {qty_sum} / {orig_qty} kg")
-                                if abs(qty_sum - orig_qty) < 0.001 and qty_sum > 0:
-                                    if st.button("✅ Potrdi delitev", key=f"split_ok_{draft_id}_{idx}"):
-                                        split_rows = []
-                                        for si, opt in enumerate(split_opts):
-                                            if split_qtys[si] > 0:
-                                                nr = dict(row)
-                                                nr.update({"item_code": opt["item_code"],
-                                                           "item_name": opt["item_name"],
-                                                           "quantity":  split_qtys[si],
-                                                           "_split_child": True})
-                                                split_rows.append(nr)
-                                        row["_split"]      = True
-                                        row["_split_rows"] = split_rows
-                                        row["_orig_qty"]   = orig_qty
-                                        drafts[draft_id]["rows"][idx] = row
-                                        st.session_state["prejem_drafts"] = drafts
-                                        _save_drafts(drafts)
-                                        st.rerun()
-                                elif qty_sum > 0:
-                                    st.warning(f"Vsota {qty_sum} ≠ skupaj {orig_qty} kg")
+                                st.info(f"⚡ Razdelite {orig_qty} kg na {len(split_opts)} artikla — izpolnite spodaj in potrdite:")
+                                if st.button("✅ Ustvari vrstice za delitev", key=f"split_create_{draft_id}_{idx}", type="primary"):
+                                    # Zamenjaj originalno vrstico z dvema sub-vrsticama
+                                    new_rows = []
+                                    for si, opt in enumerate(split_opts):
+                                        nr = dict(row)
+                                        nr.update({
+                                            "item_code":      opt["item_code"],
+                                            "item_name":      opt.get("item_name",""),
+                                            "quantity":       orig_qty if si == 0 else 0.0,
+                                            "_needs_split_hint": False,
+                                            "_split_parent":  True,
+                                            "_split_group":   idx,
+                                        })
+                                        new_rows.append(nr)
+                                    # Vstavi novi vrstici na mesto originalne
+                                    before = drafts[draft_id]["rows"][:idx]
+                                    after  = drafts[draft_id]["rows"][idx+1:]
+                                    drafts[draft_id]["rows"] = before + new_rows + after
+                                    st.session_state["prejem_drafts"] = drafts
+                                    _save_drafts(drafts)
+                                    st.rerun()
 
                             with st.form(key=f"form_art_{draft_id}_{idx}"):
 
@@ -1587,7 +1576,10 @@ def render():
                                 cc1,cc2,cc3,cc4 = st.columns(4)
                                 with cc1:
                                     f_qty      = st.number_input(_flabel("Količina",         row.get("quantity")),       value=float(row.get("quantity") or 0),       min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
-                                    f_unit     = st.text_input( _flabel("ME",                row.get("unit")),           value=row.get("unit","kg"),                                              key=f"unit_{draft_id}_{idx}")
+                                    f_unit     = st.selectbox(_flabel("ME", row.get("unit")),
+                                                    options=["kg","kos","zaboj","l","kom"],
+                                                    index=["kg","kos","zaboj","l","kom"].index(row.get("unit","kg")) if row.get("unit","kg") in ["kg","kos","zaboj","l","kom"] else 0,
+                                                    key=f"unit_{draft_id}_{idx}")
                                 with cc2:
                                     f_price    = st.number_input(_flabel("Cena €/enoto",     row.get("price")),          value=float(row.get("price") or 0),          min_value=0.0, step=0.01,  format="%.4f", key=f"price_{draft_id}_{idx}")
                                     f_discount = st.number_input("% popusta",                                            value=float(row.get("discount_pct") or 0),   min_value=0.0, max_value=100.0, step=0.01, format="%.2f", key=f"disc_{draft_id}_{idx}")
@@ -1641,10 +1633,26 @@ def render():
                                     orig = st.session_state.get(orig_key, {})
                                     for k, v in orig.items():
                                         row[k] = v
-                                    # Počisti iskalnik in izbiro — kot svež začetek
                                     st.session_state.pop(f"sq_{draft_id}_{idx}", None)
                                     st.session_state.pop(f"sel_{draft_id}_{idx}", None)
                                     st.session_state[f"draft_exp_{draft_id}"] = True
+                                    st.session_state["prejem_drafts"] = drafts
+                                    _save_drafts(drafts)
+                                    st.rerun()
+
+                            # ➕ Dodaj vrstico (za split skupino)
+                            if row.get("_split_parent"):
+                                if st.button("➕ Dodaj vrstico", key=f"add_row_{draft_id}_{idx}",
+                                             help="Dodaj še eno vrstico v to split skupino"):
+                                    nr = dict(row)
+                                    nr.update({
+                                        "item_code": "",
+                                        "item_name": "",
+                                        "quantity":  0.0,
+                                        "_split_parent": True,
+                                        "_split_group": row.get("_split_group", idx),
+                                    })
+                                    drafts[draft_id]["rows"].insert(idx + 1, nr)
                                     st.session_state["prejem_drafts"] = drafts
                                     _save_drafts(drafts)
                                     st.rerun()
