@@ -1078,7 +1078,7 @@ def render():
     [data-testid="stExpander"] summary p {
         font-size: 1.05rem !important;
         font-weight: 500 !important;
-        line-height: 1.5 !important;
+        line-height: 1.4 !important;
     }
     /* Bež ozadje za vse expander vsebine */
     details > div {
@@ -1093,7 +1093,41 @@ def render():
     /* Zlati levi rob za osnutke */
     details {
         border-left: 3px solid #D4A96A !important;
-        margin-bottom: 6px !important;
+        margin-bottom: 4px !important;
+    }
+    /* Zmanjšaj vertikalni razmak med elementi */
+    div[data-testid="stVerticalBlock"] > div {
+        gap: 0.3rem !important;
+    }
+    div[data-testid="column"] > div[data-testid="stVerticalBlock"] {
+        gap: 0.2rem !important;
+    }
+    /* Zmanjšaj padding nad labeli */
+    label[data-testid="stWidgetLabel"] {
+        margin-bottom: 0px !important;
+        padding-bottom: 0px !important;
+        font-size: 0.78rem !important;
+        color: #555 !important;
+    }
+    /* Poudarjene meje okenc */
+    input[type="text"], input[type="number"] {
+        border: 1.5px solid #C0A882 !important;
+        border-radius: 4px !important;
+        padding: 4px 8px !important;
+        font-size: 0.88rem !important;
+    }
+    input[type="text"]:focus, input[type="number"]:focus {
+        border: 2px solid #D4A96A !important;
+        box-shadow: 0 0 0 2px rgba(212,169,106,0.2) !important;
+    }
+    /* Selectbox poudarjen */
+    div[data-baseweb="select"] > div {
+        border: 1.5px solid #C0A882 !important;
+        border-radius: 4px !important;
+        font-size: 0.88rem !important;
+    }
+    div[data-baseweb="select"] > div:focus-within {
+        border: 2px solid #D4A96A !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1839,7 +1873,7 @@ def render():
                                     with dr1[2]:
                                         decl["lot_ours"]       = st.text_input("LOT", value=decl.get("lot_ours",""), key=f"dlo_{draft_id}_{di}")
                                     with dr1[3]:
-                                        decl["rok_trajanja"]   = st.text_input("Rok", value=decl.get("rok_trajanja",""), key=f"drt_{draft_id}_{di}")
+                                        decl["rok_trajanja"]   = st.text_input("Rok uporabe", value=decl.get("rok_trajanja",""), key=f"drt_{draft_id}_{di}")
                                     with dr1[4]:
                                         decl["temperatura"]    = st.text_input("Temp.", value=decl.get("temperatura", _temperatura(decl.get("naziv_artikla",""))), key=f"dtp_{draft_id}_{di}")
                                     # Vrstica 2: FAO/Izvor | Način ulova | Vet. oznaka
