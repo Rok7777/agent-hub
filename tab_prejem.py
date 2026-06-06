@@ -33,7 +33,7 @@ SUPPLIER_INTRASTAT = {
     "ORADA ADRIATIC":  {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
     "FIORITAL":        {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
     "KVIBO":           {"country_dispatch": "SI", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
-    "FORMIO":          {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
+    "FORMIO":          {"country_dispatch": "SI", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
     "COST IN":         {"country_dispatch": "IT", "transaction": "11", "delivery": "CIF", "location": "1", "transport": "3"},
     "MARTINOVIC":      {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
     "MARTINOVIĆ":      {"country_dispatch": "HR", "transaction": "11", "delivery": "CPT", "location": "1", "transport": "3"},
@@ -285,11 +285,6 @@ REQUIRED_HEADER = [
     ("supplier_name", "⚠️", "Ime dobavitelja manjka"),
     ("invoice_date",  "⚠️", "Datum manjka"),
     ("invoice_number","⚠️", "Številka dobavnice manjka"),
-]
-REQUIRED_ROW = [
-    ("item_code",  "❌", "Šifra artikla manjka"),
-    ("quantity",   "⚠️", "Količina ni določena"),
-    ("price",      "⚠️", "Nabavna cena ni določena"),
 ]
 REQUIRED_ROW = [
     ("item_code",  "❌", "Šifra artikla manjka"),
@@ -832,6 +827,8 @@ def _send_draft(draft: dict) -> tuple:
         sup_id = _get_supplier_id(cli, draft["header"].get("supplier_name",""))
         if not sup_id: return None, "Dobavitelj ni najden v Minimaxu"
         h          = draft["header"]
+        intra      = _get_intrastat(h.get("supplier_name",""))
+        is_foreign = intra.get("country_dispatch","SI").upper() != "SI"
         stock_rows = []
         for row in draft["rows"]:
             if row.get("_split_child"):
@@ -874,8 +871,6 @@ def _send_draft(draft: dict) -> tuple:
                     if r.get("country_of_origin"):
                         sr["CountryOfOrigin"] = r["country_of_origin"]
                 stock_rows.append(sr)
-        intra    = _get_intrastat(h.get("supplier_name",""))
-        is_foreign = intra.get("country_dispatch","SI").upper() != "SI"
         body = {
             "StockEntryType":    "P",
             "StockEntrySubtype": "S",
@@ -944,12 +939,11 @@ def _flabel(label: str, val) -> str:
 
 def _art_status(row: dict) -> tuple:
     """Vrne (ujemanje_ok, podatki_ok) za prikaz dveh statusnih ikon."""
-    matched   = bool(row.get("item_code"))
+    matched   = bool(row.get("item_code")) or bool(row.get("_needs_split_hint"))
     data_ok   = (
         float(row.get("quantity") or 0) > 0 and
         float(row.get("price") or 0) > 0 and
-        bool(row.get("batch_number")) and
-        bool(row.get("country_of_origin"))
+        bool(row.get("batch_number"))
     )
     return matched, (matched and data_ok)
 
@@ -1452,13 +1446,17 @@ def render():
                         if row.get("_split_child"):
                             continue
 
-                        # Apliciraj mapping pri prikazu če artikel ni določen
-                        if not row.get("item_code") and not row.get("_split"):
+                        # Apliciraj mapping: ko ni artikla ALI ko manjka _needs_split_hint
+                        _needs_remap = (
+                            not row.get("item_code") or
+                            not row.get("_split") and not row.get("_needs_split_hint")
+                        ) and not row.get("_split")
+                        if _needs_remap:
                             _sup = draft["header"].get("supplier_name","")
                             _upd = _apply_supplier_mapping(_sup, [dict(row)])
                             if _upd:
                                 _r = _upd[0]
-                                if _r.get("item_code") or _r.get("_needs_split_hint"):
+                                if _r.get("_needs_split_hint") or (not row.get("item_code") and _r.get("item_code")):
                                     row.update(_r)
                                     drafts[draft_id]["rows"][idx] = row
                                     _save_drafts(drafts)
