@@ -1425,13 +1425,15 @@ def render():
                             continue
 
                         # Apliciraj mapping pri prikazu če artikel ni določen
-                        if not row.get("item_code"):
+                        if not row.get("item_code") and not row.get("_split"):
                             _sup = draft["header"].get("supplier_name","")
                             _upd = _apply_supplier_mapping(_sup, [dict(row)])
-                            if _upd and _upd[0].get("item_code"):
-                                row.update(_upd[0])
-                                drafts[draft_id]["rows"][idx] = row
-                                _save_drafts(drafts)
+                            if _upd:
+                                _r = _upd[0]
+                                if _r.get("item_code") or _r.get("_needs_split_hint"):
+                                    row.update(_r)
+                                    drafts[draft_id]["rows"][idx] = row
+                                    _save_drafts(drafts)
 
                         matched, data_ok = _art_status(row)
                         s1       = "🟢" if matched  else "🔴"
