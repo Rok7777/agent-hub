@@ -1592,32 +1592,6 @@ def render():
                                     st.session_state["prejem_drafts"] = drafts
 
                             # Split UI — razširi v dve normalni vrstici z iskalnikoma
-                            if row.get("_needs_split_hint") and not row.get("_split"):
-                                split_opts = row.get("_split_options", [])
-                                orig_qty   = float(row.get("quantity") or 0)
-                                st.info(f"⚡ Razdelite {orig_qty} kg na {len(split_opts)} artikla — izpolnite spodaj in potrdite:")
-                                if st.button("✅ Ustvari vrstice za delitev", key=f"split_create_{draft_id}_{idx}", type="primary"):
-                                    # Zamenjaj originalno vrstico z dvema sub-vrsticama
-                                    new_rows = []
-                                    for si, opt in enumerate(split_opts):
-                                        nr = dict(row)
-                                        nr.update({
-                                            "item_code":      opt["item_code"],
-                                            "item_name":      opt.get("item_name",""),
-                                            "quantity":       orig_qty if si == 0 else 0.0,
-                                            "_needs_split_hint": False,
-                                            "_split_parent":  True,
-                                            "_split_group":   idx,
-                                        })
-                                        new_rows.append(nr)
-                                    # Vstavi novi vrstici na mesto originalne
-                                    before = drafts[draft_id]["rows"][:idx]
-                                    after  = drafts[draft_id]["rows"][idx+1:]
-                                    drafts[draft_id]["rows"] = before + new_rows + after
-                                    st.session_state["prejem_drafts"] = drafts
-                                    _save_drafts(drafts)
-                                    st.rerun()
-
                             # ── Iskanje + dropdown v eni vrstici ──────────────────
                             sc1, sc2 = st.columns([2, 5])
                             with sc1:
@@ -1652,7 +1626,8 @@ def render():
                             _nc_net = _nc_v * (1 - _dc_v/100)
                             _mz_def = round((_pc_v - _nc_net)/_nc_net*100, 2) if _nc_net > 0 and _pc_v > 0 else float(row.get("marza_pct") or 0)
 
-                            ac = st.columns([1.5, 1, 1.5, 1.2, 1, 1, 1.5, 1.2, 1.5, 1, 1.2])
+                            # Kol | ME | Rab% | NC | NV | Marža% | PC | PV | Serija | Drž. | Tarifa
+                            ac = st.columns([1.5, 1, 1, 1.5, 1.2, 1, 1.5, 1.2, 1.5, 1, 1.2])
                             with ac[0]:
                                 f_qty  = st.number_input(_flabel("Kol.", row.get("quantity")), value=float(row.get("quantity") or 0), min_value=0.0, step=0.001, format="%.3f", key=f"qty_{draft_id}_{idx}")
                             with ac[1]:
@@ -1661,17 +1636,17 @@ def render():
                                             index=_me_opts.index(row.get("unit","kg")) if row.get("unit","kg") in _me_opts else 0,
                                             key=f"unit_{draft_id}_{idx}")
                             with ac[2]:
+                                f_discount = st.number_input("Rab%", value=float(row.get("discount_pct") or 0),
+                                            min_value=0.0, max_value=100.0, step=0.01, format="%.2f",
+                                            key=f"disc_{draft_id}_{idx}", on_change=_calc_pc, args=(draft_id, idx))
+                            with ac[3]:
                                 _nc_disp = st.session_state.get(f"price_{draft_id}_{idx}", row.get("price") or 0)
                                 f_price = st.number_input(_flabel("NC", _nc_disp),
                                             value=float(row.get("price") or 0), min_value=0.0, step=0.0001, format="%.4f",
                                             key=f"price_{draft_id}_{idx}", on_change=_calc_pc, args=(draft_id, idx))
-                            with ac[3]:
+                            with ac[4]:
                                 _nv = round(f_qty * _nc_net, 2)
                                 st.caption("NV €"); st.markdown(f"**{_nv:.2f}**")
-                            with ac[4]:
-                                f_discount = st.number_input("Rab%", value=float(row.get("discount_pct") or 0),
-                                            min_value=0.0, max_value=100.0, step=0.01, format="%.2f",
-                                            key=f"disc_{draft_id}_{idx}", on_change=_calc_pc, args=(draft_id, idx))
                             with ac[5]:
                                 f_marza = st.number_input("Marža%", value=_mz_def,
                                             min_value=0.0, max_value=500.0, step=0.1, format="%.1f",
