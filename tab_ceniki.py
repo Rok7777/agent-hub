@@ -188,6 +188,319 @@ def _sklop_label(sklop: str, poreklo: str) -> str:
     return sklop
 
 
+def _zberi_zgodovino_cen(tedni: list, trenutni_idx: int, n_tednov: int = 4) -> dict:
+    """
+    Za vsak artikel v trenutnem tednu zbere cene iz zadnjih n_tednov tednov.
+    Vrne {lat_key: {"naziv": str, "dobavitelj": str, "sklop": str, "poreklo": str,
+                     "cene": [c_4t_nazaj, c_3t_nazaj, c_2t_nazaj, c_1t_nazaj, c_trenutna]}}
+    Vrednost None = artikel ni bil v tistem tednu.
+    """
+    rezultat: dict = {}
+
+    # Indeksi preteklih tednov (do n_tednov nazaj, brez trenutnega)
+    pretekli_idx = list(range(max(0, trenutni_idx - n_tednov), trenutni_idx))
+
+    # Najprej zgradi slovar cen po tednih za vsak lat_key
+    # pretekli_idx je seznam indeksov — zapolni z None za manjkajoče
+    # Struktura: {lat_key: [cena_t0, cena_t1, ..., cena_tn-1]}  (brez trenutnega)
+    pretekle_cene: dict = {}  # lat_key → {teden_idx: float}
+
+    for t_idx in pretekli_idx:
+        t = tedni[t_idx]
+        for cenik in t.get("ceniki_dob", []):
+            for art in cenik.get("artikli", []):
+                lat = (art.get("latinski_naziv") or art.get("naziv", "")).lower().strip()
+                if not lat:
+                    continue
+                cena = float(art.get("cena", 0) or 0)
+                if cena <= 0:
+                    continue
+                if lat not in pretekle_cene:
+                    pretekle_cene[lat] = {}
+                # Če je v istem tednu več dobaviteljev — vzami najnižjo
+                if t_idx not in pretekle_cene[lat] or cena < pretekle_cene[lat][t_idx]:
+                    pretekle_cene[lat][t_idx] = cena
+
+    # Zdaj zberi trenutni teden
+    trenutni = tedni[trenutni_idx]
+    # Zberi vse artikle iz cenikov dobaviteljev trenutnega tedna
+    trenutne: dict = {}  # lat_key → {cena, naziv, dobavitelj, sklop, poreklo}
+    for cenik in trenutni.get("ceniki_dob", []):
+        for art in cenik.get("artikli", []):
+            lat   = (art.get("latinski_naziv") or art.get("naziv", "")).lower().strip()
+            cena  = float(art.get("cena", 0) or 0)
+            if not lat or cena <= 0:
+                continue
+            if lat not in trenutne or cena < trenutne[lat]["cena"]:
+                trenutne[lat] = {
+                    "cena":       cena,
+                    "naziv":      art.get("naziv", lat.title()),
+                    "dobavitelj": cenik.get("dobavitelj", ""),
+                    "sklop":      art.get("sklop", "Divjaki"),
+                    "poreklo":    art.get("poreklo", ""),
+                }
+
+    # Sestavi končni rezultat
+    for lat, curr in trenutne.items():
+        # Zgodovinske cene — seznam dolžine n_tednov (None če ni podatka)
+        hist = []
+        for t_idx in pretekli_idx:
+            hist.append(pretekle_cene.get(lat, {}).get(t_idx, None))
+
+        rezultat[lat] = {
+            "naziv":      curr["naziv"],
+            "dobavitelj": curr["dobavitelj"],
+            "sklop":      curr["sklop"],
+            "poreklo":    curr["poreklo"],
+            "cena":       curr["cena"],
+            "hist":       hist,   # [c_-4t, c_-3t, c_-2t, c_-1t]  (dolžina = n_tednov)
+        }
+
+    return rezultat
+
+
+def _izracunaj_trend(cena_trenutna: float, hist: list) -> dict:
+    """
+    Izračuna oba trenda.
+    Vrne {
+        "trend_1t": float|None,   # % vs prejšnji teden
+        "trend_avg": float|None,  # % vs povprečje zadnjih 4t
+        "avg_4t": float|None,
+        "cena_1t": float|None,
+    }
+    """
+    # Zadnja znana cena v zgodovini (= prejšnji teden)
+    cena_1t = None
+    for c in reversed(hist):
+        if c is not None:
+            cena_1t = c
+            break
+
+    # Povprečje vseh znanih zgodovinskih cen
+    znane = [c for c in hist if c is not None]
+    avg_4t = round(sum(znane) / len(znane), 4) if znane else None
+
+    trend_1t  = None
+    trend_avg = None
+
+    if cena_1t and cena_1t > 0:
+        trend_1t = round((cena_trenutna / cena_1t - 1) * 100, 1)
+    if avg_4t and avg_4t > 0:
+        trend_avg = round((cena_trenutna / avg_4t - 1) * 100, 1)
+
+    return {
+        "trend_1t":  trend_1t,
+        "trend_avg": trend_avg,
+        "avg_4t":    avg_4t,
+        "cena_1t":   cena_1t,
+    }
+
+
+def _trend_ikona(pct: float | None) -> str:
+    if pct is None:
+        return "—"
+    if pct <= -10:
+        return f"🟢🟢 {pct:+.1f}%"
+    if pct < 0:
+        return f"🟢 {pct:+.1f}%"
+    if pct == 0:
+        return f"⬜ {pct:+.1f}%"
+    if pct <= 5:
+        return f"🔴 {pct:+.1f}%"
+    return f"🔴🔴 {pct:+.1f}%"
+
+
+def _render_analiza(tedni: list, trenutni_idx: int, teden_id: str):
+    """Prikaže tab Analiza cen za dani teden."""
+
+    N = 4  # število preteklih tednov
+
+    if trenutni_idx == 0 and len(tedni) == 1:
+        st.info("Za analizo cen potrebuješ vsaj 2 tedna podatkov.")
+        return
+
+    # Zberi zgodovino
+    zgodovina = _zberi_zgodovino_cen(tedni, trenutni_idx, n_tednov=N)
+
+    if not zgodovina:
+        st.info("V trenutnem tednu ni cenikov dobaviteljev za analizo.")
+        return
+
+    # Labeli za pretekle tedne
+    pretekli_idx = list(range(max(0, trenutni_idx - N), trenutni_idx))
+    hist_labeli = []
+    for t_idx in pretekli_idx:
+        t = tedni[t_idx]
+        hist_labeli.append(t.get("datum_od", f"-{trenutni_idx - t_idx}t")[:10])
+    # Dopolni z "—" če je manj kot N tednov
+    while len(hist_labeli) < N:
+        hist_labeli.insert(0, "—")
+
+    # ── Filter: prag za push listo ─────────────────────────────────────────
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 3])
+    with col_f1:
+        prag_push = st.number_input(
+            "Push lista: prag avg trend (%)",
+            value=-5.0, max_value=0.0, step=0.5, format="%.1f",
+            key=f"prag_{teden_id}",
+            help="Artikli z avg trendom pod tem pragom se pokažejo na push listi"
+        )
+    with col_f2:
+        filter_sklop = st.selectbox(
+            "Filtriraj po sklopu",
+            ["Vsi"] + SKLOPI,
+            key=f"fsk_{teden_id}"
+        )
+    with col_f3:
+        pokazi_samo_spremembe = st.checkbox(
+            "Prikaži samo artikle s spremembo cene",
+            value=False,
+            key=f"samo_spr_{teden_id}"
+        )
+
+    st.divider()
+
+    # ── Tabs znotraj analize ───────────────────────────────────────────────
+    tab_hist, tab_push = st.tabs(["📈 Gibanje cen", "📣 Push lista"])
+
+    # ══════════════════════════════════
+    # TAB: GIBANJE CEN
+    # ══════════════════════════════════
+    with tab_hist:
+
+        # Glava tabele
+        col_w = [2.5, 1.5, 1.2] + [1.0] * N + [1.2, 1.2]
+        cols_h = st.columns(col_w)
+        headers = ["Artikel", "Dobavitelj", "Sklop"] + hist_labeli + ["Trenutna €", "Trend (1t)", "Trend (avg 4t)"]
+        # Popravi — glava ima N+5 stolpcev
+        col_w2  = [2.5, 1.5, 1.2] + [1.0] * N + [1.2, 1.2, 1.2]
+        cols_h2 = st.columns(col_w2)
+        for i, h in enumerate(headers):
+            cols_h2[i].markdown(f"**{h}**")
+        st.markdown("---")
+
+        # Uredi: najprej po sklopu, nato po avg trendu (najbolj pocenjeni na vrhu)
+        def _sort_key(item):
+            lat, d = item
+            t = _izracunaj_trend(d["cena"], d["hist"])
+            avg = t["trend_avg"] if t["trend_avg"] is not None else 999
+            sklop_ord = SKLOPI.index(d["sklop"]) if d["sklop"] in SKLOPI else 99
+            return (sklop_ord, avg)
+
+        sorted_items = sorted(zgodovina.items(), key=_sort_key)
+
+        for lat, d in sorted_items:
+            # Filter po sklopu
+            if filter_sklop != "Vsi" and d["sklop"] != filter_sklop:
+                continue
+
+            t = _izracunaj_trend(d["cena"], d["hist"])
+
+            # Filter samo spremembe
+            if pokazi_samo_spremembe and t["trend_1t"] is None and t["trend_avg"] is None:
+                continue
+
+            cols_r = st.columns(col_w2)
+
+            # Artikel + latinski
+            cols_r[0].markdown(f"**{d['naziv']}**")
+
+            # Dobavitelj
+            cols_r[1].caption(d["dobavitelj"])
+
+            # Sklop
+            sklop_label = _sklop_label(d["sklop"], d["poreklo"])
+            cols_r[2].caption(sklop_label)
+
+            # Zgodovinske cene — levo→desno = starejše→novejše
+            hist_full = d["hist"]
+            # Dopolni z None za manjkajoče pretekle tedne (ko imamo manj kot N tednov)
+            while len(hist_full) < N:
+                hist_full = [None] + hist_full
+
+            for i, hc in enumerate(hist_full):
+                if hc is None:
+                    cols_r[3 + i].caption("—")
+                else:
+                    cols_r[3 + i].caption(f"{hc:.2f}")
+
+            # Trenutna cena
+            cols_r[3 + N].markdown(f"**{d['cena']:.2f} €**")
+
+            # Trend 1t
+            cols_r[3 + N + 1].caption(_trend_ikona(t["trend_1t"]))
+
+            # Trend avg 4t
+            cols_r[3 + N + 2].caption(_trend_ikona(t["trend_avg"]))
+
+        st.divider()
+        st.caption("🟢🟢 = padec >10%  ·  🟢 = padec  ·  🔴 = rast  ·  🔴🔴 = rast >5%")
+
+    # ══════════════════════════════════
+    # TAB: PUSH LISTA
+    # ══════════════════════════════════
+    with tab_push:
+        st.caption(
+            f"Artikli kjer je trenutna cena vsaj **{abs(prag_push):.0f}% nižja** od povprečja zadnjih 4 tednov — "
+            "primerni za obveščanje strank."
+        )
+
+        push_artikli = []
+        for lat, d in sorted_items:
+            if filter_sklop != "Vsi" and d["sklop"] != filter_sklop:
+                continue
+            t = _izracunaj_trend(d["cena"], d["hist"])
+            if t["trend_avg"] is not None and t["trend_avg"] <= prag_push:
+                push_artikli.append((d, t))
+
+        if not push_artikli:
+            st.info(f"Ni artiklov z avg trendom ≤ {prag_push:.0f}%. Zmanjšaj prag ali dodaj več tednov podatkov.")
+        else:
+            # ── Tabela push artiklov ───────────────────────────────────────
+            ph = st.columns([3, 1.5, 1.2, 1.2, 1.5, 1.5])
+            for h, t in zip(
+                ["Artikel", "Dobavitelj", "Trenutna €", "Povp. 4t €", "Trend (avg)", "Trend (1t)"],
+                ph
+            ):
+                t.markdown(f"**{h}**")
+            st.markdown("---")
+
+            for d, t in push_artikli:
+                pc1, pc2, pc3, pc4, pc5, pc6 = st.columns([3, 1.5, 1.2, 1.2, 1.5, 1.5])
+                pc1.markdown(f"**{d['naziv']}**  \n*{d.get('sklop','')}*")
+                pc2.caption(d["dobavitelj"])
+                pc3.markdown(f"**{d['cena']:.2f} €**")
+                avg_str = f"{t['avg_4t']:.2f} €" if t["avg_4t"] else "—"
+                pc4.caption(avg_str)
+                pc5.markdown(_trend_ikona(t["trend_avg"]))
+                pc6.caption(_trend_ikona(t["trend_1t"]))
+
+            st.divider()
+
+            # ── Gumb: Kopiraj za WhatsApp/email ───────────────────────────
+            lines = [
+                f"🐟 TEDNA AKCIJA — POCENI RIBE ({tedni[trenutni_idx].get('datum_od','?')} – {tedni[trenutni_idx].get('datum_do','?')})",
+                "",
+            ]
+            for d, t in push_artikli:
+                avg_str = f"povp. {t['avg_4t']:.2f} €" if t["avg_4t"] else ""
+                lines.append(
+                    f"✅ {d['naziv']}  {d['cena']:.2f} €/kg  "
+                    f"({_trend_ikona(t['trend_avg'])} vs {avg_str})"
+                    f"  — {d['dobavitelj']}"
+                )
+            lines += ["", "Zaloge omejene. Za naročila nas kontaktirajte."]
+            push_text = "\n".join(lines)
+
+            st.text_area(
+                "Besedilo za WhatsApp / email",
+                value=push_text,
+                height=200,
+                key=f"push_txt_{teden_id}"
+            )
+            st.caption("Označi vse (Ctrl+A) in kopiraj.")
+
+
 def _dodaj_artikel_v_nas_cenik(tedni: list, teden_id: str, ime_cenika: str,
                                 artikel: dict) -> list:
     """Doda artikel v naš cenik (HIT/HoReCa/Ostali) v ustrezen sklop."""
@@ -274,11 +587,12 @@ def render():
                 st.caption(f"ID: {teden['id']}  ·  Ustvarjen: {teden.get('ustvarjen','?')}")
 
             # ── Tabs ────────────────────────────────────────────────────────
-            tab_dob, tab_hit, tab_horeca, tab_ostali = st.tabs([
+            tab_dob, tab_hit, tab_horeca, tab_ostali, tab_analiza = st.tabs([
                 "📥 Ceniki dobaviteljev",
                 "⭐ HIT",
                 "🍽️ HoReCa",
                 "📦 Ostali",
+                "📊 Analiza cen",
             ])
 
             # ════════════════════════════════════════
@@ -616,6 +930,9 @@ def render():
 
             with tab_ostali:
                 _render_nas_cenik("Ostali", f"ostali_{teden['id']}")
+
+            with tab_analiza:
+                _render_analiza(tedni, t_idx, teden["id"])
 
     # Shrani vse spremembe ob koncu rendera
     st.session_state["ceniki_tedni"] = tedni
