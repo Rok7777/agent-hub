@@ -4,6 +4,7 @@ Moduli:
   tab_loti.py        — dodelitev lotov (ureja chat "Zapiranje LOT")
   tab_temeljnice.py  — dnevni izkupiček (ureja chat "Ločeni procesi")
   tab_prejem.py      — prejem blaga (ureja chat "Prejem blaga")
+  tab_ceniki.py      — ceniki dobaviteljev (ureja chat "Odrešenje cenikov")
   minimax_client.py  — API klient (ureja chat "Ločeni procesi")
 """
 
@@ -23,7 +24,7 @@ st.set_page_config(
 def _check_password():
     correct = os.environ.get("APP_PASSWORD", "")
     if not correct:
-        return True  # brez gesla če ni nastavljeno
+        return True
     if st.session_state.get("authenticated"):
         return True
     st.title("🐟 Agent Hub")
@@ -84,7 +85,7 @@ if st.session_state["aktiven_modul"] is None:
 
     st.markdown("<div style='text-align:center;color:#ccc;font-size:20px;margin:4px 0'>│</div>", unsafe_allow_html=True)
 
-    # 4 stolpci modulov
+    # ── Vrstica 1: Prejem + Ceniki + Veleprodaja + Prenos MP ────────────────
     c1, c2, c3, c4 = st.columns(4)
 
     # ── Modul 1: Prejem ──────────────────────────────────────────────────────
@@ -94,8 +95,15 @@ if st.session_state["aktiven_modul"] is None:
             st.rerun()
         st.markdown('<div class="trigger-man">📷 Trigger: skeniranje dobavnice</div>', unsafe_allow_html=True)
 
-    # ── Modul 2: Veleprodaja ─────────────────────────────────────────────────
+    # ── Modul 2: Ceniki ──────────────────────────────────────────────────────
     with c2:
+        if st.button("💲\n\n**Ceniki**\n\nDobavitelji → HIT / HoReCa / Ostali", use_container_width=True, key="btn_ceniki"):
+            st.session_state["aktiven_modul"] = "ceniki"
+            st.rerun()
+        st.markdown('<div class="trigger-man">📄 Trigger: upload PDF cenika</div>', unsafe_allow_html=True)
+
+    # ── Modul 3: Veleprodaja ─────────────────────────────────────────────────
+    with c3:
         st.markdown("""
         <div class="modul-kmalu">
             <div style="font-size:28px">📋</div>
@@ -106,8 +114,8 @@ if st.session_state["aktiven_modul"] is None:
         <div class="trigger-man">📷 Trigger: skeniranje naročila</div>
         """, unsafe_allow_html=True)
 
-    # ── Modul 3: Prenos MP ───────────────────────────────────────────────────
-    with c3:
+    # ── Modul 4: Prenos MP ───────────────────────────────────────────────────
+    with c4:
         st.markdown("""
         <div class="modul-kmalu">
             <div style="font-size:28px">🚛</div>
@@ -118,8 +126,11 @@ if st.session_state["aktiven_modul"] is None:
         <div class="trigger-man">📝 Trigger: zahteve prodajalcev</div>
         """, unsafe_allow_html=True)
 
-    # ── Modul 4: Loti + Temeljnice ───────────────────────────────────────────
-    with c4:
+    st.markdown("<div style='margin:12px 0'></div>", unsafe_allow_html=True)
+
+    # ── Vrstica 2: Loti + Temeljnice ─────────────────────────────────────────
+    _, c5, _ = st.columns([2, 2, 2])
+    with c5:
         st.markdown("<p style='text-align:center;font-size:11px;font-weight:600;color:#185FA5;margin-bottom:6px'>Shopsy → Minimax</p>", unsafe_allow_html=True)
         sub1, sub2 = st.columns(2)
         with sub1:
@@ -151,6 +162,7 @@ else:
         "loti":       "📦 Loti — dodelitev serij",
         "temeljnice": "💰 Temeljnice — dnevni izkupiček",
         "prejem":     "📥 Prejem blaga",
+        "ceniki":     "💲 Ceniki",
     }
 
     col_back, col_title = st.columns([1, 8])
@@ -172,6 +184,9 @@ else:
     elif modul == "prejem":
         from tab_prejem import render
         render()
+    elif modul == "ceniki":
+        from tab_ceniki import render
+        render()
 
 st.divider()
-st.caption("Agent Hub v2.2 · Minimax API")
+st.caption("Agent Hub v2.3 · Minimax API")
