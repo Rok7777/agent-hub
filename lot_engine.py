@@ -187,7 +187,7 @@ def _has_fillet(name: str) -> bool:
     return bool(_FILLET_RE.search(name))
 
 def _get_size(name: str) -> Optional[tuple]:
-    m = re.search(r'(\d+)[–\-](\d+)\s*(g|kg)?', name, re.IGNORECASE)
+    m = re.search(r'(\d+)[\u2013\-\/](\d+)\s*(g|kg)?', name, re.IGNORECASE)
     if not m:
         return None
     lo, hi = int(m.group(1)), int(m.group(2))
@@ -303,142 +303,14 @@ def assign_lots(
     stock: dict[str, dict],
     today: datetime
 ) -> list[dict]:
-    by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
-    by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
-    by_name = {v.get('article_name',''): k for k, v in stock.items()}
-    by_name_ci = {v.get('article_name','').strip().lower(): k for k, v in stock.items()}
+    """Kliče assign_lots_with_virtual z svežo virtualno zalogo."""
+    virtual = {key: [lot.copy() for lot in data['lots']] for key, data in stock.items()}
+    return assign_lots_with_virtual(document_lines, stock, virtual, today)
 
-    virtual: dict[str, list[dict]] = {
-        key: [lot.copy() for lot in data['lots']]
-        for key, data in stock.items()
-    }
-
-    output = []
-
-    for line in document_lines:
-        art_id     = str(line.get('article_id') or '')
-        art_code   = line.get('article_code', '')
-        art_name   = line.get('article_name', '')
-        qty_needed = round(float(line['quantity']), 4)
-        unit       = line['unit']
-        base_opis  = (line.get('opis') or '').strip()
-
-        matched_note = ''
-
-        kalo = get_kalo_factor(art_name)
-        if kalo != 1.0:
-            qty_needed = round(qty_needed * kalo, 4)
-
-        stock_key = (by_id.get(art_id) or by_code.get(art_code) or
-                     by_name.get(art_name) or by_name_ci.get(art_name.strip().lower()))
-
-        has_vstock = (
-            stock_key is not None and
-            any(l.get('quantity',0) > 0 for l in virtual.get(stock_key, []))
-        )
-
-        if not has_vstock:
-            avail_with_stock = {}
-            for k, lots in virtual.items():
-                art_nm_k = stock[k].get('article_name', k)
-                if get_eligible_lots(lots, art_nm_k, today):
-                    avail_with_stock[art_nm_k] = lots
-            matched_name, note = smart_match(art_name, avail_with_stock, unit)
-            if matched_name is None:
-                output.append({**line,
-                    'lot': None, 'quantity_assigned': qty_needed,
-                    'opis': f"{base_opis} [brez lota: {note}]".strip(),
-                    'status': 'no_match'})
-                continue
-            stock_key    = by_name.get(matched_name) or matched_name
-            matched_note = note
-
-        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
-        eligible = get_eligible_lots(virtual.get(stock_key, []), check_name, today)
-
-        if not eligible:
-            output.append({**line,
-                'lot': None, 'quantity_assigned': qty_needed,
-                'opis': f"{base_opis} [brez lota: ni ustreznih lotov]".strip(),
-                'status': 'no_lots'})
-            continue
-
-        remaining   = qty_needed
-        fresh_art   = is_fresh_or_deli(name_for_check)
-        fresh_art   = is_fresh_or_deli(name_for_check)
-
-        for lot in eligible:
-            avail = round(lot['quantity'], 4)
-            if avail <= 0:
-                continue
-
-            if lot.get('_aged') and fresh_art:
-                lot_date = parse_lot_date(lot['code'])
-                days_old = (today - lot_date).days if lot_date else 0
-                use_sale = round(min(avail, remaining), 4)
-                if use_sale > 0:
-                    assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
-                    remaining = round(remaining - use_sale, 4)
-                writeoff = round(avail - use_sale, 4)
-                if writeoff > 0:
-                    assignments.append((lot['code'], writeoff, days_old, True, lot.get('lot_price', 0)))
-                for vl in virtual[stock_key]:
-                    if vl['code'] == lot['code']:
-                        vl['quantity'] = 0.0
-                        break
-            else:
-                if remaining <= 0:
-                    break
-                use = round(min(avail, remaining), 4)
-                assignments.append((lot['code'], use, 0, False, lot.get('lot_price', 0)))
-                remaining = round(remaining - use, 4)
-                for vl in virtual[stock_key]:
-                    if vl['code'] == lot['code']:
-                        vl['quantity'] = round(vl['quantity'] - use, 4)
-                        break
-
-        opis = base_opis
-        if matched_note:
-            opis = (opis + ' ' + matched_note).strip() if opis else matched_note
-
-        stock_data = stock.get(stock_key, {})
-        for entry in assignments:
-            lot_code, qty, forced_days = entry[0], entry[1], entry[2]
-            is_writeoff = entry[3] if len(entry) > 3 else False
-            lp = entry[4] if len(entry) > 4 else 0
-            lot_opis = opis
-            if forced_days > 0:
-                lot_opis = (lot_opis + f' [odpis lota - star {forced_days} dni]').strip()
-            output.append({
-                **line,
-                'article_id':   stock_data.get('article_id', line.get('article_id')),
-                'article_code': stock_data.get('article_code', art_code),
-                'article_name': stock_data.get('article_name', art_name),
-                'lot':          lot_code,
-                'quantity_assigned': qty,
-                'opis':         lot_opis,
-                'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
-                '_writeoff':    is_writeoff,
-                '_writeoff_qty': qty if is_writeoff else 0,
-                '_sale_qty':     qty if not is_writeoff else 0,
-                'lot_price':    lp,
-            })
-
-        if remaining > 0:
-            output.append({**line,
-                'article_id':   stock_data.get('article_id', line.get('article_id')),
-                'article_code': stock_data.get('article_code', art_code),
-                'article_name': stock_data.get('article_name', art_name),
-                'lot':  None,
-                'quantity_assigned': remaining,
-                'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
-                'status': 'partial',
-                '_writeoff': False,
-            })
-
-    return _merge_lot_lines(output)
 
 def _merge_lot_lines(lines: list[dict]) -> list[dict]:
+    # Filtriraj vrstice z qty=0 (edge case)
+    lines = [l for l in lines if round(l.get('quantity_assigned', 0), 4) > 0]
     result = []
     seen   = {}
     for line in lines:
