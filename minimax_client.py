@@ -535,7 +535,9 @@ class MinimaxClient:
         Posodobi dokument z dodelitvami lotov.
         - orig_rows posodobimo z BatchNumber/Quantity/Price
         - Dodatne vrstice (drugi loti, zamenjave) dodamo kot nove
-        - no_match/no_lots/partial: original ostane nespremenjen
+        - no_match/no_lots: original ostane nespremenjen (vidno v dokumentu)
+        - partial z lotom: nova vrstica z lotom + nova vrstica brez lota (ostanek)
+        - partial brez lota: nova vrstica brez BatchNumber (vidno kot nekrita količina)
         """
         fresh     = self.get_entry_detail(entry_id)
         orig_rows = fresh.get("StockEntryRows") or []
@@ -576,22 +578,23 @@ class MinimaxClient:
             if r.get("status") in ("no_lots", "no_match"):
                 continue  # orig_rows loop doda original nespremenjen
             if r.get("status") == "partial":
-                # Partial ima lot — dodaj kot novo vrstico
+                # Dodaj vrstico ne glede na to ali ima lot ali ne
+                # Brez lota = nekrita količina vidna v dokumentu
+                row = {
+                    "Item":          {"ID": r["article_id"]},
+                    "Quantity":      r["quantity_assigned"],
+                    "SellingPrice":  r.get("selling_price"),
+                    "WarehouseFrom": default_wh_from,
+                    "Note":          r.get("opis", "") or "",
+                }
                 if r.get("lot"):
-                    row = {
-                        "Item":          {"ID": r["article_id"]},
-                        "Quantity":      r["quantity_assigned"],
-                        "SellingPrice":  r.get("selling_price"),
-                        "WarehouseFrom": default_wh_from,
-                        "Note":          r.get("opis", "") or "",
-                        "BatchNumber":   r["lot"],
-                    }
-                    if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
+                    row["BatchNumber"] = r["lot"]
                     lp = float(r.get("lot_price") or 0)
                     if lp > 0:
                         row["Price"] = lp
                         row["Value"] = round(lp * r["quantity_assigned"], 4)
-                    extra_rows.append(row)
+                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
+                extra_rows.append(row)
                 continue
             rid        = r.get("row_id", 0)
             orig_art   = (orig_by_rownum.get(rid, {}).get("Item") or {}).get("ID")
@@ -606,7 +609,6 @@ class MinimaxClient:
                     price_by_rowid[rid] = (lp, round(lp * r["quantity_assigned"], 4))
             else:
                 # Pametna zamenjava ali drugi lot — nova vrstica
-                # Popravek: ne preskoči originala če je že obdelan (delni lot + zamenjava)
                 if orig_art != result_art and rid not in lot_by_rowid:
                     replaced_row_ids.add(rid)
                 row = {
