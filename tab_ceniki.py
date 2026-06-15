@@ -190,7 +190,7 @@ def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
         client = anthropic.Anthropic(api_key=api_key)
         b64    = base64.b64encode(pdf_bytes).decode()
         resp   = client.messages.create(
-            model="claude-opus-4-5", max_tokens=4096,
+            model="claude-opus-4-6", max_tokens=4096,
             messages=[{"role": "user", "content": [
                 {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
                 {"type": "text", "text": _parse_prompt()},
@@ -257,7 +257,7 @@ def _parse_excel_claude(file_bytes: bytes, fname: str) -> tuple:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
         resp = client.messages.create(
-            model="claude-opus-4-5", max_tokens=4096,
+            model="claude-opus-4-6", max_tokens=4096,
             messages=[{"role": "user", "content": prompt}]
         )
         raw = resp.content[0].text.strip().replace("```json", "").replace("```", "").strip()
@@ -293,7 +293,7 @@ def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(model="claude-opus-4-5", max_tokens=4096,
+        resp = client.messages.create(model="claude-opus-4-6", max_tokens=4096,
             messages=[{"role": "user", "content": prompt}])
         raw = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
         return json.loads(raw), None
