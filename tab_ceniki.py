@@ -16,7 +16,7 @@ _DATA_DIR   = pathlib.Path(os.environ.get("DATA_DIR", str(pathlib.Path(__file__)
 CENIKI_FILE = str(_DATA_DIR / "ceniki.json")
 
 # ─── Konstante ────────────────────────────────────────────────────────────────
-NASI_CENIKI = ["HIT", "HoReCa", "Ostali"]
+NASI_CENIKI = ["HIT", "HoReCa"]
 
 SKLOPI = ["Gojeno", "Divjaki", "Lokalna riba"]
 
@@ -748,11 +748,10 @@ def render():
             st.caption(f"ID: {teden['id']}  ·  Ustvarjen: {_fmt_datum(teden.get('ustvarjen','?'))}")
 
             # ── Tabs ────────────────────────────────────────────────────────
-            tab_dob, tab_hit, tab_horeca, tab_ostali, tab_analiza = st.tabs([
+            tab_dob, tab_hit, tab_horeca, tab_analiza = st.tabs([
                 "📥 Ceniki dobaviteljev",
                 "⭐ HIT",
                 "🍽️ HoReCa",
-                "📦 Ostali",
                 "📊 Analiza cen",
             ])
 
@@ -782,25 +781,18 @@ def render():
                         if err or not parsed:
                             st.error(f"❌ {f.name}: {err or 'AI ni vrnil podatkov'}")
                             continue
-                        # Preveri če ta dobavitelj že obstaja za ta teden
-                        dob_ime = parsed.get("dobavitelj", f.name)
-                        obstaja = any(
-                            c.get("dobavitelj", "").lower() == dob_ime.lower()
-                            for c in teden.get("ceniki_dob", [])
-                        )
-                        if obstaja:
-                            st.warning(f"⚠️ Cenik za '{dob_ime}' že obstaja v tem tednu — preskočen.")
-                            continue
+                        dob_ime  = parsed.get("dobavitelj", f.name)
+                        dob_datum = parsed.get("datum", "")
                         teden["ceniki_dob"].append({
-                            "id":          str(uuid.uuid4())[:8],
-                            "dobavitelj":  dob_ime,
-                            "datum":       parsed.get("datum", ""),
-                            "valuta":      parsed.get("valuta", "EUR"),
-                            "fname":       f.name,
-                            "artikli":     parsed.get("artikli", []),
-                            "uvozeno":     datetime.now().isoformat()[:16],
+                            "id":         str(uuid.uuid4())[:8],
+                            "dobavitelj": dob_ime,
+                            "datum":      dob_datum,
+                            "valuta":     parsed.get("valuta", "EUR"),
+                            "fname":      f.name,
+                            "artikli":    parsed.get("artikli", []),
+                            "uvozeno":    datetime.now().isoformat()[:16],
                         })
-                        st.success(f"✅ {dob_ime}: {len(parsed.get('artikli', []))} artiklov")
+                        st.success(f"✅ {dob_ime} ({_fmt_datum(dob_datum) or 'brez datuma'}): {len(parsed.get('artikli', []))} artiklov")
                     prog.empty()
                     # Reset uploaderja
                     reset_n = st.session_state.get(f"up_reset_{teden['id']}", 0)
@@ -816,9 +808,9 @@ def render():
                     for c_idx, cenik in enumerate(teden["ceniki_dob"]):
                         c_label = (
                             f"🏭 **{cenik['dobavitelj']}**  ·  "
-                            f"{_fmt_datum(cenik.get('datum','?'))}  ·  "
+                            f"{_fmt_datum(cenik.get('datum','')) or '—'}  ·  "
                             f"{len(cenik.get('artikli',[]))} artiklov  ·  "
-                            f"{cenik.get('fname','')}"
+                            f"`{cenik.get('fname','')}`"
                         )
                         col_exp, col_rm = st.columns([11, 1])
                         with col_rm:
@@ -1088,9 +1080,6 @@ def render():
 
             with tab_horeca:
                 _render_nas_cenik("HoReCa", f"horeca_{teden['id']}")
-
-            with tab_ostali:
-                _render_nas_cenik("Ostali", f"ostali_{teden['id']}")
 
             with tab_analiza:
                 _render_analiza(tedni, t_idx, teden["id"])
