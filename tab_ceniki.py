@@ -217,36 +217,57 @@ def _parse_excel_claude(file_bytes: bytes, fname: str) -> tuple:
         import pandas as pd, io
         xf = pd.ExcelFile(io.BytesIO(file_bytes))
         izbran_df, izbran_list = None, None
+
         for list_ime in xf.sheet_names:
-            df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=list_ime, header=None)
+            try:
+                df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=list_ime, header=None)
+            except Exception as e:
+                continue
             df = df.dropna(how="all").dropna(axis=1, how="all")
-            if len(df) >= 3 and len(df.columns) >= 2:
-                for hi in range(min(5, len(df))):
-                    row = df.iloc[hi]
-                    if row.dropna().astype(str).str.strip().str.len().gt(0).sum() >= 2:
-                        df.columns = df.iloc[hi]
-                        df = df.iloc[hi+1:].reset_index(drop=True)
-                        break
+            if len(df) < 2 or len(df.columns) < 2:
+                continue
+
+            # Poišči vrstico z glavo — iščemo vrstico ki vsebuje besedilo (ne samo številke)
+            glava_idx = 0
+            for hi in range(min(8, len(df))):
+                row = df.iloc[hi]
+                non_empty = row.dropna().astype(str).str.strip()
+                has_text  = non_empty.str.contains(r'[a-zA-ZčšžČŠŽ]', regex=True).any()
+                if has_text and len(non_empty) >= 2:
+                    glava_idx = hi
+                    break
+
+            df.columns = df.iloc[glava_idx].astype(str).str.strip()
+            df = df.iloc[glava_idx + 1:].reset_index(drop=True)
+            df = df.dropna(how="all").fillna("")
+
+            if len(df) >= 1:
                 izbran_list, izbran_df = list_ime, df
                 break
+
         if izbran_df is None:
-            return {}, f"Excel '{fname}' nima ustreznih listov"
-        prompt = _parse_prompt() + f"\n\nDatoteka: {fname} (list: {izbran_list})\n\n{_tabela_v_tekst(izbran_df)}"
+            return {}, f"Excel '{fname}': ni bilo mogoče prebrati nobeden list (listi: {xf.sheet_names})"
+
+        tabela_txt = _tabela_v_tekst(izbran_df)
+        prompt = _parse_prompt() + f"\n\nDatoteka: {fname} (list: {izbran_list})\n\nVsebina:\n{tabela_txt}"
+
         import anthropic
         api_key = _secret("ANTHROPIC_API_KEY", "")
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(model="claude-opus-4-5", max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}])
-        raw = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
+        resp = client.messages.create(
+            model="claude-opus-4-5", max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = resp.content[0].text.strip().replace("```json", "").replace("```", "").strip()
         return json.loads(raw), None
     except json.JSONDecodeError as e:
-        return {}, f"JSON napaka: {e}"
+        return {}, f"JSON napaka pri Excel parsanju: {e}"
     except ImportError:
-        return {}, "Manjka openpyxl"
+        return {}, "Manjka knjižnica openpyxl — dodaj v requirements.txt"
     except Exception as e:
-        return {}, str(e)
+        return {}, f"Excel napaka: {str(e)}"
 
 
 def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
