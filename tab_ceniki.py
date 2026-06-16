@@ -129,6 +129,28 @@ def _migracija_stari_format(nas_cenik: dict) -> dict:
                 nas_cenik[sklop][ps].append(art)
     return nas_cenik
 
+
+def _prerazporedi_podskope(nas_cenik: dict) -> dict:
+    """Prerazporedi VSE artikle v pravilne podskope glede na naziv — popravi napačne razvrstitve."""
+    for sklop in SKLOPI:
+        sklop_data = nas_cenik.get(sklop, {})
+        if isinstance(sklop_data, list):
+            continue
+        # Zberi vse artikle tega sklopa
+        vsi = []
+        for ps in PODSKOPI:
+            vsi.extend(sklop_data.get(ps, []))
+        # Počisti in razporedi na novo
+        for ps in PODSKOPI:
+            sklop_data[ps] = []
+        for art in vsi:
+            ps = _dolocii_podsklop(art)
+            art["podsklop"] = ps
+            sklop_data[ps].append(art)
+        nas_cenik[sklop] = sklop_data
+    return nas_cenik
+    return nas_cenik
+
 # ─── HTML izvoz ───────────────────────────────────────────────────────────────
 
 def _logo_b64() -> str:
@@ -210,17 +232,30 @@ Primeri Cele ribe: "CODA DI ROSPO" (rep, ne file!), "BRANZINO INTERO", "ASTICE V
 Cena=vedno za 1kg brez DDV. Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...)."""
 
 
-_FILEJI_KW = {"file", "filé", "filet", "filone", "trancio", "anello", "suprema", "lomo", "darnes", "steak", "trance"}
+_FILEJI_KW = {
+    "file", "filé", "filet", "filone", "trancio", "anello",
+    "suprema", "lomo", "darnes", "steak", "trance",
+    "fillet", "fille", "fillets"
+}
 
 def _dolocii_podsklop(art: dict) -> str:
-    """Določi podsklop na podlagi naziva — fallback če AI ni pravilno razvrstil."""
-    ps = art.get("podsklop","").strip()
-    if ps in ("Fileji", "Cele ribe"):
-        return ps
-    # Fallback — preveri naziv po ključnih besedah
-    naziv = (art.get("naziv","") + " " + art.get("naziv_slo","")).lower()
-    if any(kw in naziv for kw in _FILEJI_KW):
-        return "Fileji"
+    """Določi podsklop na podlagi naziva — preveri originalni in SLO naziv."""
+    # Preveri vse možne nazive
+    naziv_orig = art.get("naziv","").lower()
+    naziv_slo  = art.get("naziv_slo","").lower()
+    naziv_lat  = art.get("latinski_naziv","").lower()
+    skupaj     = f"{naziv_orig} {naziv_slo}"
+
+    # Preveri ključne besede za filelje
+    for kw in _FILEJI_KW:
+        if kw in skupaj:
+            return "Fileji"
+
+    # Preveri s presledki za krajše besede (prepreči false positive)
+    for kw in ["file", "filé"]:
+        if f" {kw} " in f" {skupaj} " or skupaj.startswith(kw) or skupaj.endswith(kw):
+            return "Fileji"
+
     return "Cele ribe"
     raw = raw.strip().replace("```json", "").replace("```", "").strip()
     try:
@@ -713,6 +748,7 @@ def _render_narocilo(teden: dict, tedni: list):
 def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     nas_cenik = teden["nasi_ceniki"][ime_cenika]
     nas_cenik = _migracija_stari_format(nas_cenik)
+    nas_cenik = _prerazporedi_podskope(nas_cenik)
     teden["nasi_ceniki"][ime_cenika] = nas_cenik
     logo_b64  = _logo_b64()
     tid       = teden["id"]
@@ -1102,12 +1138,18 @@ def render():
         return
 
     for t_idx, teden in enumerate(tedni):
-        # Zagotovi da ima teden nov format
+        # Zagotovi da ima teden nov format + prerazporedi podskope
         for ime in NASI_CENIKI:
             if ime not in teden.get("nasi_ceniki", {}):
                 teden.setdefault("nasi_ceniki", {})[ime] = _prazen_nas_cenik()
             else:
-                teden["nasi_ceniki"][ime] = _migracija_stari_format(teden["nasi_ceniki"][ime])
+                nc = _migracija_stari_format(teden["nasi_ceniki"][ime])
+                teden["nasi_ceniki"][ime] = nc
+
+        # Popravi podsklop tudi v ceniki dobaviteljev
+        for cenik in teden.get("ceniki_dob", []):
+            for art in cenik.get("artikli", []):
+                art["podsklop"] = _dolocii_podsklop(art)
 
         st_info    = _prestej_artiklov(teden)
         teden_label = (
