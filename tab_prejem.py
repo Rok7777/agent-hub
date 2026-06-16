@@ -1913,20 +1913,64 @@ def render():
                             use_container_width=True,
                             disabled=not selected_decls,
                         ):
-                            # TODO: direktno tiskanje na Zebra GK420t
-                            # Zaenkrat generiramo ZPL datoteke za prenos
-                            zpl_all = ""
+                            # Generiraj HTML za tisk
+                            def _decl_html(decl, copies):
+                                fao  = decl.get("fao_naziv","") or decl.get("fao_code","")
+                                nacin = decl.get("nacin_ulova","")
+                                nacin_line = f"<p><b>Način ulova:</b> {nacin}</p>" if nacin else ""
+                                single = f"""
+                                <div class="decl">
+                                    <div class="header">OltreCon d.o.o., Orehovlje 2F, 5291 Miren</div>
+                                    <div class="naziv">{decl.get("naziv_artikla","")}</div>
+                                    <div class="latin"><i>{decl.get("latinski_naziv","")}</i></div>
+                                    <hr/>
+                                    <p><b>LOT:</b> {decl.get("lot_ours","")}</p>
+                                    <p><b>FAO / Izvor:</b> {fao}</p>
+                                    {nacin_line}
+                                    <p><b>Rok uporabe:</b> {decl.get("rok_trajanja","")}</p>
+                                    <p><b>Hraniti pri:</b> {decl.get("temperatura","")}</p>
+                                    <div class="vet">{VET_OZNAKA}</div>
+                                </div>"""
+                                return single * copies
+
+                            html_pages = ""
                             for di, decl, copies in selected_decls:
-                                for _ in range(copies):
-                                    zpl_all += _generate_zpl(decl) + "\n"
-                            st.download_button(
-                                f"⬇️ Prenesi ZPL ({len(selected_decls)} deklaracij)",
-                                data=zpl_all,
-                                file_name=f"deklaracije_{draft_id}.zpl",
-                                mime="text/plain",
-                                key=f"dl_all_zpl_{draft_id}",
-                            )
-                            st.info("⏳ Direktno tiskanje na Zebra GK420t bo implementirano ko dobimo vzorec OltreCon deklaracije.")
+                                html_pages += _decl_html(decl, copies)
+
+                            html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  @page {{ size: 80mm 50mm; margin: 3mm; }}
+  body {{ font-family: Arial, sans-serif; margin: 0; }}
+  .decl {{
+    width: 74mm; height: 44mm; padding: 2mm;
+    box-sizing: border-box; page-break-after: always;
+    border: 1px solid #ccc; overflow: hidden;
+  }}
+  .header {{ font-size: 7pt; border-bottom: 1px solid #000; margin-bottom: 1mm; }}
+  .naziv {{ font-size: 11pt; font-weight: bold; margin: 1mm 0; }}
+  .latin {{ font-size: 8pt; margin-bottom: 1mm; }}
+  p {{ font-size: 8pt; margin: 0.5mm 0; }}
+  .vet {{ font-size: 8pt; font-weight: bold; text-align: right; margin-top: 1mm; border: 1px solid #000; display: inline-block; padding: 0 2mm; float: right; }}
+  hr {{ margin: 1mm 0; border-top: 1px solid #000; }}
+</style>
+</head><body>
+{html_pages}
+<script>window.onload = function(){{ window.print(); }}</script>
+</body></html>"""
+
+                            import base64
+                            b64 = base64.b64encode(html.encode("utf-8")).decode()
+                            st.components.v1.html(f"""
+                                <script>
+                                var html = atob("{b64}");
+                                var win = window.open("","_blank");
+                                win.document.write(html);
+                                win.document.close();
+                                </script>
+                            """, height=0)
+                            st.success(f"✅ Tiskanje: {sum(c for _,_,c in selected_decls)} deklaracij")
+
 
                 # Shrani spremembe
                 draft["header"]       = h
