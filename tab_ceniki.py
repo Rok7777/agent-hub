@@ -1059,25 +1059,70 @@ def render():
                                 st.rerun()
                         with col_exp:
                             with st.expander(c_label, expanded=False):
-                                artikli = cenik.get("artikli",[])
+                                artikli = cenik.get("artikli", [])
                                 if not artikli:
                                     st.caption("Ni artiklov.")
                                 else:
-                                    for a_idx, art in enumerate(artikli):
-                                        ac1,ac2,ac3,ac4,ac5,ac6 = st.columns([3,2,1.2,1.2,1,2])
-                                        art["naziv"] = ac1.text_input("Naziv", value=art.get("naziv",""),
-                                            key=f"an_{_tid}_{cenik['id']}_{a_idx}", label_visibility="collapsed")
-                                        ac2.caption(art.get("latinski_naziv",""))
-                                        art["cena"] = ac3.number_input("€", value=float(art.get("cena",0)),
-                                            min_value=0.0, step=0.01, format="%.2f",
-                                            key=f"ac_{_tid}_{cenik['id']}_{a_idx}", label_visibility="collapsed")
-                                        ac4.caption(art.get("enota","kg"))
-                                        ac5.caption(art.get("poreklo",""))
-                                        sklop_opts = SKLOPI
-                                        cur_s = art.get("sklop","Divjaki")
-                                        art["sklop"] = ac6.selectbox("Sklop", sklop_opts,
-                                            index=sklop_opts.index(cur_s) if cur_s in sklop_opts else 1,
-                                            key=f"as_{_tid}_{cenik['id']}_{a_idx}", label_visibility="collapsed")
+                                    # Sortiraj po sklopu, znotraj abecedno
+                                    artikli_sort = sorted(
+                                        artikli,
+                                        key=lambda a: (
+                                            SKLOPI.index(a.get("sklop","Divjaki")) if a.get("sklop","Divjaki") in SKLOPI else 99,
+                                            a.get("naziv","").lower()
+                                        )
+                                    )
+                                    # Glava
+                                    hh = st.columns([2.5, 2, 2, 1.5, 1.2, 1])
+                                    for col, h in zip(hh, ["Orig. naziv", "SLO prevod", "Latinski naziv", "Poreklo", "Cena €/kg", "Sklop"]):
+                                        col.markdown(f"**{h}**")
+                                    st.markdown("---")
+
+                                    cur_sklop = None
+                                    for a_idx, art in enumerate(artikli_sort):
+                                        # Sklop separator
+                                        sklop = art.get("sklop", "Divjaki")
+                                        if sklop != cur_sklop:
+                                            ikona = {"Gojeno": "🐟", "Divjaki": "🌊", "Lokalna riba": "🏔️"}.get(sklop, "")
+                                            st.markdown(f"**{ikona} {sklop}**")
+                                            cur_sklop = sklop
+
+                                        # Poišči pravi indeks v originalnem seznamu za shranjevanje
+                                        orig_idx = next((i for i, a in enumerate(artikli) if id(a) == id(art)), a_idx)
+
+                                        ac1, ac2, ac3, ac4, ac5, ac6 = st.columns([2.5, 2, 2, 1.5, 1.2, 1])
+                                        with ac1:
+                                            art["naziv"] = st.text_input(
+                                                "Orig", value=art.get("naziv", ""),
+                                                key=f"an_{_tid}_{cenik['id']}_{orig_idx}",
+                                                label_visibility="collapsed"
+                                            )
+                                        with ac2:
+                                            art["naziv_slo"] = st.text_input(
+                                                "SLO", value=art.get("naziv_slo", ""),
+                                                key=f"aslo_{_tid}_{cenik['id']}_{orig_idx}",
+                                                label_visibility="collapsed",
+                                                placeholder="slo prevod..."
+                                            )
+                                        with ac3:
+                                            st.caption(art.get("latinski_naziv", "—"))
+                                        with ac4:
+                                            st.caption(art.get("poreklo", "—"))
+                                        with ac5:
+                                            art["cena"] = st.number_input(
+                                                "€", value=float(art.get("cena", 0)),
+                                                min_value=0.0, format="%.2f",
+                                                key=f"ac_{_tid}_{cenik['id']}_{orig_idx}",
+                                                label_visibility="collapsed"
+                                            )
+                                        with ac6:
+                                            cur_s = art.get("sklop", "Divjaki")
+                                            art["sklop"] = st.selectbox(
+                                                "Sklop", SKLOPI,
+                                                index=SKLOPI.index(cur_s) if cur_s in SKLOPI else 1,
+                                                key=f"as_{_tid}_{cenik['id']}_{orig_idx}",
+                                                label_visibility="collapsed"
+                                            )
+
                                     if st.button("💾 Shrani popravke", key=f"save_dob_{_tid}_{cenik['id']}"):
                                         st.session_state["ceniki_tedni"] = tedni
                                         _save_ceniki(tedni)
