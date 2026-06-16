@@ -257,6 +257,10 @@ def _dolocii_podsklop(art: dict) -> str:
             return "Fileji"
 
     return "Cele ribe"
+
+
+def _repair_json(raw: str) -> str:
+    """Poskusi popraviti odrezan JSON."""
     raw = raw.strip().replace("```json", "").replace("```", "").strip()
     try:
         json.loads(raw)
