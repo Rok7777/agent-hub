@@ -923,12 +923,18 @@ def render():
                 )
                 if nalozene:
                     prog = st.progress(0)
+                    napake = []
+                    uspesni = []
                     for i, f in enumerate(nalozene):
                         prog.progress((i+1)/len(nalozene), text=f"Berem {f.name} …")
                         file_bytes = f.read()
-                        parsed, err = _parse_cenik(file_bytes, f.name, f.type)
+                        try:
+                            parsed, err = _parse_cenik(file_bytes, f.name, f.type)
+                        except Exception as ex:
+                            err    = str(ex)
+                            parsed = {}
                         if err or not parsed:
-                            st.error(f"❌ {f.name}: {err or 'AI ni vrnil podatkov'}")
+                            napake.append(f"❌ **{f.name}**: {err or 'AI ni vrnil podatkov'}")
                             continue
                         dob_ime   = parsed.get("dobavitelj", f.name)
                         dob_datum = parsed.get("datum", "")
@@ -941,13 +947,26 @@ def render():
                             "artikli":    parsed.get("artikli",[]),
                             "uvozeno":    datetime.now().isoformat()[:16],
                         })
-                        st.success(f"✅ {dob_ime} ({_fmt_datum(dob_datum) or 'brez datuma'}): "
-                                   f"{len(parsed.get('artikli',[]))} artiklov")
+                        uspesni.append(f"✅ **{dob_ime}** ({_fmt_datum(dob_datum) or 'brez datuma'}): "
+                                       f"{len(parsed.get('artikli',[]))} artiklov")
                     prog.empty()
-                    st.session_state[f"up_reset_{_tid}"] = _up_reset_n + 1
-                    st.session_state["ceniki_tedni"] = tedni
-                    _save_ceniki(tedni)
-                    st.rerun()
+
+                    # Prikaži rezultate — napake ostanejo vidne
+                    for msg in uspesni:
+                        st.success(msg)
+                    for msg in napake:
+                        st.error(msg)
+
+                    if uspesni:
+                        # Shrani in reload samo če je vsaj en uspešen uvoz
+                        st.session_state[f"up_reset_{_tid}"] = _up_reset_n + 1
+                        st.session_state["ceniki_tedni"] = tedni
+                        _save_ceniki(tedni)
+                        st.rerun()
+                    elif napake:
+                        # Napaka — NE rerunaj, pusti sporočilo vidno
+                        st.session_state[f"up_reset_{_tid}"] = _up_reset_n + 1
+                        st.stop()
 
                 if not teden.get("ceniki_dob"):
                     st.caption("Naloži PDF/Excel/CSV cenike dobaviteljev z gumbom zgoraj.")
