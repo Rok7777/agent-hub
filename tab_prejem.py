@@ -291,53 +291,10 @@ REQUIRED_ROW = [
     ("quantity",   "⚠️", "Količina ni določena"),
     ("price",      "⚠️", "Nabavna cena ni določena"),
 ]
-SUPPLIER_ITEM_MAPPINGS = {
-    "LIBO": {
-        "OČIŠČENA": {
-            "item_code": "POSSS0301",
-            "item_name": "(POSSS0301) POSTRV (Šarenka), 300-400g, očiščena, sveža, Slovenija",
-        },
-        "FILE BEL": {
-            "item_code": "POSSS0202",
-            "item_name": "(POSSS0202) POSTRV (Šarenka), 160-200g, file, sveža, Slovenija",
-        },
-        "FILE RDEČ": {
-            "item_code":  None,   # potrebna ročna delitev
-            "item_name":  "⚠️ Razdeliti: (LPOSS0202) ali (LPOSS0102)",
-            "needs_split": True,
-            "split_options": [
-                {"item_code": "LPOSS0202", "item_name": "(LPOSS0202) LOSOSOVA POSTRV file, 150-300g, svež, Slovenija"},
-                {"item_code": "LPOSS0102", "item_name": "(LPOSS0102) LOSOSOVA POSTRV file, 300g+, svež, Slovenija"},
-            ],
-        },
-    },
-    "ALEMAR": {
-        "DENTICE GIBBOSO":  {"item_code":"ZOBSM1000","item_name":"(ZOBSM1000) ZOBATEC (debeloglavi), 1000-2000g, svež, FAO 34",
-                             "latinski_naziv":"Dentex gibbosus","fao_code":"34","nacin_ulova":"Parangal",
-                             "tariff":"03028300","country_of_origin":"MA"},
-        "BRANZINO CROAZIA": {"item_code":"BRASH0400","item_name":"(BRASH0400) BRANCIN, 400-600g, svež, Hrvaška",
-                             "latinski_naziv":"Dicentrarchus labrax","fao_code":"GOJ_MORJE_HR","nacin_ulova":"",
-                             "tariff":"03028410","country_of_origin":"HR"},
-        "COZZA DI BOUCHOT": {"item_code":"PEDSB0000","item_name":"(PEDSB0000) KLAPAVICE, sveže, Bouchot, Francija",
-                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_FR","nacin_ulova":"",
-                             "tariff":"03073110","country_of_origin":"FR"},
-        "COZZA ITALIA":     {"item_code":"PEDSI0000","item_name":"(PEDSI0000) KLAPAVICE, sveže, Italija",
-                             "latinski_naziv":"Mytilus galloprovincialis","fao_code":"GOJ_MORJE_IT","nacin_ulova":"",
-                             "tariff":"03073110","country_of_origin":"IT"},
-        "FASOLARO":         {"item_code":"FAZSX0000","item_name":"(FAZSX0000) LEPOTKE, sveže, FAO 37.2.1",
-                             "latinski_naziv":"Callista chione","fao_code":"37.2.1","nacin_ulova":"Vlečne mreže",
-                             "tariff":"16055390","country_of_origin":"IT"},
-        "SARDINA":          {"item_code":"SARSH0003","item_name":"(SARSH0003) SARDELE, sveže, FAO 37.1.3",
-                             "latinski_naziv":"Sardina pilchardus","fao_code":"37.1.3","nacin_ulova":"Potegalke",
-                             "tariff":"03024310","country_of_origin":"IT"},
-        "FILONE TONNO":     {"item_code":"TUNSO0100","item_name":"(TUNSO0100) TUN (rumenoplavuti), filon, Premium, odtaljen, FAO 87",
-                             "latinski_naziv":"Thunnus albacares","fao_code":"87","nacin_ulova":"Vlečne mreže",
-                             "tariff":"03023290","country_of_origin":"ID"},
-        "VONGOLE VERACI":   {"item_code":"VONSI0000","item_name":"(VONSI0000) KOČICE, sveže, Italija",
-                             "latinski_naziv":"Ruditapes decussatus","fao_code":"GOJ_MORJE_IT","nacin_ulova":"",
-                             "tariff":"16055390","country_of_origin":"IT"},
-    },
-}
+# Mappingi se nalagajo izključno iz CSV (prejem_mappings.json)
+# Hardkodirani so bili odstranjeni — uvozi vse prek "Uvozi mappinge (CSV)"
+SUPPLIER_ITEM_MAPPINGS = {}
+
 
 def _apply_supplier_mapping(supplier_name: str, rows: list) -> list:
     """Aplicira znane mappinge po dobavitelju — združi VSE ujemajoče (ALEMAR + ALEMAR S.R.L.)."""
@@ -1189,6 +1146,18 @@ def render():
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
                 st.divider()
+        # Backup gumb za prenos mappingov
+        _map_backup = _load_mappings()
+        if _map_backup:
+            st.download_button(
+                "💾 Prenesi backup mappingov",
+                data=json.dumps(_map_backup, ensure_ascii=False, indent=2),
+                file_name="prejem_mappings_backup.json",
+                mime="application/json",
+                use_container_width=True,
+                key="btn_dl_mappings"
+            )
+
         if st.button("🗑️ Počisti uvožene mappinge", use_container_width=True, key="btn_clear_mappings"):
             try:
                 if os.path.exists(MAPPINGS_FILE):
@@ -1199,6 +1168,18 @@ def render():
                 st.rerun()
             except Exception as e:
                 st.sidebar.error(f"Napaka: {e}")
+
+        with st.expander("📤 Obnovi backup (JSON)", expanded=False):
+            st.caption("Naložite prej prenešen prejem_mappings_backup.json")
+            backup_file = st.file_uploader("JSON backup", type=["json"], key="restore_mappings")
+            if backup_file:
+                try:
+                    restored = json.loads(backup_file.read().decode("utf-8"))
+                    _save_mappings(restored)
+                    st.success(f"✅ Obnovljeno: {sum(len(v) for v in restored.values())} keywordov")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Napaka: {e}")
 
         with st.expander("📥 Uvozi mappinge (CSV)", expanded=False):
             st.caption("CSV iz Connections chata — stolpci: supplier_name, inv_name, item_code, item_name, nc, pc, tariff, country_of_origin, latin_name, fao, nacin_ulova, country_dispatch, delivery_terms")
