@@ -125,10 +125,7 @@ def _migracija_stari_format(nas_cenik: dict) -> dict:
             stari = nas_cenik[sklop]
             nas_cenik[sklop] = {ps: [] for ps in PODSKOPI}
             for art in stari:
-                ps = "Fileji" if any(
-                    w in (art.get("naziv","") + art.get("naziv_slo","")).lower()
-                    for w in ["file", "filé", "filet", "filone", "trancio", "anello", "obroč"]
-                ) else "Cele ribe"
+                ps = _dolocii_podsklop(art)
                 nas_cenik[sklop][ps].append(art)
     return nas_cenik
 
@@ -189,24 +186,42 @@ Vrni SAMO čist JSON brez markdown, brez komentarjev.
   "artikli": [
     {
       "naziv": "naziv artikla kot piše v ceniku",
-      "naziv_slo": "slovenski prevod — kratek, jasen, za slovenskega kupca. Primeri: 'Brancin 400-600g, svež, Hrvaška', 'Tun rumenoplavuti, filon, svež', 'Lososov file, brez kože'. Šarun=Šur, Totano=Liganj, Anello=Obroček, Ricciola=Pisana limača, Ombrina=Senčar, Pagello=Rdeči ribon, Dentice=Zobatec, Spigola=Brancin, Orata=Orada, Sgombro=Skuša, Acciuga=Sardon, Cefalo=Cipal, Rombo=Morska plošča",
+      "naziv_slo": "slovenski prevod — kratek, jasen, za slovenskega kupca. Primeri: 'Brancin 400-600g, svež, Hrvaška', 'Tun rumenoplavuti, filon, svež', 'Lososov file, brez kože'. Šarun=Šur, Totano=Liganj, Anello=Obroček lignja, Ricciola=Pisana limača, Ombrina=Senčar, Pagello=Rdeči ribon, Dentice=Zobatec, Spigola=Brancin, Orata=Orada, Sgombro=Skuša, Acciuga=Sardon, Cefalo=Cipal, Rombo=Morska plošča, Astice=Jastog, Coda di rospo=Rep morskega vraga, Anguilla=Jegulja",
       "latinski_naziv": "latinsko ime vrste",
       "cena": 0.00,
       "enota": "kg",
       "poreklo": "2-črkovna ISO koda",
       "sklop": "Gojeno ali Divjaki ali Lokalna riba",
-      "podsklop": "Cele ribe ali Fileji",
+      "podsklop": "Fileji ali Cele ribe",
       "komentar": ""
     }
   ]
 }
 
 Sklop: Gojeno=ribogojnice, Divjaki=divje ulovljene, Lokalna riba=slovensko poreklo.
-Podsklop: Fileji=fileji/koščki/obročki (file, filé, filet, filone, trancio, anello, obroček...), Cele ribe=vse ostalo.
+
+PRAVILO ZA PODSKLOP — KRITIČNO:
+podsklop="Fileji" SAMO če naziv vsebuje besede: file, filé, filet, filone, trancio, anello, suprema, lomo, darnes, steak, trance
+podsklop="Cele ribe" za VSE ostalo.
+
+Primeri Fileji: "FILONE DI TONNO", "FILE DI BRANZINO", "ANELLO DI TOTANO GIGANTE", "TRANCIO DI SALMONE", "SUPREMA DI ORATA"
+Primeri Cele ribe: "CODA DI ROSPO" (rep, ne file!), "BRANZINO INTERO", "ASTICE VIVO", "TOTANO" (brez anello), "COZZE", "VONGOLE", "DENTICE PESCATO"
+
 Cena=vedno za 1kg brez DDV. Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...)."""
 
 
-def _repair_json(raw: str) -> str:
+_FILEJI_KW = {"file", "filé", "filet", "filone", "trancio", "anello", "suprema", "lomo", "darnes", "steak", "trance"}
+
+def _dolocii_podsklop(art: dict) -> str:
+    """Določi podsklop na podlagi naziva — fallback če AI ni pravilno razvrstil."""
+    ps = art.get("podsklop","").strip()
+    if ps in ("Fileji", "Cele ribe"):
+        return ps
+    # Fallback — preveri naziv po ključnih besedah
+    naziv = (art.get("naziv","") + " " + art.get("naziv_slo","")).lower()
+    if any(kw in naziv for kw in _FILEJI_KW):
+        return "Fileji"
+    return "Cele ribe"
     raw = raw.strip().replace("```json", "").replace("```", "").strip()
     try:
         json.loads(raw)
@@ -674,7 +689,7 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     with sc2:
         filter_s = st.selectbox("Sklop", ["Vsi"] + SKLOPI, key=f"fs_{teden['id']}_{ime_cenika}")
     with sc3:
-        filter_ps = st.selectbox("Podsklop", ["Vsi"] + PODSKOPI, key=f"fps_{teden['id']}_{ime_cenika}")
+        filter_ps = st.selectbox("Tip", ["Vsi", "Cele ribe", "Fileji"], key=f"fps_{teden['id']}_{ime_cenika}")
 
     st.markdown("---")
 
@@ -705,6 +720,8 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                         "marza_pct":      0.0,
                         "dobavitelj":     cenik.get("dobavitelj",""),
                     }
+                    # Nastavi podsklop z fallback
+                    vse[lat]["podsklop"] = _dolocii_podsklop(vse[lat])
         # Počisti in napolni
         nas_cenik = _prazen_nas_cenik()
         for art_data in vse.values():
@@ -771,8 +788,7 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
             if not has_arts:
                 continue
 
-            ikona = SKLOP_IKONA.get(sklop, "")
-            st.markdown(f"### {ikona} {sklop}")
+            # Ne prikazuj header sklopa — podsklop že vsebuje ime sklopa
 
             for podsklop in PODSKOPI:
                 if filter_ps != "Vsi" and podsklop != filter_ps:
@@ -791,8 +807,12 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 if not artikli_sort:
                     continue
 
-                ps_ikona = PODSKLOP_IKONA.get(podsklop, "")
-                st.markdown(f"#### {ps_ikona} {podsklop}")
+                # Prikaz: "🐟 Gojeno — cele ribe" ali "🔪 Gojeno — fileji"
+                if podsklop == "Fileji":
+                    ps_label = f"🔪 {sklop} — fileji"
+                else:
+                    ps_label = f"{SKLOP_IKONA.get(sklop,'')} {sklop} — cele ribe"
+                st.markdown(f"#### {ps_label}")
 
                 # Skupinska marža — on_change
                 sm_key = f"skupna_marza_{teden['id']}_{ime_cenika}_{sklop}_{podsklop}"
@@ -808,7 +828,7 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                         _save_ceniki(tedni)
 
                 st.number_input(
-                    f"📐 Skupna marža % — {sklop} / {podsklop}",
+                    f"📐 Skupna marža % — {ps_label}",
                     min_value=0.0, max_value=500.0, value=0.0, step=0.5, format="%.1f",
                     key=sm_key, on_change=_apply_skupna,
                     help="Vpišeš % in pritisni Enter — izpolni vse artikle v tem podsklopu"
@@ -955,7 +975,8 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 key=lambda a: (a.get("naziv_slo") or a.get("naziv","")).lower()
             )
             if arts_s:
-                html_vsebina += _sklop_html_izvoz(f"{sklop} — {podsklop}", arts_s)
+                naziv_sek = f"{sklop} — fileji" if podsklop == "Fileji" else f"{sklop} — cele ribe"
+                html_vsebina += _sklop_html_izvoz(naziv_sek, arts_s)
     html_vsebina += ('<div style="border-top:0.5px solid #ddd;padding-top:5px;'
                      'display:flex;justify-content:space-between;margin-top:8px;">'
                      '<div style="font-size:9px;color:#aaa;">Oltre Con d.o.o. · Orehovlje 2/f, 5291 Miren · SI19211210</div>'
@@ -1133,11 +1154,14 @@ def render():
                                     st.markdown("---")
                                     cur_sklop, cur_ps = None, None
                                     for a_idx, art in enumerate(artikli_sort):
-                                        sklop   = art.get("sklop","Divjaki")
+                                        sklop    = art.get("sklop","Divjaki")
                                         podsklop = art.get("podsklop","Cele ribe")
                                         if sklop != cur_sklop or podsklop != cur_ps:
-                                            ikona = f"{SKLOP_IKONA.get(sklop,'')} {sklop} / {PODSKLOP_IKONA.get(podsklop,'')} {podsklop}"
-                                            st.markdown(f"**{ikona}**")
+                                            if podsklop == "Fileji":
+                                                sep_label = f"🔪 {sklop} — fileji"
+                                            else:
+                                                sep_label = f"{SKLOP_IKONA.get(sklop,'')} {sklop} — cele ribe"
+                                            st.markdown(f"**{sep_label}**")
                                             cur_sklop, cur_ps = sklop, podsklop
                                         orig_idx = next((i for i,a in enumerate(artikli) if id(a)==id(art)), a_idx)
                                         ac = st.columns([2.5,2,2,1.5,1.2,1,1.2])
