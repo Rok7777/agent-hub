@@ -1696,7 +1696,7 @@ def render():
                                 st.caption("NV €"); st.markdown(f"**{_nv:.2f}**")
                             with ac[5]:
                                 f_marza = st.number_input("Marža%", value=_mz_def,
-                                            min_value=0.0, max_value=500.0, step=0.1, format="%.1f",
+                                            min_value=0.0, max_value=9999.0, step=0.1, format="%.1f",
                                             key=f"marza_{draft_id}_{idx}", on_change=_calc_pc, args=(draft_id, idx))
                             with ac[6]:
                                 _pc_disp = st.session_state.get(f"sell_{draft_id}_{idx}", row.get("selling_price") or 0)
