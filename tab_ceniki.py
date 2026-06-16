@@ -17,7 +17,7 @@ CENIKI_FILE = str(_DATA_DIR / "ceniki.json")
 
 # ─── Konstante ────────────────────────────────────────────────────────────────
 NASI_CENIKI = ["HIT", "HoReCa"]
-SKLOPI      = ["Gojeno", "Divjaki", "Lokalna riba"]
+SKLOPI      = ["Gojeno", "Divjaki", "Fileji", "Lokalna riba"]
 GOJENO_DRZAVE = {
     "HR": "Hrvaška", "IT": "Italija", "TR": "Turčija",
     "NO": "Norveška", "GR": "Grčija", "ES": "Španija", "FR": "Francija",
@@ -61,7 +61,7 @@ def _nov_teden(datum_od: str, datum_do: str) -> dict:
         "ustvarjen":   datetime.now().isoformat()[:10],
         "ceniki_dob":  [],
         "nasi_ceniki": {
-            ime: {"Gojeno": [], "Divjaki": [], "Lokalna riba": []}
+            ime: {"Gojeno": [], "Divjaki": [], "Fileji": [], "Lokalna riba": []}
             for ime in NASI_CENIKI
         },
     }
@@ -181,7 +181,7 @@ Vrni SAMO čist JSON brez markdown, brez komentarjev.
   ]
 }
 
-Sklop: Gojeno=ribogojnice, Divjaki=divje ulovljene, Lokalna riba=slovensko poreklo.
+Sklop: Gojeno=ribogojnice, Divjaki=divje ulovljene cele ribe, Fileji=fileji in koščki rib (file, filone, trancio, anello...), Lokalna riba=slovensko poreklo.
 Cena=vedno za 1kg brez DDV. Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...).
 naziv_slo: VEDNO v slovenščini, kratek in jasen opis artikla za slovenskega kupca."""
 
@@ -770,31 +770,30 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 ]
             if not artikli_sklop_sort:
                 continue
-            ikona = {"Gojeno": "🐟", "Divjaki": "🌊", "Lokalna riba": "🏔️"}.get(sklop, "")
+            ikona = {"Gojeno": "🐟", "Divjaki": "🌊", "Fileji": "🔪", "Lokalna riba": "🏔️"}.get(sklop, "")
             st.markdown(f"#### {ikona} {sklop}")
 
-            # Skupinska marža za sklop
-            sm1, sm2 = st.columns([3, 7])
-            with sm1:
-                skupna_marza = st.number_input(
-                    f"Marža % za vse v {sklop}",
-                    min_value=0.0, max_value=500.0, value=0.0, step=0.5, format="%.1f",
-                    key=f"skupna_marza_{teden['id']}_{ime_cenika}_{sklop}"
-                )
-            with sm2:
-                if st.button(
-                    f"Uporabi {skupna_marza:.0f}% na vse — {sklop}",
-                    key=f"apply_marza_{teden['id']}_{ime_cenika}_{sklop}",
-                    disabled=skupna_marza <= 0
-                ):
+            # ── Skupinska marža — live update z on_change ────────────────
+            sm_key = f"skupna_marza_{teden['id']}_{ime_cenika}_{sklop}"
+
+            def _apply_skupna_marza(sklop=sklop, artikli_sklop=artikli_sklop, sm_key=sm_key):
+                m = st.session_state.get(sm_key, 0.0)
+                if m and m > 0:
                     for art in artikli_sklop:
                         nc_v = float(art.get("cena", 0))
                         if nc_v > 0:
-                            art["marza_pct"]     = skupna_marza
-                            art["cena_prodajna"] = round(nc_v * (1 + skupna_marza / 100), 2)
+                            art["marza_pct"]     = m
+                            art["cena_prodajna"] = round(nc_v * (1 + m / 100), 2)
                     st.session_state["ceniki_tedni"] = tedni
                     _save_ceniki(tedni)
-                    st.rerun()
+
+            st.number_input(
+                f"📐 Skupna marža % za {sklop}",
+                min_value=0.0, max_value=500.0, value=0.0, step=0.5, format="%.1f",
+                key=sm_key,
+                on_change=_apply_skupna_marza,
+                help="Vpišeš % in pritisni Enter — izpolni vse artikle v tem sklopu"
+            )
 
             h0,h1,h2,h3,h4,h5,h6,h7 = st.columns([2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
             h0.markdown("**SLO naziv**"); h1.markdown("**Latinski naziv**")
@@ -816,6 +815,7 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 primerjave = vse_cene_cache[lat_key]
                 uid = f"{teden['id']}_{ime_cenika}_{sklop}_{a_idx}"
                 c0,c1,c2,c3,c4,c5,c6,c7 = st.columns([2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
+
                 with c0:
                     art["naziv_slo"] = st.text_input(
                         "slo", value=art.get("naziv_slo") or art.get("naziv",""),
@@ -825,39 +825,64 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                     st.caption(art.get("latinski_naziv","—"))
                 with c2:
                     st.caption(art.get("poreklo","—"))
+
+                # NC — on_change posodobi PC iz marže
+                nc_key = f"cena_{uid}"
+                def _on_nc_change(art=art, nc_key=nc_key):
+                    new_nc = st.session_state.get(nc_key, 0.0)
+                    art["cena"] = new_nc
+                    m = float(art.get("marza_pct", 0))
+                    if new_nc > 0 and m > 0:
+                        art["cena_prodajna"] = round(new_nc * (1 + m / 100), 2)
+                    st.session_state["ceniki_tedni"] = tedni
+                    _save_ceniki(tedni)
+
                 with c3:
-                    new_nc = st.number_input(
-                        "nc", value=float(art.get("cena",0)),
+                    st.number_input(
+                        "nc", value=float(art.get("cena", 0)),
                         min_value=0.0, format="%.2f",
-                        key=f"cena_{uid}", label_visibility="collapsed"
+                        key=nc_key, label_visibility="collapsed",
+                        on_change=_on_nc_change
                     )
-                    if new_nc != float(art.get("cena",0)):
-                        art["cena"] = new_nc
-                        m = float(art.get("marza_pct",0))
-                        if new_nc > 0 and m > 0:
-                            art["cena_prodajna"] = round(new_nc * (1 + m/100), 2)
+
+                # Marža — on_change izračuna PC
+                m_key = f"marza_{uid}"
+                def _on_marza_change(art=art, m_key=m_key):
+                    new_m = st.session_state.get(m_key, 0.0)
+                    art["marza_pct"] = new_m
+                    nc_v = float(art.get("cena", 0))
+                    if nc_v > 0:
+                        art["cena_prodajna"] = round(nc_v * (1 + new_m / 100), 2)
+                    st.session_state["ceniki_tedni"] = tedni
+                    _save_ceniki(tedni)
+
                 with c4:
-                    new_m = st.number_input(
-                        "marža", value=float(art.get("marza_pct",0)),
+                    st.number_input(
+                        "marža", value=float(art.get("marza_pct", 0)),
                         min_value=0.0, max_value=500.0, format="%.1f",
-                        key=f"marza_{uid}", label_visibility="collapsed"
+                        key=m_key, label_visibility="collapsed",
+                        on_change=_on_marza_change
                     )
-                    if new_m != float(art.get("marza_pct",0)):
-                        art["marza_pct"] = new_m
-                        nc_v = float(art.get("cena",0))
-                        if nc_v > 0:
-                            art["cena_prodajna"] = round(nc_v * (1 + new_m/100), 2)
+
+                # PC — on_change izračuna maržo
+                pc_key = f"prod_{uid}"
+                def _on_pc_change(art=art, pc_key=pc_key):
+                    new_pc = st.session_state.get(pc_key, 0.0)
+                    art["cena_prodajna"] = new_pc
+                    nc_v = float(art.get("cena", 0))
+                    if nc_v > 0 and new_pc > 0:
+                        art["marza_pct"] = round((new_pc / nc_v - 1) * 100, 1)
+                    st.session_state["ceniki_tedni"] = tedni
+                    _save_ceniki(tedni)
+
                 with c5:
-                    new_pc = st.number_input(
-                        "pc", value=float(art.get("cena_prodajna",0)),
+                    st.number_input(
+                        "pc", value=float(art.get("cena_prodajna", 0)),
                         min_value=0.0, format="%.2f",
-                        key=f"prod_{uid}", label_visibility="collapsed"
+                        key=pc_key, label_visibility="collapsed",
+                        on_change=_on_pc_change
                     )
-                    if new_pc != float(art.get("cena_prodajna",0)):
-                        art["cena_prodajna"] = new_pc
-                        nc_v = float(art.get("cena",0))
-                        if nc_v > 0 and new_pc > 0:
-                            art["marza_pct"] = round((new_pc/nc_v - 1)*100, 1)
+
                 with c6:
                     dob = art.get("dobavitelj","")
                     if primerjave and len(primerjave) > 1:
