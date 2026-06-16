@@ -809,6 +809,65 @@ Artikli:
 
 
 
+def _ai_povezi_artikle(artikli: list) -> list:
+    """
+    AI poveže iste artikle od različnih dobaviteljev v grupe.
+    Vrne seznam grup — vsaka grupa je seznam artiklov ki predstavljajo isti produkt.
+    Kjer AI ni siguren, pusti artikel v svoji grupi.
+    """
+    if not artikli:
+        return []
+    try:
+        import anthropic
+        api_key = _secret("ANTHROPIC_API_KEY","")
+        if not api_key:
+            return [[a] for a in artikli]
+        seznam = "\n".join([
+            f"{i}: [{a['dobavitelj']}] {a['naziv']} | lat: {a.get('latinski_naziv','')} | {a['cena']:.2f}€"
+            for i, a in enumerate(artikli)
+        ])
+        prompt = f"""Imaš seznam artiklov rib od različnih dobaviteljev. Poveži artikle ki so ISTI produkt v grupe.
+
+PRAVILA:
+- Isti artikel = ista vrsta ribe + podobna velikost/teža + ista oblika (cela riba, file, obroček...)
+- Različne velikosti so RAZLIČNI artikli (Brancin 200/300 ≠ Brancin 600/800)
+- Če nisi siguren → pusti v svoji grupi (seznam z enim elementom)
+- Latinski naziv je zanesljiv pokazatelj vrste
+
+Vrni SAMO JSON brez markdown:
+{{"grupe": [[0,3,7],[1],[2,5],[4],[6]]}}
+
+Vsaka podlista = indeksi artiklov ki so isti produkt.
+
+Artikli:
+{seznam}"""
+        client = anthropic.Anthropic(api_key=api_key)
+        resp   = client.messages.create(
+            model="claude-opus-4-6", max_tokens=4096,
+            messages=[{"role":"user","content":prompt}]
+        )
+        raw    = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
+        result = json.loads(raw)
+        grupe_idx = result.get("grupe", [])
+        grupe = []
+        pokrite = set()
+        for grupa_idx in grupe_idx:
+            grupa = []
+            for idx in grupa_idx:
+                if 0 <= idx < len(artikli):
+                    grupa.append(artikli[idx])
+                    pokrite.add(idx)
+            if grupa:
+                grupe.append(grupa)
+        # Nepokrite → svoja grupa
+        for i, art in enumerate(artikli):
+            if i not in pokrite:
+                grupe.append([art])
+        return grupe
+    except Exception:
+        return [[a] for a in artikli]
+
+
 def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     nas_cenik = teden["nasi_ceniki"][ime_cenika]
     nas_cenik = _migracija_stari_format(nas_cenik)
@@ -898,48 +957,49 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
 
     st.markdown("---")
 
-    st.caption("🤖 Samodejno sestavi: za vsakega dobavitelja vzame samo najnovejši cenik, nato poišče najugodnejšo ceno.")
+    st.caption("🤖 Samodejno sestavi: AI poveže iste artikle med dobavitelji in izbere najugodnejšo ceno.")
     if st.button(f"🤖 Samodejno sestavi {ime_cenika}",
                  key=f"auto_{tid}_{ime_cenika}",
                  disabled=not teden.get("ceniki_dob")):
         aktivni = _najnovejsi_ceniki(teden["ceniki_dob"])
-        vse: dict = {}
+        vsi_artikli = []
         for cenik in aktivni:
-            for art in cenik.get("artikli", []):
-                lat  = (art.get("latinski_naziv") or art.get("naziv","")).lower().strip()
-                cena = float(art.get("cena", 0))
-                if not lat or cena <= 0:
+            dob = cenik.get("dobavitelj","")
+            for art in cenik.get("artikli",[]):
+                cena = float(art.get("cena",0))
+                if cena <= 0:
                     continue
-                if lat not in vse or cena < vse[lat]["cena"]:
-                    naziv_slo = art.get("naziv_slo","").strip()
-                    if not naziv_slo:
-                        naziv_slo = art.get("naziv","")
-                    vse[lat] = {
-                        "naziv":          art.get("naziv",""),
-                        "naziv_slo":      naziv_slo,
-                        "latinski_naziv": art.get("latinski_naziv",""),
-                        "cena":           cena,
-                        "enota":          art.get("enota","kg"),
-                        "poreklo":        art.get("poreklo",""),
-                        "sklop":          art.get("sklop","Divjaki"),
-                        "podsklop":       _dolocii_podsklop(art),
-                        "cena_prodajna":  0.0,
-                        "marza_pct":      0.0,
-                        "dobavitelj":     cenik.get("dobavitelj",""),
-                    }
-        nas_cenik = _prazen_nas_cenik()
-        for art_data in vse.values():
-            sklop    = art_data.get("sklop","Divjaki")
-            podsklop = art_data.get("podsklop","Cele ribe")
-            if sklop    not in SKLOPI:    sklop    = "Divjaki"
-            if podsklop not in PODSKOPI:  podsklop = "Cele ribe"
-            nas_cenik[sklop][podsklop].append(art_data)
-        teden["nasi_ceniki"][ime_cenika] = nas_cenik
-        # Ponastavi prevajanje da se ob naslednjem renderu prevede znova
-        st.session_state.pop(f"prevedeno_{tid}_{ime_cenika}", None)
-        st.session_state["ceniki_tedni"] = tedni
-        _save_ceniki(tedni)
-        st.rerun()
+                vsi_artikli.append({
+                    "naziv":          art.get("naziv",""),
+                    "naziv_slo":      art.get("naziv_slo","") or art.get("naziv",""),
+                    "latinski_naziv": art.get("latinski_naziv",""),
+                    "cena":           cena,
+                    "enota":          art.get("enota","kg"),
+                    "poreklo":        art.get("poreklo",""),
+                    "sklop":          art.get("sklop","Divjaki"),
+                    "podsklop":       _dolocii_podsklop(art),
+                    "cena_prodajna":  0.0,
+                    "marza_pct":      0.0,
+                    "dobavitelj":     dob,
+                })
+        if not vsi_artikli:
+            st.warning("Ni artiklov za sestavljanje.")
+        else:
+            with st.spinner("🤖 AI povezuje artikle med dobavitelji..."):
+                grupe = _ai_povezi_artikle(vsi_artikli)
+            nas_cenik = _prazen_nas_cenik()
+            for grupa in grupe:
+                najboljsi = min(grupa, key=lambda a: a["cena"])
+                sklop    = najboljsi.get("sklop","Divjaki")
+                podsklop = najboljsi.get("podsklop","Cele ribe")
+                if sklop    not in SKLOPI:    sklop    = "Divjaki"
+                if podsklop not in PODSKOPI:  podsklop = "Cele ribe"
+                nas_cenik[sklop][podsklop].append(najboljsi)
+            teden["nasi_ceniki"][ime_cenika] = nas_cenik
+            st.session_state.pop(f"prevedeno_{tid}_{ime_cenika}", None)
+            st.session_state["ceniki_tedni"] = tedni
+            _save_ceniki(tedni)
+            st.rerun()
 
     # ── Ročno dodajanje ──────────────────────────────────────────────────
     with st.expander("➕ Ročno dodaj artikel", expanded=False):
@@ -1009,23 +1069,34 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 ps_label = f"{SKLOP_IKONA.get(sklop,'')} {sklop} — cele ribe"
             st.markdown(f"#### {ps_label}")
 
-            # Skupinska marža — v glavi tabele, točno nad stolpcem Marža %
+            # Skupinska marža + glava tabele z izvoz checkboxom
             sm_key = f"skupna_marza_{tid}_{ime_cenika}_{sklop}_{podsklop}"
-            h0,h1,h2,h3,h4,h5,h6,h7 = st.columns([2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
-            h0.markdown("**SLO naziv**")
-            h1.markdown("**Latinski naziv**")
-            h2.markdown("**Poreklo**")
-            h3.markdown("**Nakupna €**")
-            with h4:
+            # Izberi vse za izvoz v tem podsklopu
+            master_izvoz_key = f"izvoz_master_{tid}_{ime_cenika}_{sklop}_{podsklop}"
+            prev_mik = f"izvoz_prev_{tid}_{ime_cenika}_{sklop}_{podsklop}"
+            h0,h1,h2,h3,h4,h5,h6,h7,h8 = st.columns([0.5,2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
+            with h0:
+                master_izvoz = st.checkbox("☑", key=master_izvoz_key,
+                                           help="Izberi vse za izvoz")
+                prev_mi = st.session_state.get(prev_mik, None)
+                if prev_mi is not None and master_izvoz != prev_mi:
+                    for ai in range(len(artikli_sort)):
+                        st.session_state[f"izvoz_sel_{tid}_{ime_cenika}_{sklop}_{podsklop}_{ai}"] = master_izvoz
+                st.session_state[prev_mik] = master_izvoz
+            h1.markdown("**SLO naziv**")
+            h2.markdown("**Latinski naziv**")
+            h3.markdown("**Poreklo**")
+            h4.markdown("**Nakupna €**")
+            with h5:
                 st.number_input(
                     "Marža %", min_value=0.0, max_value=500.0,
                     value=0.0, step=0.5, format="%.1f",
                     key=sm_key,
                     help="Skupna marža za vse v tem sklopu — vpišeš in pritisni Enter"
                 )
-            h5.markdown("**Prod. €**")
-            h6.markdown("**Dobavitelj ↙**")
-            h7.markdown("")
+            h6.markdown("**Prod. €**")
+            h7.markdown("**Dobavitelj ↙**")
+            h8.markdown("")
             st.markdown("---")
 
             for a_idx, art in enumerate(artikli_sort):
@@ -1040,34 +1111,35 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                     vse_cene_cache[lat_key] = prim
                 prim = vse_cene_cache[lat_key]
                 uid  = f"{tid}_{ime_cenika}_{sklop}_{podsklop}_{a_idx}"
-                c0,c1,c2,c3,c4,c5,c6,c7 = st.columns([2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
-
+                c0,c1,c2,c3,c4,c5,c6,c7,c8 = st.columns([0.5,2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
                 with c0:
-                    # SLO naziv — vedno prikaži SLO, če ga ni vzemi orig
+                    st.checkbox("", key=f"izvoz_sel_{tid}_{ime_cenika}_{sklop}_{podsklop}_{a_idx}",
+                                help="Vključi v izvoz za stranke")
+                with c1:
                     naziv_val = art.get("naziv_slo") or art.get("naziv","")
                     art["naziv_slo"] = st.text_input(
                         "slo", value=naziv_val,
                         key=f"nslo_{uid}", label_visibility="collapsed")
-                with c1:
-                    st.caption(art.get("latinski_naziv","—"))
                 with c2:
-                    st.caption(art.get("poreklo","—"))
+                    st.caption(art.get("latinski_naziv","—"))
                 with c3:
+                    st.caption(art.get("poreklo","—"))
+                with c4:
                     st.number_input("nc", value=float(art.get("cena",0)), min_value=0.0,
                         format="%.2f", key=f"cena_{uid}", label_visibility="collapsed")
-                with c4:
+                with c5:
                     st.number_input("m", value=float(art.get("marza_pct",0)), min_value=0.0,
                         max_value=500.0, format="%.1f", key=f"marza_{uid}", label_visibility="collapsed")
-                with c5:
+                with c6:
                     st.number_input("pc", value=float(art.get("cena_prodajna",0)), min_value=0.0,
                         format="%.2f", key=f"prod_{uid}", label_visibility="collapsed")
-                with c6:
+                with c7:
                     dob = art.get("dobavitelj","")
                     if prim and len(prim) > 1:
                         st.caption(f"✅ {dob}", help="\n".join(prim))
                     else:
                         st.caption(dob)
-                with c7:
+                with c8:
                     if st.button("✕", key=f"rm_{uid}", help="Odstrani"):
                         art_id = id(art)
                         orig   = next((i for i,a in enumerate(artikli_sklop) if id(a)==art_id), None)
@@ -1086,45 +1158,28 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     # ── Izvoz cenika za stranke ──────────────────────────────────────────
     st.divider()
     st.markdown("**Izvoz cenika za stranke**")
+    st.caption("Artikle za izvoz označi z ☑ v tabeli zgoraj.")
 
-    vse_artikli_flat = []
+    # Zberi izbrane artikle iz checkboxev v tabeli
+    izbrani_izvoz = []
     for sklop in SKLOPI:
         sklop_data = nas_cenik.get(sklop, {})
         if isinstance(sklop_data, list):
             sklop_data = {"Cele ribe": sklop_data}
         for podsklop in PODSKOPI:
-            for art in sorted(sklop_data.get(podsklop,[]),
-                              key=lambda a: (a.get("naziv_slo") or a.get("naziv","")).lower()):
-                vse_artikli_flat.append((sklop, podsklop, art))
+            arts = sorted(sklop_data.get(podsklop,[]),
+                          key=lambda a: (a.get("naziv_slo") or a.get("naziv","")).lower())
+            for a_idx, art in enumerate(arts):
+                sel_key = f"izvoz_sel_{tid}_{ime_cenika}_{sklop}_{podsklop}_{a_idx}"
+                if st.session_state.get(sel_key, False):
+                    izbrani_izvoz.append((sklop, podsklop, art))
 
-    if not vse_artikli_flat:
+    n_izbranih = len(izbrani_izvoz)
+    if n_izbranih == 0:
+        st.caption("Ni izbranih artiklov za izvoz.")
         return
-
-    master_izvoz = st.checkbox("☑ Izberi vse za izvoz", key=f"izvoz_master_{tid}_{ime_cenika}")
-    prev_mik = f"izvoz_prev_m_{tid}_{ime_cenika}"
-    prev_mi  = st.session_state.get(prev_mik, None)
-    if prev_mi is not None and master_izvoz != prev_mi:
-        for i in range(len(vse_artikli_flat)):
-            st.session_state[f"izvoz_sel_{tid}_{ime_cenika}_{i}"] = master_izvoz
-    st.session_state[prev_mik] = master_izvoz
-
-    izbrani_izvoz = []
-    for i, (sklop, podsklop, art) in enumerate(vse_artikli_flat):
-        naziv_prik = art.get("naziv_slo") or art.get("naziv","")
-        cena_prik  = float(art.get("cena_prodajna") or art.get("cena") or 0)
-        if podsklop == "Fileji":
-            ps_lab = f"🔪 {sklop} — fileji"
-        else:
-            ps_lab = f"{SKLOP_IKONA.get(sklop,'')} {sklop} — cele ribe"
-        sel_i = st.checkbox(
-            f"{ps_lab}  —  {naziv_prik}  ({cena_prik:.2f} €)",
-            key=f"izvoz_sel_{tid}_{ime_cenika}_{i}"
-        )
-        if sel_i:
-            izbrani_izvoz.append((sklop, podsklop, art))
-
-    if not izbrani_izvoz:
-        return
+    else:
+        st.caption(f"Izbrano za izvoz: {n_izbranih} artiklov")
 
     # HTML — samo SLO naziv, latinski naziv, PV
     html_vsebina = _glava_html(
