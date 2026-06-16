@@ -523,6 +523,23 @@ def _render_analiza(tedni: list, trenutni_idx: int, teden_id: str):
 
 # ─── Naročilo dobavitelju ─────────────────────────────────────────────────────
 
+def _najnovejsi_ceniki(ceniki_dob: list) -> list:
+    """
+    Za vsakega dobavitelja vrne samo njegov najnovejši cenik po datumu.
+    Če datum ni nastavljen, vzame tistega ki je bil nazadnje uvožen.
+    """
+    po_dob: dict = {}
+    for cenik in ceniki_dob:
+        dob = cenik.get("dobavitelj", "").strip().upper()
+        if not dob:
+            continue
+        # Ključ za primerjavo — datum cenika, fallback na čas uvoza
+        kljuc = cenik.get("datum") or cenik.get("uvozeno", "")
+        if dob not in po_dob or kljuc > po_dob[dob]["_kljuc"]:
+            po_dob[dob] = {**cenik, "_kljuc": kljuc}
+    return list(po_dob.values())
+
+
 def _render_narocilo(teden: dict, tedni: list):
     st.caption("Izberi artikle za naročilo — sistem grupira po dobaviteljih in pripravi dokumente.")
     ceniki_dob = teden.get("ceniki_dob", [])
@@ -534,13 +551,15 @@ def _render_narocilo(teden: dict, tedni: list):
     with nc1:
         iskanje_n = st.text_input("🔍 Išči artikel", key=f"nar_isk_{teden['id']}", placeholder="npr. brancin...")
     with nc2:
-        filter_dob_n = st.selectbox("Dobavitelj", ["Vsi"] + [c["dobavitelj"] for c in ceniki_dob], key=f"nar_dob_{teden['id']}")
+        aktivni_ceniki_dob = _najnovejsi_ceniki(ceniki_dob)
+        filter_dob_n = st.selectbox("Dobavitelj", ["Vsi"] + [c["dobavitelj"] for c in aktivni_ceniki_dob], key=f"nar_dob_{teden['id']}")
     with nc3:
         filter_sklop_n = st.selectbox("Sklop", ["Vsi"] + SKLOPI, key=f"nar_sklop_{teden['id']}")
 
-    # Zberi najugodnejše cene
+    # Zberi najugodnejše cene — samo iz najnovejšega cenika vsakega dobavitelja
+    aktivni_ceniki = _najnovejsi_ceniki(ceniki_dob)
     vse_art: dict = {}
-    for cenik in ceniki_dob:
+    for cenik in aktivni_ceniki:
         for art in cenik.get("artikli", []):
             lat  = (art.get("latinski_naziv") or art.get("naziv", "")).lower().strip()
             cena = float(art.get("cena", 0) or 0)
@@ -665,12 +684,13 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     st.markdown("---")
 
     # ── Gumb: Samodejno sestavi ──────────────────────────────────────────
-    st.caption("Samodejno sestavi: vzame najcenejšo ceno za vsak artikel med vsemi dobavitelji tega tedna.")
+    st.caption("Samodejno sestavi: za vsakega dobavitelja vzame samo najnovejši cenik, nato poišče najugodnejšo ceno.")
     if st.button(f"🤖 Samodejno sestavi {ime_cenika}",
                  key=f"auto_{teden['id']}_{ime_cenika}",
                  disabled=not teden.get("ceniki_dob")):
+        aktivni = _najnovejsi_ceniki(teden["ceniki_dob"])
         vse: dict = {}
-        for cenik in teden["ceniki_dob"]:
+        for cenik in aktivni:
             for art in cenik.get("artikli", []):
                 lat  = (art.get("latinski_naziv") or art.get("naziv","")).lower().strip()
                 cena = float(art.get("cena", 0))
