@@ -961,15 +961,23 @@ def _flabel(label: str, val) -> str:
         return f"🔴 {label}"
     return f"✅ {label}"
 
-def _art_status(row: dict, supplier_name: str = "") -> tuple:
-    """Vrne (ujemanje_ok, podatki_ok) za prikaz dveh statusnih ikon."""
-    matched  = bool(row.get("item_code")) or bool(row.get("_needs_split_hint"))
-    intra    = _get_intrastat(supplier_name)
+def _art_status(row: dict, supplier_name: str = "", draft_id: str = "", idx: int = 0) -> tuple:
+    """Vrne (ujemanje_ok, podatki_ok) za prikaz dveh statusnih ikon.
+    Upošteva session_state vrednosti (pred Potrdi)."""
+    matched    = bool(row.get("item_code")) or bool(row.get("_needs_split_hint"))
+    intra      = _get_intrastat(supplier_name)
     is_foreign = intra.get("country_dispatch","SI").upper() != "SI"
+    # Vzemi vrednost iz session_state (form widget) ali iz row
+    def _val(key, ss_key):
+        ss = st.session_state.get(ss_key)
+        if ss is not None:
+            return float(ss)
+        return float(row.get(key) or 0)
+    price    = _val("price",         f"price_{draft_id}_{idx}")
+    sell     = _val("selling_price", f"sell_{draft_id}_{idx}")
+    qty      = _val("quantity",      f"qty_{draft_id}_{idx}")
     data_ok  = (
-        float(row.get("quantity") or 0) > 0 and
-        float(row.get("price") or 0) > 0 and
-        float(row.get("selling_price") or 0) > 0 and
+        qty > 0 and price > 0 and sell > 0 and
         bool(row.get("batch_number")) and
         (bool(row.get("country_of_origin")) and bool(row.get("tariff")) if is_foreign else True)
     )
@@ -1591,7 +1599,7 @@ def render():
                                     drafts[draft_id]["rows"][idx] = row
                                     _save_drafts(drafts)
 
-                        matched, data_ok = _art_status(row, draft["header"].get("supplier_name",""))
+                        matched, data_ok = _art_status(row, draft["header"].get("supplier_name",""), draft_id, idx)
                         s1       = "🟢" if matched  else "🔴"
                         s2       = "🟢" if data_ok  else "🔴"
                         qty_disp = float(row.get("quantity") or 0)
