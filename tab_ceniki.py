@@ -229,7 +229,10 @@ podsklop="Cele ribe" za VSE ostalo.
 Primeri Fileji: "FILONE DI TONNO", "FILE DI BRANZINO", "ANELLO DI TOTANO GIGANTE", "TRANCIO DI SALMONE", "SUPREMA DI ORATA"
 Primeri Cele ribe: "CODA DI ROSPO" (rep, ne file!), "BRANZINO INTERO", "ASTICE VIVO", "TOTANO" (brez anello), "COZZE", "VONGOLE", "DENTICE PESCATO"
 
-Cena=vedno za 1kg brez DDV. Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...)."""
+Cena=vedno za 1kg brez DDV.
+Na italijanskih cenikih (Listino): stolpec "Prezzo" = cena/kg. Če je "Prezzo" prazen ali nič, vzami "Prezzo al collo" deljeno s "Peso netto Conf." (kg) = cena/kg.
+Artikle brez cene (0 ali prazen) VSEENO vključi z cena=0.
+Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...)."""
 
 
 _FILEJI_KW = {
@@ -295,7 +298,7 @@ def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
         b64    = base64.b64encode(pdf_bytes).decode()
-        for max_tok in [8192, 16000]:
+        for max_tok in [16000, 32000]:
             resp = client.messages.create(
                 model="claude-opus-4-6", max_tokens=max_tok,
                 messages=[{"role": "user", "content": [
@@ -305,9 +308,16 @@ def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
             )
             raw = _repair_json(resp.content[0].text.strip())
             try:
-                return json.loads(raw), None
+                result = json.loads(raw)
+                # Preveri da ima artikle
+                if result.get("artikli"):
+                    return result, None
+                # Prazen seznam — poskusi z večjim tokenjem
+                if max_tok == 32000:
+                    return result, None
+                continue
             except json.JSONDecodeError:
-                if max_tok == 16000:
+                if max_tok == 32000:
                     return {}, "JSON napaka: odgovor prekinjen pri obeh poskusih."
                 continue
         return {}, "JSON napaka."
@@ -356,14 +366,19 @@ def _parse_excel_claude(file_bytes: bytes, fname: str) -> tuple:
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        for max_tok in [8192, 16000]:
+        for max_tok in [16000, 32000]:
             resp = client.messages.create(model="claude-opus-4-6", max_tokens=max_tok,
                 messages=[{"role": "user", "content": prompt}])
             raw = _repair_json(resp.content[0].text.strip())
             try:
-                return json.loads(raw), None
+                result = json.loads(raw)
+                if result.get("artikli"):
+                    return result, None
+                if max_tok == 32000:
+                    return result, None
+                continue
             except json.JSONDecodeError:
-                if max_tok == 16000:
+                if max_tok == 32000:
                     return {}, "JSON napaka: Excel cenik je morda prevelik."
                 continue
         return {}, "JSON napaka."
@@ -396,14 +411,19 @@ def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        for max_tok in [8192, 16000]:
+        for max_tok in [16000, 32000]:
             resp = client.messages.create(model="claude-opus-4-6", max_tokens=max_tok,
                 messages=[{"role": "user", "content": prompt}])
             raw = _repair_json(resp.content[0].text.strip())
             try:
-                return json.loads(raw), None
+                result = json.loads(raw)
+                if result.get("artikli"):
+                    return result, None
+                if max_tok == 32000:
+                    return result, None
+                continue
             except json.JSONDecodeError:
-                if max_tok == 16000:
+                if max_tok == 32000:
                     return {}, "JSON napaka: CSV je morda prevelik."
                 continue
         return {}, "JSON napaka."
