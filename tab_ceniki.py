@@ -657,15 +657,15 @@ def _render_narocilo(teden: dict, tedni: list):
     st.markdown("---")
 
     # ── Tabela artiklov po sklopih/podsklopih ────────────────────────────
-    gh = st.columns([0.5, 2.5, 2, 1.5, 1.5, 1, 1, 1.5])
-    for col, h in zip(gh, ["", "Orig. naziv", "SLO prevod", "Latinski naziv", "Dobavitelj", "Cena €", "Sklop/tip", "Količina"]):
+    # Količina je LEVO — minimalni premiki miške
+    gh = st.columns([0.5, 0.7, 2.5, 2, 1.5, 1.5, 1, 1])
+    for col, h in zip(gh, ["", "Kol.", "Orig. naziv", "SLO prevod", "Latinski naziv", "Dobavitelj", "Cena €", "Sklop/tip"]):
         col.markdown(f"**{h}**")
     st.markdown("---")
 
     cur_sklop, cur_ps = None, None
     izbrani = []
     for i, art in enumerate(filtrirani):
-        # Separator sklop/podsklop
         sklop    = art["sklop"]
         podsklop = art["podsklop"]
         if sklop != cur_sklop or podsklop != cur_ps:
@@ -676,18 +676,18 @@ def _render_narocilo(teden: dict, tedni: list):
             st.markdown(f"**{sep}**")
             cur_sklop, cur_ps = sklop, podsklop
 
-        rc = st.columns([0.5, 2.5, 2, 1.5, 1.5, 1, 1, 1.5])
+        rc = st.columns([0.5, 0.7, 2.5, 2, 1.5, 1.5, 1, 1])
         sel = rc[0].checkbox("", key=f"nar_sel_{teden['id']}_{i}")
-        rc[1].caption(art["naziv_orig"])
-        rc[2].caption(art.get("naziv_slo","—"))
-        rc[3].caption(art.get("latinski_naziv","—"))
-        rc[4].caption(art["dobavitelj"])
-        rc[5].caption(f"{art['cena']:.2f} €")
-        rc[6].caption(f"{sklop[:3]}. / {'file' if podsklop=='Fileji' else 'cele'}")
-        kolicina = rc[7].number_input(
-            "kol", min_value=0.0, value=0.0, step=1.0, format="%.1f",
+        kolicina = rc[1].number_input(
+            "kol", min_value=0.0, value=0.0, step=1.0, format="%.0f",
             key=f"nar_kol_{teden['id']}_{i}", label_visibility="collapsed"
         )
+        rc[2].caption(art["naziv_orig"])
+        rc[3].caption(art.get("naziv_slo","—"))
+        rc[4].caption(art.get("latinski_naziv","—"))
+        rc[5].caption(art["dobavitelj"])
+        rc[6].caption(f"{art['cena']:.2f} €")
+        rc[7].caption(f"{'file' if podsklop=='Fileji' else 'cele'}")
         if sel:
             izbrani.append({**art, "kolicina": kolicina})
 
@@ -743,7 +743,71 @@ def _render_narocilo(teden: dict, tedni: list):
             except ImportError:
                 st.warning("Manjka pandas/openpyxl.")
 
-# ─── Naši ceniki ─────────────────────────────────────────────────────────────
+def _auto_prevedi_cenik(nas_cenik: dict, tid: str, ime_cenika: str, tedni: list) -> bool:
+    """Samodejno prevede vse artikle brez naziv_slo. Vrne True če je kaj prevedel."""
+    # Zberi vse neprevedene
+    neprevedeni_art = []
+    lokacije = []  # (sklop, podsklop, idx)
+    for sklop in SKLOPI:
+        sklop_data = nas_cenik.get(sklop, {})
+        if isinstance(sklop_data, list):
+            continue
+        for ps in PODSKOPI:
+            for idx, art in enumerate(sklop_data.get(ps, [])):
+                naziv_slo = (art.get("naziv_slo","") or "").strip()
+                naziv_orig = (art.get("naziv","") or "").strip()
+                # Prevedi če: prazno, ali enako kot original
+                if not naziv_slo or naziv_slo == naziv_orig:
+                    neprevedeni_art.append(art)
+                    lokacije.append((sklop, ps, idx))
+
+    if not neprevedeni_art:
+        return False
+
+    try:
+        import anthropic
+        api_key = _secret("ANTHROPIC_API_KEY","")
+        if not api_key:
+            return False
+        client = anthropic.Anthropic(api_key=api_key)
+        seznam = "\n".join([
+            f"{i+1}. {a.get('naziv','')} (lat: {a.get('latinski_naziv','')})"
+            for i, a in enumerate(neprevedeni_art)
+        ])
+        prompt = f"""Prevedi nazive rib in morskih sadežev v slovenščino. Kratek, jasen prevod.
+
+Slovar: Šarun=Šur, Totano=Liganj, Anello=Obroček, Ricciola=Pisana limača,
+Ombrina=Senčar, Pagello=Rdeči ribon, Dentice=Zobatec, Spigola/Branzino=Brancin,
+Orata=Orada, Sgombro=Skuša, Acciuga=Sardon, Cefalo=Cipal, Rombo=Morska plošča,
+Astice=Jastog, Coda di rospo=Rep morskega vraga, Anguilla=Jegulja,
+Merluzzo=Oslič, Salmone=Losos, Trota=Postrv, Polpo=Hobotnica, Seppia=Sipa,
+Calamaro=Liganj, Vongole=Kočice, Cozze=Klapavice, Capasanta=Pokrovača,
+Gamberi=Kozice, Scampi=Škampi, Aragosta=Jastog, Filone=Filon,
+Trancio=Tranča, Arrosto=Pečenka, Merluzzo=Oslič, Pesce spada=Mečarica,
+Tonno=Tun, Halibut=Morska plošča, Salmone=Losos, SUP=vrhunski
+
+Vrni SAMO JSON, brez markdown:
+[{{"idx": 1, "naziv_slo": "prevod"}}, ...]
+
+Artikli:
+{seznam}"""
+        resp = client.messages.create(
+            model="claude-opus-4-6", max_tokens=4096,
+            messages=[{"role":"user","content":prompt}]
+        )
+        raw = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
+        prevodi = json.loads(raw)
+        prevodi_map = {p["idx"]: p.get("naziv_slo","") for p in prevodi}
+        for i, art in enumerate(neprevedeni_art):
+            prevod = prevodi_map.get(i+1,"").strip()
+            if prevod:
+                art["naziv_slo"] = prevod
+        return True
+    except Exception:
+        return False
+
+
+
 
 def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     nas_cenik = teden["nasi_ceniki"][ime_cenika]
@@ -808,6 +872,15 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     st.session_state["ceniki_tedni"] = tedni
     _save_ceniki(tedni)
 
+    # ── Avtomatsko prevajanje ob prvem prikazu ───────────────────────────
+    prevedi_key = f"prevedeno_{tid}_{ime_cenika}"
+    if not st.session_state.get(prevedi_key, False):
+        with st.spinner("🌐 Prevajam nazive..."):
+            if _auto_prevedi_cenik(nas_cenik, tid, ime_cenika, tedni):
+                st.session_state["ceniki_tedni"] = tedni
+                _save_ceniki(tedni)
+        st.session_state[prevedi_key] = True
+
     # ── Iskalnik + filter ────────────────────────────────────────────────
     sc1, sc2, sc3 = st.columns([3, 2, 2])
     with sc1:
@@ -819,8 +892,7 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
 
     st.markdown("---")
 
-    # ── Samodejno sestavi ────────────────────────────────────────────────
-    st.caption("Samodejno sestavi: za vsakega dobavitelja vzame samo najnovejši cenik, nato poišče najugodnejšo ceno.")
+    st.caption("🤖 Samodejno sestavi: za vsakega dobavitelja vzame samo najnovejši cenik, nato poišče najugodnejšo ceno.")
     if st.button(f"🤖 Samodejno sestavi {ime_cenika}",
                  key=f"auto_{tid}_{ime_cenika}",
                  disabled=not teden.get("ceniki_dob")):
@@ -833,7 +905,6 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 if not lat or cena <= 0:
                     continue
                 if lat not in vse or cena < vse[lat]["cena"]:
-                    # Zagotovi SLO prevod — če ni, vzami orig naziv
                     naziv_slo = art.get("naziv_slo","").strip()
                     if not naziv_slo:
                         naziv_slo = art.get("naziv","")
@@ -858,6 +929,8 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
             if podsklop not in PODSKOPI:  podsklop = "Cele ribe"
             nas_cenik[sklop][podsklop].append(art_data)
         teden["nasi_ceniki"][ime_cenika] = nas_cenik
+        # Ponastavi prevajanje da se ob naslednjem renderu prevede znova
+        st.session_state.pop(f"prevedeno_{tid}_{ime_cenika}", None)
         st.session_state["ceniki_tedni"] = tedni
         _save_ceniki(tedni)
         st.rerun()
@@ -930,21 +1003,23 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 ps_label = f"{SKLOP_IKONA.get(sklop,'')} {sklop} — cele ribe"
             st.markdown(f"#### {ps_label}")
 
-            # Skupinska marža
+            # Skupinska marža — v glavi tabele, točno nad stolpcem Marža %
             sm_key = f"skupna_marza_{tid}_{ime_cenika}_{sklop}_{podsklop}"
-            st.number_input(
-                f"📐 Skupna marža % — {ps_label}",
-                min_value=0.0, max_value=500.0, value=0.0, step=0.5, format="%.1f",
-                key=sm_key,
-                help="Vpišeš % in pritisni Enter — izpolni vse artikle v tem podsklopu"
-            )
-
-            # Glava tabele
             h0,h1,h2,h3,h4,h5,h6,h7 = st.columns([2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
-            h0.markdown("**SLO naziv**"); h1.markdown("**Latinski naziv**")
-            h2.markdown("**Poreklo**");   h3.markdown("**Nakupna €**")
-            h4.markdown("**Marža %**");   h5.markdown("**Prod. €**")
-            h6.markdown("**Dobavitelj ↙**"); h7.markdown("")
+            h0.markdown("**SLO naziv**")
+            h1.markdown("**Latinski naziv**")
+            h2.markdown("**Poreklo**")
+            h3.markdown("**Nakupna €**")
+            with h4:
+                st.number_input(
+                    "Marža %", min_value=0.0, max_value=500.0,
+                    value=0.0, step=0.5, format="%.1f",
+                    key=sm_key,
+                    help="Skupna marža za vse v tem sklopu — vpišeš in pritisni Enter"
+                )
+            h5.markdown("**Prod. €**")
+            h6.markdown("**Dobavitelj ↙**")
+            h7.markdown("")
             st.markdown("---")
 
             for a_idx, art in enumerate(artikli_sort):
