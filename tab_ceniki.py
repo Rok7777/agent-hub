@@ -981,49 +981,59 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
 
     st.markdown("---")
 
-    st.caption("🤖 Samodejno sestavi: AI poveže iste artikle med dobavitelji in izbere najugodnejšo ceno.")
+    st.caption("🤖 Samodejno sestavi: vzame vse artikle, med dobavitelji izbere najugodnejšo ceno za isti artikel.")
     if st.button(f"🤖 Samodejno sestavi {ime_cenika}",
                  key=f"auto_{tid}_{ime_cenika}",
                  disabled=not teden.get("ceniki_dob")):
         aktivni = _najnovejsi_ceniki(teden["ceniki_dob"])
-        vsi_artikli = []
+        vse: dict = {}
         for cenik in aktivni:
             dob = cenik.get("dobavitelj","")
             for art in cenik.get("artikli",[]):
-                cena = float(art.get("cena",0))
+                cena = float(art.get("cena",0) or 0)
                 if cena <= 0:
+                    continue  # ni dobavljivo
+                naziv = (art.get("naziv","") or "").strip()
+                if not naziv:
                     continue
-                vsi_artikli.append({
-                    "naziv":          art.get("naziv",""),
-                    "naziv_slo":      art.get("naziv_slo","") or art.get("naziv",""),
-                    "latinski_naziv": art.get("latinski_naziv",""),
-                    "cena":           cena,
-                    "enota":          art.get("enota","kg"),
-                    "poreklo":        art.get("poreklo",""),
-                    "sklop":          art.get("sklop","Divjaki"),
-                    "podsklop":       _dolocii_podsklop(art),
-                    "cena_prodajna":  0.0,
-                    "marza_pct":      0.0,
-                    "dobavitelj":     dob,
-                })
-        if not vsi_artikli:
-            st.warning("Ni artiklov za sestavljanje.")
-        else:
-            with st.spinner("🤖 AI povezuje artikle med dobavitelji..."):
-                grupe = _ai_povezi_artikle(vsi_artikli)
-            nas_cenik = _prazen_nas_cenik()
-            for grupa in grupe:
-                najboljsi = min(grupa, key=lambda a: a["cena"])
-                sklop    = najboljsi.get("sklop","Divjaki")
-                podsklop = najboljsi.get("podsklop","Cele ribe")
-                if sklop    not in SKLOPI:    sklop    = "Divjaki"
-                if podsklop not in PODSKOPI:  podsklop = "Cele ribe"
-                nas_cenik[sklop][podsklop].append(najboljsi)
-            teden["nasi_ceniki"][ime_cenika] = nas_cenik
-            st.session_state.pop(f"prevedeno_{tid}_{ime_cenika}", None)
-            st.session_state["ceniki_tedni"] = tedni
-            _save_ceniki(tedni)
-            st.rerun()
+
+                # Ključ = latinski naziv + poreklo + velikost iz naziva
+                # Tako: Brancin 200/300 Grčija ≠ Brancin 200/300 Hrvaška (različna)
+                #       Brancin 200/300 Grčija od Alemarja = Brancin 200/300 Grčija od Fioritala (isti → cenejši)
+                lat     = (art.get("latinski_naziv","") or "").lower().strip()
+                poreklo = (art.get("poreklo","") or "").upper().strip()
+                # Izvleci velikostni razred iz naziva (npr. "200/300", "1000/1500", "4/5")
+                import re as _re
+                velikost = "/".join(_re.findall(r'\d+', naziv))
+                kljuc = f"{lat}|{poreklo}|{velikost}" if lat else f"{naziv.upper()}|{poreklo}"
+
+                if kljuc not in vse or cena < float(vse[kljuc]["cena"]):
+                    vse[kljuc] = {
+                        "naziv":          naziv,
+                        "naziv_slo":      art.get("naziv_slo","") or naziv,
+                        "latinski_naziv": art.get("latinski_naziv",""),
+                        "cena":           cena,
+                        "enota":          art.get("enota","kg"),
+                        "poreklo":        art.get("poreklo",""),
+                        "sklop":          art.get("sklop","Divjaki"),
+                        "podsklop":       _dolocii_podsklop(art),
+                        "cena_prodajna":  0.0,
+                        "marza_pct":      0.0,
+                        "dobavitelj":     dob,
+                    }
+
+        nas_cenik = _prazen_nas_cenik()
+        for art_data in vse.values():
+            sklop    = art_data.get("sklop","Divjaki")
+            podsklop = art_data.get("podsklop","Cele ribe")
+            if sklop    not in SKLOPI:    sklop    = "Divjaki"
+            if podsklop not in PODSKOPI:  podsklop = "Cele ribe"
+            nas_cenik[sklop][podsklop].append(art_data)
+        teden["nasi_ceniki"][ime_cenika] = nas_cenik
+        st.session_state.pop(f"prevedeno_{tid}_{ime_cenika}", None)
+        st.session_state["ceniki_tedni"] = tedni
+        _save_ceniki(tedni)
+        st.rerun()
 
     # ── Ročno dodajanje ──────────────────────────────────────────────────
     with st.expander("➕ Ročno dodaj artikel", expanded=False):
