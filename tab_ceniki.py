@@ -431,15 +431,360 @@ def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
         return {}, str(e)
 
 
+# ─── Slovar za prevajanje (IT/HR → SLO) ─────────────────────────────────────
+
+_PREVOD_SLOVAR = {
+    # Italijanščina → slovenščina (ključi UPPERCASE)
+    "ANGUILLA": "Jegulja", "ANELLO DI TOTANO GIGANTE DEL PACIFICO": "Obroček velikega pacifiškega lignja",
+    "ANELLO DI TOTANO GIGANTE": "Obroček velikega lignja", "ANELLO DI TOTANO": "Obroček lignja",
+    "ARROSTO DI SALMONE E MERLUZZO": "Pečenka lososa in osliča",    "ASTICE AMERICANO CANADA": "Ameriški jastog Kanada", "ASTICE AMERICANO": "Ameriški jastog",
+    "ASTICE EUROPEO": "Evropski jastog", "ASTICE JUMBO": "Jastog jumbo",
+    "BRANZINO CROAZIA": "Brancin Hrvaška", "BRANZINO GRECIA": "Brancin Grčija",
+    "BRANZINO SPAGNA": "Brancin Španija", "BRANZINO": "Brancin",
+    "CALAMARO FARCITO": "Polnjeni liganj", "CALAMARO": "Liganj",
+    "CAPPASANTA ATLANTICA": "Atlantska pokrovača", "CAPPASANTA": "Pokrovača",
+    "CERNIA GIALLA": "Rumeni kiranj", "CERNIA": "Kiranj",
+    "CODA DI ROSPO": "Rep morskega vraga",
+    "CUORE DI MERLUZZO NORDICO": "Srce nordijskega osliča",
+    "DENTICE GIBBOSO": "Grbasti zobatec", "DENTICE": "Zobatec",
+    "FILETTO DI SALMONE NORVEGIA": "File norveškega lososa",
+    "FILETTO DI SARDINA": "File sardinele",
+    "FILETTO DI STOCCAFISSO AMMOLLATO": "File namočene polenovke",
+    "FILETTO EGLEFINO": "File vahnje", "FILETTO HALIBUT": "File halibuta",
+    "FILETTO PERSICO AFRICANO": "File afriškega ostriža",
+    "FILETTO PLATESSA": "File plešca", "FILETTO SALMONE": "File lososa",
+    "FILETTO TROTA NORMALE": "File navadne postrvi", "FILETTO TROTA SALMONATA": "File lososove postrvi",
+    "FILONE DI TONNO OBESO": "Filon debelega tuna", "FILONE DI TONNO ROSSO": "Filon rdečega tuna",
+    "FILONE TONNO A PINNE GIALLE": "Filon rumenoplavutega tuna",
+    "FILONE TONNO": "Filon tuna", "FILONE DI TONNO": "Filon tuna",
+    "FISH BURGER DI TROTA": "Fish burger iz postrvi",
+    "GRANCEOLA FEMMINA": "Samica rakovice", "GRANCEOLA MASCHIO": "Samec rakovice", "GRANCEOLA": "Rakovica",
+    "GRANCIPORRO ATLANTICO": "Atlantska rakovica",
+    "MERLUZZO NORDICO": "Nordijski oslič", "MERLUZZO": "Oslič",
+    "MOLO INTERO": "Cel mol", "MOLO": "Mol",
+    "MOSCARDINO ESTERO": "Muškatni hobotničnik", "MOSCARDINO": "Hobotničnik",
+    "OMBRINA BOCCADORO": "Senčar zlata usta", "OMBRINA OCELLATA": "Pikasta senčarka", "OMBRINA": "Senčar",
+    "ORATA CROAZIA": "Orada Hrvaška", "ORATA GRECIA": "Orada Grčija", "ORATA": "Orada",
+    "PAGELLO FRAGOLINO": "Rdeči ribon", "PAGRO MAGGIORE": "Veliki pagr", "PAGRO": "Pagr",
+    "PESCE SAN PIETRO": "Svetopeterska riba", "PESCE SPADA": "Mečarica",
+    "POLPA DI GRANCHIO": "Rakova mezga",
+    "POLPO COMUNE": "Navadna hobotnica", "POLPO DECONGELATO": "Odmrznjena hobotnica", "POLPO": "Hobotnica",
+    "RANA PESCATRICE": "Morski vrag",
+    "RICCIOLA OCEANICA": "Oceanska pisana limača", "RICCIOLA": "Pisana limača",
+    "ROMBO CHIODATO": "Trnja morska plošča", "ROMBO": "Morska plošča",
+    "SALMONE SCOZIA": "Škotski losos", "SALMONE": "Losos",
+    "SEPPIA GROSSA PULITA": "Očiščena velika sipa", "SEPPIA NERA": "Črna sipa",
+    "SEPPIA PICCOLA PULITA": "Očiščena mala sipa", "SEPPIA": "Sipa",
+    "SGOMBRO": "Skuša", "SOASO ESTERO": "Komarča", "SOGLIOLA ALLEVATA": "Gojena morska plošča",
+    "SPIEDINO GHIOTTO": "Ribji ražnjič",
+    "STOCCAFISSO AMMOLLATO": "Namočena polenovka", "STOCCAFISSO": "Polenovka",
+    "STRISCE DI TOTANO GIGANTE": "Trakovi velikega lignja",
+    "TENTACOLI DI TOTANO": "Lovke lignja",
+    "TONNETTO": "Mala tuna", "TONNO": "Tun",
+    "TOTANO GIGANTE": "Veliki liganj", "TOTANO": "Liganj",
+    "TRACINA": "Pauk riba",
+    "TRIGLIA DI SCOGLIO": "Skalnati barbun", "TRIGLIA": "Barbun",
+    "TROTA NORMALE EVISCERATA": "Navadna postrv, očiščena", "TROTA NORMALE INTERA": "Navadna postrv, cela",
+    "TROTA SALMONATA EVISCERATA": "Lososova postrv, očiščena", "TROTA SALMONATA INTERA": "Lososova postrv, cela",
+    "TROTA": "Postrv", "UOVA DI SEPPIA": "Jajca sipe",
+    # Hrvaščina → slovenščina
+    "Skuša": "Skuša", "Trupac": "Trupec", "Tuna BLUEFIN": "Modroplavuta tuna",
+    "Tuna žutoperajna": "Rumenoplavuta tuna", "Tuna dugoperajna ALALUNGA": "Dolgoplavutna tuna (alalunga)",
+    "Šarun": "Šur", "Palamida": "Palamida", "Luc": "Luc", "Gavun": "Gavun",
+    "Srdela": "Sardela", "Inćun": "Sardon", "Lokarda": "Lokarda",
+    "Haringa": "Sled", "Strijelka": "Strijelka", "Lica": "Lica",
+    "Brancin": "Brancin", "Orada": "Orada", "Losos": "Losos",
+    "Filet lososa": "File lososa", "Pastrva": "Postrv",
+    "Pastrva dužičasta": "Dužičasta postrv", "Filet dužičaste pastrve": "File dužičaste postrvi",
+    "Smuđ": "Smuč", "Jastog": "Jastog", "Škamp": "Škamp",
+    "Hobotnica": "Hobotnica", "Liganj": "Liganj", "Sipa": "Sipa",
+    "Dagnja": "Klapavica", "Kamenica": "Ostriga", "Kapesanta": "Pokrovača",
+    "Kozica": "Kozica", "Grgeč": "Ostriž", "Som": "Som",
+    "Kirnja": "Kiranj", "Oslić": "Oslič", "List": "Morska plošča",
+    "Kovač": "Kovač", "Pic": "Pic", "Špar": "Špar",
+    "Šur": "Šur", "Arbun": "Arbun", "Salpa": "Salpa",
+    "Fratar": "Fratar", "Pirka": "Pirka", "Pagar": "Pagr",
+    "Ušata": "Ušata", "Šnjur": "Šnjur", "Cipol": "Cipal",
+    "Zubatac": "Zobatec", "Murina": "Murena",
+}
+
+def _prevedi_naziv(naziv: str) -> str:
+    """Prevede naziv ribe IT/HR → SLO z uporabo slovarja."""
+    naziv_up = naziv.upper().strip()
+    # Poišči najdaljše ujemanje
+    best_key, best_val = "", ""
+    for kljuc, prevod in _PREVOD_SLOVAR.items():
+        kljuc_up = kljuc.upper()
+        if kljuc_up in naziv_up and len(kljuc_up) > len(best_key):
+            best_key, best_val = kljuc_up, prevod
+    if best_val:
+        # Ohrani samo velikostni razred (številke in /) iz originalnega naziva
+        import re as _re2
+        stevke = _re2.findall(r'\d+[/+]?\d*', naziv)
+        if stevke:
+            return f"{best_val} {'/'.join(stevke)}".strip()
+        return best_val
+    # Hrvaški slovar (case-sensitive)
+    for kljuc, prevod in _PREVOD_SLOVAR.items():
+        if kljuc in naziv and len(kljuc) > len(best_key):
+            best_key, best_val = kljuc, prevod
+    if best_val:
+        import re as _re2
+        stevke = _re2.findall(r'\d+[/+]?\d*', naziv)
+        if stevke:
+            return f"{best_val} {'/'.join(stevke)}".strip()
+        return best_val
+    return naziv
+
+
+def _dolocii_sklop_iz_naziva(naziv: str, latinski: str) -> str:
+    """Določi sklop na podlagi latinskega/originalnega naziva."""
+    lat = latinski.lower()
+    naz = naziv.lower()
+    # Gojene ribe po latinskem imenu
+    gojeni_latinski = {
+        "dicentrarchus labrax", "sparus aurata", "salmo salar",
+        "oncorhynchus mykiss", "mytilus galloprovincialis",
+        "sander lucioperca", "silurus glanis", "cyprinus carpio",
+    }
+    if any(g in lat for g in gojeni_latinski):
+        return "Gojeno"
+    # Lokalna riba
+    if "hr" in naz or "slovenija" in naz or "si" in naz:
+        if any(w in lat for w in ["oncorhynchus", "salmo trutta"]):
+            return "Lokalna riba"
+    # Divjaki — vse ostalo
+    return "Divjaki"
+
+
+def _parse_alemar_pdf(pdf_bytes: bytes) -> tuple:
+    """Prebere Alemar PDF cenik z pdfplumber — brez AI."""
+    try:
+        import pdfplumber, io
+        artikli = []
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            dobavitelj = "ALEMAR"
+            datum = ""
+            for page in pdf.pages:
+                # Izvleci datum iz prve strani
+                if not datum:
+                    tekst = page.extract_text() or ""
+                    import re
+                    m = re.search(r'(\d{2}/\d{2}/\d{4})', tekst)
+                    if m:
+                        try:
+                            from datetime import datetime
+                            datum = datetime.strptime(m.group(1), "%d/%m/%Y").strftime("%Y-%m-%d")
+                        except:
+                            pass
+                    # Izvleci ime dobavitelja
+                    if "ALEMAR" in tekst:
+                        dobavitelj = "ALEMAR"
+
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        if not row or not row[0]:
+                            continue
+                        if row[0] == 'Articolo':
+                            continue
+                        naziv = (row[1] or "").replace('\n', ' ').strip()
+                        if not naziv:
+                            continue
+                        prezzo      = (row[6] or "").strip()
+                        prezzo_collo = (row[7] or "").strip() if len(row) > 7 else ""
+                        peso        = (row[5] or "1").strip()
+                        # Izračunaj ceno/kg
+                        cena = 0.0
+                        if prezzo:
+                            try:
+                                cena = float(prezzo.replace(',', '.'))
+                            except:
+                                pass
+                        elif prezzo_collo and peso:
+                            try:
+                                cena = round(float(prezzo_collo.replace(',','.')) /
+                                             float(peso.replace(',','.')), 2)
+                            except:
+                                pass
+                        if cena <= 0:
+                            continue
+                        # Določi poreklo iz naziva
+                        import re as _re
+                        poreklo = ""
+                        for p_kw, p_iso in [("CROAZIA","HR"),("GRECIA","GR"),("SPAGNA","ES"),
+                                             ("NORVEGIA","NO"),("SCOZIA","GB"),("SICILIA","IT"),
+                                             ("ITALIA","IT"),("OLANDA","NL"),("CANADA","CA"),("ESTERO","")]:
+                            if p_kw in naziv.upper():
+                                poreklo = p_iso
+                                break
+                        latinski = ""
+                        sklop    = _dolocii_sklop_iz_naziva(naziv, latinski)
+                        naziv_slo = _prevedi_naziv(naziv)
+                        artikli.append({
+                            "naziv":          naziv,
+                            "naziv_slo":      naziv_slo,
+                            "latinski_naziv": latinski,
+                            "cena":           cena,
+                            "enota":          "kg",
+                            "poreklo":        poreklo,
+                            "sklop":          sklop,
+                            "podsklop":       _dolocii_podsklop({"naziv": naziv, "naziv_slo": naziv_slo}),
+                        })
+        return {
+            "dobavitelj": dobavitelj,
+            "datum":      datum,
+            "valuta":     "EUR",
+            "artikli":    artikli,
+        }, None
+    except Exception as e:
+        return {}, f"PDF napaka: {str(e)}"
+
+
+def _parse_fiorital_excel(file_bytes: bytes, fname: str) -> tuple:
+    """Prebere Fiorital Excel cenik — brez AI. Vzame zadnjo ne-nič ceno."""
+    try:
+        import pandas as pd, io
+        df = pd.read_excel(io.BytesIO(file_bytes), header=None)
+        artikli = []
+        kategorija_sklopi = {
+            "PLAVA RIBA": "Divjaki", "MORSKA RIBA IZ UZGOJA": "Gojeno",
+            "SLATKOVODNA RIBA IZ UZGOJA": "Gojeno", "MEKUŠCI": "Divjaki",
+            "ŠKOLJKE": "Divjaki", "RAKOVI": "Divjaki", "OSTALO": "Divjaki",
+        }
+        cur_sklop = "Divjaki"
+        skip_kw = set(kategorija_sklopi.keys()) | {"nan",""}
+
+        for idx, row in df.iterrows():
+            if idx < 3:
+                continue
+            naziv = str(row[2]).strip() if pd.notna(row[2]) else ""
+            if not naziv or naziv == "nan":
+                continue
+            # Kategorija = sklop
+            naziv_up = naziv.upper()
+            if naziv_up in {k.upper() for k in kategorija_sklopi}:
+                for k, v in kategorija_sklopi.items():
+                    if k.upper() == naziv_up:
+                        cur_sklop = v
+                continue
+            latinski = str(row[3]).strip() if pd.notna(row[3]) else ""
+            if latinski == "nan":
+                latinski = ""
+            poreklo = str(row[4]).strip() if pd.notna(row[4]) else ""
+            if poreklo == "nan":
+                poreklo = ""
+            # Zadnja ne-nič vrednost iz cenovnih stolpcev (6+)
+            cena = 0.0
+            for val in reversed(list(row[6:])):
+                if pd.notna(val) and val != 0:
+                    try:
+                        v = float(val)
+                        if v > 0:
+                            cena = round(v, 2)
+                            break
+                    except:
+                        pass
+            if cena <= 0:
+                continue
+            sklop = _dolocii_sklop_iz_naziva(naziv, latinski) if cur_sklop == "Divjaki" else cur_sklop
+            naziv_slo = _prevedi_naziv(naziv)
+            artikli.append({
+                "naziv":          naziv,
+                "naziv_slo":      naziv_slo,
+                "latinski_naziv": latinski,
+                "cena":           cena,
+                "enota":          "kg",
+                "poreklo":        poreklo.split("/")[0] if "/" in poreklo else poreklo,
+                "sklop":          sklop,
+                "podsklop":       _dolocii_podsklop({"naziv": naziv, "naziv_slo": naziv_slo}),
+            })
+        return {
+            "dobavitelj": "FIORITAL",
+            "datum":      "",
+            "valuta":     "EUR",
+            "artikli":    artikli,
+        }, None
+    except Exception as e:
+        return {}, f"Excel napaka: {str(e)}"
+
+
+def _parse_genericni_excel(file_bytes: bytes, fname: str) -> tuple:
+    """Generični Excel parser z AI — za dobavitelje ki niso Alemar/Fiorital."""
+    try:
+        import pandas as pd, io
+        xf = pd.ExcelFile(io.BytesIO(file_bytes))
+        izbran_df, izbran_list = None, None
+        for list_ime in xf.sheet_names:
+            try:
+                df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=list_ime, header=None)
+                df = df.dropna(how="all").dropna(axis=1, how="all")
+                if len(df) >= 3 and len(df.columns) >= 2:
+                    for hi in range(min(8, len(df))):
+                        row = df.iloc[hi]
+                        non_empty = row.dropna().astype(str).str.strip()
+                        if non_empty.str.contains(r'[a-zA-ZčšžČŠŽ]', regex=True).any() and len(non_empty) >= 2:
+                            df.columns = df.iloc[hi].astype(str).str.strip()
+                            df = df.iloc[hi+1:].reset_index(drop=True).dropna(how="all").fillna("")
+                            break
+                    izbran_list, izbran_df = list_ime, df
+                    break
+            except:
+                continue
+        if izbran_df is None:
+            return {}, f"Excel '{fname}': ni ustreznih listov"
+        tabela_txt = _tabela_v_tekst(izbran_df)
+        prompt = _parse_prompt() + f"\n\nDatoteka: {fname}\n\n{tabela_txt}"
+        import anthropic
+        api_key = _secret("ANTHROPIC_API_KEY","")
+        if not api_key:
+            return {}, "ANTHROPIC_API_KEY ni nastavljen"
+        client = anthropic.Anthropic(api_key=api_key)
+        for max_tok in [8192, 16000]:
+            resp = client.messages.create(model="claude-opus-4-6", max_tokens=max_tok,
+                messages=[{"role":"user","content":prompt}])
+            raw = _repair_json(resp.content[0].text.strip())
+            try:
+                result = json.loads(raw)
+                if result.get("artikli"):
+                    return result, None
+                if max_tok == 16000:
+                    return result, None
+                continue
+            except json.JSONDecodeError:
+                if max_tok == 16000:
+                    return {}, "JSON napaka."
+                continue
+        return {}, "JSON napaka."
+    except ImportError:
+        return {}, "Manjka openpyxl"
+    except Exception as e:
+        return {}, str(e)
+
+
 def _parse_cenik(file_bytes: bytes, fname: str, ftype: str) -> tuple:
+    """Router — izbere pravi parser glede na tip in ime datoteke."""
     ft  = ftype.lower()
     ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+    fname_up = fname.upper()
+
     if "pdf" in ft or ext == "pdf":
+        # Alemar ima "LISTINO" v imenu
+        if "LISTINO" in fname_up or "ALEMAR" in fname_up:
+            return _parse_alemar_pdf(file_bytes)
+        # Ostali PDF → AI
         return _parse_pdf_claude(file_bytes)
-    elif "excel" in ft or "spreadsheet" in ft or ext in ("xlsx", "xls"):
-        return _parse_excel_claude(file_bytes, fname)
+
+    elif "excel" in ft or "spreadsheet" in ft or ext in ("xlsx","xls"):
+        # Fiorital ima "CJENIK" v imenu
+        if "CJENIK" in fname_up or "FIORITAL" in fname_up:
+            return _parse_fiorital_excel(file_bytes, fname)
+        # Ostali Excel → generični parser
+        return _parse_genericni_excel(file_bytes, fname)
+
     elif "csv" in ft or ext == "csv":
         return _parse_csv_claude(file_bytes, fname)
+
     return {}, f"Neznan format: {fname}"
 
 # ─── Kronološki filter ────────────────────────────────────────────────────────
