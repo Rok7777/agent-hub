@@ -298,7 +298,7 @@ def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
         b64    = base64.b64encode(pdf_bytes).decode()
-        for max_tok in [16000, 32000]:
+        for max_tok in [8192, 16000]:
             resp = client.messages.create(
                 model="claude-opus-4-6", max_tokens=max_tok,
                 messages=[{"role": "user", "content": [
@@ -313,11 +313,11 @@ def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
                 if result.get("artikli"):
                     return result, None
                 # Prazen seznam — poskusi z večjim tokenjem
-                if max_tok == 32000:
+                if max_tok == 16000:
                     return result, None
                 continue
             except json.JSONDecodeError:
-                if max_tok == 32000:
+                if max_tok == 16000:
                     return {}, "JSON napaka: odgovor prekinjen pri obeh poskusih."
                 continue
         return {}, "JSON napaka."
@@ -366,7 +366,7 @@ def _parse_excel_claude(file_bytes: bytes, fname: str) -> tuple:
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        for max_tok in [16000, 32000]:
+        for max_tok in [8192, 16000]:
             resp = client.messages.create(model="claude-opus-4-6", max_tokens=max_tok,
                 messages=[{"role": "user", "content": prompt}])
             raw = _repair_json(resp.content[0].text.strip())
@@ -374,11 +374,11 @@ def _parse_excel_claude(file_bytes: bytes, fname: str) -> tuple:
                 result = json.loads(raw)
                 if result.get("artikli"):
                     return result, None
-                if max_tok == 32000:
+                if max_tok == 16000:
                     return result, None
                 continue
             except json.JSONDecodeError:
-                if max_tok == 32000:
+                if max_tok == 16000:
                     return {}, "JSON napaka: Excel cenik je morda prevelik."
                 continue
         return {}, "JSON napaka."
@@ -411,7 +411,7 @@ def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        for max_tok in [16000, 32000]:
+        for max_tok in [8192, 16000]:
             resp = client.messages.create(model="claude-opus-4-6", max_tokens=max_tok,
                 messages=[{"role": "user", "content": prompt}])
             raw = _repair_json(resp.content[0].text.strip())
@@ -419,11 +419,11 @@ def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
                 result = json.loads(raw)
                 if result.get("artikli"):
                     return result, None
-                if max_tok == 32000:
+                if max_tok == 16000:
                     return result, None
                 continue
             except json.JSONDecodeError:
-                if max_tok == 32000:
+                if max_tok == 16000:
                     return {}, "JSON napaka: CSV je morda prevelik."
                 continue
         return {}, "JSON napaka."
