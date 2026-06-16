@@ -550,71 +550,109 @@ def _render_narocilo(teden: dict, tedni: list):
         st.info("Najprej naloži cenike dobaviteljev.")
         return
 
-    nc1, nc2, nc3 = st.columns([3, 2, 2])
-    with nc1:
-        iskanje_n = st.text_input("🔍 Išči artikel", key=f"nar_isk_{teden['id']}", placeholder="npr. brancin...")
     aktivni = _najnovejsi_ceniki(ceniki_dob)
+
+    # ── Filtri ────────────────────────────────────────────────────────────
+    nc1, nc2, nc3, nc4 = st.columns([3, 2, 2, 2])
+    with nc1:
+        iskanje_n      = st.text_input("🔍 Išči artikel", key=f"nar_isk_{teden['id']}", placeholder="npr. brancin...")
     with nc2:
-        filter_dob_n = st.selectbox("Dobavitelj", ["Vsi"] + [c["dobavitelj"] for c in aktivni], key=f"nar_dob_{teden['id']}")
+        filter_dob_n   = st.selectbox("Dobavitelj", ["Vsi"] + [c["dobavitelj"] for c in aktivni], key=f"nar_dob_{teden['id']}")
     with nc3:
         filter_sklop_n = st.selectbox("Sklop", ["Vsi"] + SKLOPI, key=f"nar_sklop_{teden['id']}")
+    with nc4:
+        filter_ps_n    = st.selectbox("Tip", ["Vsi", "Cele ribe", "Fileji"], key=f"nar_ps_{teden['id']}")
 
-    vse_art: dict = {}
+    # ── Najugodnejši artikel po latinskem imenu (fallback: orig naziv) ───
+    najboljsi: dict = {}
     for cenik in aktivni:
+        dob = cenik.get("dobavitelj","")
         for art in cenik.get("artikli", []):
-            lat  = (art.get("latinski_naziv") or art.get("naziv","")).lower().strip()
             cena = float(art.get("cena", 0) or 0)
-            if not lat or cena <= 0:
+            if cena <= 0:
                 continue
-            if lat not in vse_art or cena < vse_art[lat]["cena"]:
-                vse_art[lat] = {
-                    "naziv":     art.get("naziv_slo") or art.get("naziv",""),
-                    "naziv_orig": art.get("naziv",""),
-                    "cena":      cena,
-                    "enota":     art.get("enota","kg"),
-                    "poreklo":   art.get("poreklo",""),
-                    "sklop":     art.get("sklop","Divjaki"),
-                    "podsklop":  art.get("podsklop","Cele ribe"),
-                    "dobavitelj": cenik.get("dobavitelj",""),
+            kljuc = (art.get("latinski_naziv") or art.get("naziv","")).lower().strip()
+            if not kljuc:
+                continue
+            if kljuc not in najboljsi or cena < najboljsi[kljuc]["cena"]:
+                najboljsi[kljuc] = {
+                    "naziv_orig":     art.get("naziv",""),
+                    "naziv_slo":      art.get("naziv_slo",""),
+                    "latinski_naziv": art.get("latinski_naziv",""),
+                    "cena":           cena,
+                    "enota":          art.get("enota","kg"),
+                    "poreklo":        art.get("poreklo",""),
+                    "sklop":          art.get("sklop","Divjaki"),
+                    "podsklop":       _dolocii_podsklop(art),
+                    "dobavitelj":     dob,
                 }
 
-    filtrirani = [
-        (lat, art) for lat, art in vse_art.items()
-        if (filter_dob_n == "Vsi" or art["dobavitelj"] == filter_dob_n)
-        and (filter_sklop_n == "Vsi" or art["sklop"] == filter_sklop_n)
-        and (not iskanje_n or iskanje_n.lower() in art["naziv"].lower())
-    ]
-    filtrirani.sort(key=lambda x: (x[1].get("sklop",""), x[1].get("podsklop",""), x[1].get("naziv","").lower()))
+    # ── Filtriraj in sortiraj ─────────────────────────────────────────────
+    filtrirani = []
+    for art in najboljsi.values():
+        if filter_dob_n != "Vsi" and art["dobavitelj"] != filter_dob_n:
+            continue
+        if filter_sklop_n != "Vsi" and art["sklop"] != filter_sklop_n:
+            continue
+        if filter_ps_n != "Vsi" and art["podsklop"] != filter_ps_n:
+            continue
+        naziv = art.get("naziv_slo") or art.get("naziv_orig","")
+        if iskanje_n and iskanje_n.lower() not in naziv.lower() and iskanje_n.lower() not in art.get("naziv_orig","").lower():
+            continue
+        filtrirani.append(art)
+
+    filtrirani.sort(key=lambda a: (
+        SKLOPI.index(a["sklop"]) if a["sklop"] in SKLOPI else 99,
+        PODSKOPI.index(a["podsklop"]) if a["podsklop"] in PODSKOPI else 99,
+        (a.get("naziv_slo") or a.get("naziv_orig","")).lower()
+    ))
 
     if not filtrirani:
         st.info("Ni artiklov za prikaz.")
         return
 
+    # ── Izberi vse ────────────────────────────────────────────────────────
     master_nar = st.checkbox("☑ Izberi vse", key=f"nar_master_{teden['id']}")
-    prev_mk = f"nar_prev_m_{teden['id']}"
-    prev_m  = st.session_state.get(prev_mk, None)
+    prev_mk    = f"nar_prev_m_{teden['id']}"
+    prev_m     = st.session_state.get(prev_mk, None)
     if prev_m is not None and master_nar != prev_m:
-        for lat, _ in filtrirani:
-            st.session_state[f"nar_sel_{teden['id']}_{lat}"] = master_nar
+        for i in range(len(filtrirani)):
+            st.session_state[f"nar_sel_{teden['id']}_{i}"] = master_nar
     st.session_state[prev_mk] = master_nar
     st.markdown("---")
 
-    gh = st.columns([0.5, 3.5, 1.5, 1, 1, 1.5, 1.5])
-    for col, h in zip(gh, ["","Artikel","Dobavitelj","Cena €","Sklop","Podsklop","Količina"]):
+    # ── Tabela artiklov po sklopih/podsklopih ────────────────────────────
+    gh = st.columns([0.5, 2.5, 2, 1.5, 1.5, 1, 1, 1.5])
+    for col, h in zip(gh, ["", "Orig. naziv", "SLO prevod", "Latinski naziv", "Dobavitelj", "Cena €", "Sklop/tip", "Količina"]):
         col.markdown(f"**{h}**")
     st.markdown("---")
 
+    cur_sklop, cur_ps = None, None
     izbrani = []
-    for lat, art in filtrirani:
-        rc = st.columns([0.5, 3.5, 1.5, 1, 1, 1.5, 1.5])
-        sel = rc[0].checkbox("", key=f"nar_sel_{teden['id']}_{lat}")
-        rc[1].write(f"{art['naziv']}" + (f" *{art.get('poreklo','')}*" if art.get("poreklo") else ""))
-        rc[2].caption(art["dobavitelj"])
-        rc[3].caption(f"{art['cena']:.2f}")
-        rc[4].caption(art["sklop"])
-        rc[5].caption(art.get("podsklop",""))
-        kolicina = rc[6].number_input("kol", min_value=0.0, value=0.0, step=1.0, format="%.1f",
-                                       key=f"nar_kol_{teden['id']}_{lat}", label_visibility="collapsed")
+    for i, art in enumerate(filtrirani):
+        # Separator sklop/podsklop
+        sklop    = art["sklop"]
+        podsklop = art["podsklop"]
+        if sklop != cur_sklop or podsklop != cur_ps:
+            if podsklop == "Fileji":
+                sep = f"🔪 {sklop} — fileji"
+            else:
+                sep = f"{SKLOP_IKONA.get(sklop,'')} {sklop} — cele ribe"
+            st.markdown(f"**{sep}**")
+            cur_sklop, cur_ps = sklop, podsklop
+
+        rc = st.columns([0.5, 2.5, 2, 1.5, 1.5, 1, 1, 1.5])
+        sel = rc[0].checkbox("", key=f"nar_sel_{teden['id']}_{i}")
+        rc[1].caption(art["naziv_orig"])
+        rc[2].caption(art.get("naziv_slo","—"))
+        rc[3].caption(art.get("latinski_naziv","—"))
+        rc[4].caption(art["dobavitelj"])
+        rc[5].caption(f"{art['cena']:.2f} €")
+        rc[6].caption(f"{sklop[:3]}. / {'file' if podsklop=='Fileji' else 'cele'}")
+        kolicina = rc[7].number_input(
+            "kol", min_value=0.0, value=0.0, step=1.0, format="%.1f",
+            key=f"nar_kol_{teden['id']}_{i}", label_visibility="collapsed"
+        )
         if sel:
             izbrani.append({**art, "kolicina": kolicina})
 
@@ -623,6 +661,7 @@ def _render_narocilo(teden: dict, tedni: list):
         st.caption("Izberi artikle zgoraj za pripravo naročila.")
         return
 
+    # ── Grupiraj po dobavitelju ───────────────────────────────────────────
     po_dob: dict = {}
     for art in izbrani:
         po_dob.setdefault(art["dobavitelj"], []).append(art)
@@ -630,41 +669,37 @@ def _render_narocilo(teden: dict, tedni: list):
 
     for dob, arts in po_dob.items():
         with st.expander(f"📄 Naročilo — {dob} ({len(arts)} artiklov)", expanded=True):
-            nh = st.columns([4, 1, 1, 1, 1])
-            for col, h in zip(nh, ["Artikel","Količina","Enota","Cena €","Skupaj €"]):
+            # Prikaz v Streamlitu
+            nh = st.columns([3.5, 2, 1, 1])
+            for col, h in zip(nh, ["Orig. naziv", "Latinski naziv", "Kol.", "Enota"]):
                 col.markdown(f"**{h}**")
             st.markdown("---")
-            skupaj = 0.0
             for art in arts:
-                kol    = float(art.get("kolicina") or 0)
-                cena   = float(art.get("cena") or 0)
-                znesek = round(kol * cena, 2)
-                skupaj += znesek
-                nc = st.columns([4, 1, 1, 1, 1])
-                nc[0].write(f"{art['naziv']} {art.get('poreklo','')}")
-                nc[1].write(f"{kol:.1f}")
-                nc[2].caption(art.get("enota","kg"))
-                nc[3].caption(f"{cena:.2f}")
-                nc[4].write(f"**{znesek:.2f}**")
+                kol = float(art.get("kolicina") or 0)
+                nc  = st.columns([3.5, 2, 1, 1])
+                nc[0].write(art.get("naziv_orig",""))
+                nc[1].caption(art.get("latinski_naziv",""))
+                nc[2].write(f"{kol:.1f}")
+                nc[3].caption(art.get("enota","kg"))
             st.markdown("---")
-            st.markdown(f"**Skupaj: {skupaj:.2f} €**")
+
+            # Excel — samo orig naziv, latinski naziv, količina
             try:
                 import pandas as pd, io
                 df_nar = pd.DataFrame([{
-                    "Artikel": a["naziv"], "Poreklo": a.get("poreklo",""),
-                    "Količina": float(a.get("kolicina") or 0), "Enota": a.get("enota","kg"),
-                    "Cena €/enoto": float(a.get("cena") or 0),
-                    "Skupaj €": round(float(a.get("kolicina") or 0)*float(a.get("cena") or 0), 2),
+                    "Naziv":           a.get("naziv_orig",""),
+                    "Latinski naziv":  a.get("latinski_naziv",""),
+                    "Količina":        float(a.get("kolicina") or 0),
+                    "Enota":           a.get("enota","kg"),
                 } for a in arts])
                 buf = io.BytesIO()
                 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                     df_nar.to_excel(writer, index=False, sheet_name="Narocilo")
                     ws = writer.sheets["Narocilo"]
-                    ws.column_dimensions["A"].width = 35
-                    for col_l in ["B","C","D","E","F"]:
-                        ws.column_dimensions[col_l].width = 14
+                    for col_l, w in zip(["A","B","C","D"], [38, 22, 12, 8]):
+                        ws.column_dimensions[col_l].width = w
                 st.download_button(
-                    f"⬇️ Excel naročilo — {dob}",
+                    f"⬇️ Naročilo — {dob}",
                     data=buf.getvalue(),
                     file_name=f"narocilo_{dob.replace(' ','_')}_{teden['datum_od']}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
