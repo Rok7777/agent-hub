@@ -181,6 +181,36 @@ Sklop: Gojeno=ribogojnice, Divjaki=divje ulovljene, Lokalna riba=slovensko porek
 Cena=vedno za 1kg brez DDV. Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...)."""
 
 
+def _repair_json(raw: str) -> str:
+    """Poskusi popraviti odrezan JSON — zapre odprte nize in strukture."""
+    raw = raw.strip().replace("```json", "").replace("```", "").strip()
+    try:
+        json.loads(raw)
+        return raw  # Že veljaven
+    except Exception:
+        pass
+    # Najdi zadnji popoln artikel objekt in zapri strukturo
+    for pattern in ["}\n  ]", "},\n    {", "},\n  {", "},"]:
+        idx = raw.rfind(pattern)
+        if idx > 0:
+            candidate = raw[:idx+1].rstrip(",\n ") + "\n  ]\n}"
+            try:
+                json.loads(candidate)
+                return candidate
+            except Exception:
+                continue
+    # Zadnji poskus — najdi zadnji }
+    idx = raw.rfind("}")
+    if idx > 0:
+        candidate = raw[:idx+1]
+        try:
+            json.loads(candidate)
+            return candidate
+        except Exception:
+            pass
+    return raw
+
+
 def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
     try:
         import anthropic
@@ -189,17 +219,25 @@ def _parse_pdf_claude(pdf_bytes: bytes) -> tuple:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
         b64    = base64.b64encode(pdf_bytes).decode()
-        resp   = client.messages.create(
-            model="claude-opus-4-6", max_tokens=4096,
-            messages=[{"role": "user", "content": [
-                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
-                {"type": "text", "text": _parse_prompt()},
-            ]}],
-        )
-        raw = resp.content[0].text.strip().replace("```json", "").replace("```", "").strip()
-        return json.loads(raw), None
-    except json.JSONDecodeError as e:
-        return {}, f"JSON napaka: {e}"
+
+        for max_tok in [8192, 16000]:
+            resp = client.messages.create(
+                model="claude-opus-4-6", max_tokens=max_tok,
+                messages=[{"role": "user", "content": [
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}},
+                    {"type": "text", "text": _parse_prompt()},
+                ]}],
+            )
+            raw = resp.content[0].text.strip()
+            raw = _repair_json(raw)
+            try:
+                return json.loads(raw), None
+            except json.JSONDecodeError as e:
+                if max_tok == 16000:
+                    return {}, f"JSON napaka: {e}"
+                continue
+
+        return {}, "JSON napaka: odgovor je bil prekinjen pri obeh poskusih."
     except Exception as e:
         return {}, str(e)
 
@@ -256,12 +294,20 @@ def _parse_excel_claude(file_bytes: bytes, fname: str) -> tuple:
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model="claude-opus-4-6", max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        raw = resp.content[0].text.strip().replace("```json", "").replace("```", "").strip()
-        return json.loads(raw), None
+
+        for max_tok in [8192, 16000]:
+            resp = client.messages.create(
+                model="claude-opus-4-6", max_tokens=max_tok,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            raw = _repair_json(resp.content[0].text.strip())
+            try:
+                return json.loads(raw), None
+            except json.JSONDecodeError:
+                if max_tok == 16000:
+                    return {}, "JSON napaka: Excel cenik je morda prevelik."
+                continue
+        return {}, "JSON napaka: odgovor prekinjen."
     except json.JSONDecodeError as e:
         return {}, f"JSON napaka pri Excel parsanju: {e}"
     except ImportError:
@@ -293,10 +339,17 @@ def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
         if not api_key:
             return {}, "ANTHROPIC_API_KEY ni nastavljen"
         client = anthropic.Anthropic(api_key=api_key)
-        resp = client.messages.create(model="claude-opus-4-6", max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}])
-        raw = resp.content[0].text.strip().replace("```json","").replace("```","").strip()
-        return json.loads(raw), None
+        for max_tok in [8192, 16000]:
+            resp = client.messages.create(model="claude-opus-4-6", max_tokens=max_tok,
+                messages=[{"role": "user", "content": prompt}])
+            raw = _repair_json(resp.content[0].text.strip())
+            try:
+                return json.loads(raw), None
+            except json.JSONDecodeError:
+                if max_tok == 16000:
+                    return {}, "JSON napaka: CSV cenik je morda prevelik."
+                continue
+        return {}, "JSON napaka: odgovor prekinjen."
     except json.JSONDecodeError as e:
         return {}, f"JSON napaka: {e}"
     except Exception as e:
