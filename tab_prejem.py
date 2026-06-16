@@ -515,7 +515,7 @@ Dokument je lahko DDT (Italia), dobavnica (HR, SI) ali račun v kateremkoli jezi
 Vrni SAMO čist JSON brez markdown, brez komentarjev.
 
 {
-  "supplier_name": "polno ime dobavitelja",
+  "supplier_name": "polno ime DOBAVITELJA — tisti ki pošilja blago, NE prejemnik/kupec",
   "invoice_number": "številka DDT/računa/dobavnice",
   "invoice_date": "YYYY-MM-DD",
   "datum_izlova": "YYYY-MM-DD če je naveden",
@@ -568,6 +568,11 @@ Način ulova (v slovenščini):
   Reti/Rete=Mreže, Allevato/Allevamento/Gojeno=pusti prazno (gojene ribe nimajo načina ulova)
 
 Lot dobavitelja: preberi iz stolpca "Lotte", "Lot", "Serija", "Batch"
+
+POZOR — pogosta napaka:
+- supplier_name = podjetje ki POŠILJA (npr. "Ribarnica Cerkvenik d.o.o.")
+- NE "MP - Ribarnica Solkan" ali podobno — to je ime stranke/prejemnika
+- Dobavitelj je naveden v glavi dokumenta kot "Mittente", "Cedente", "Prodavatelj"
 Carinska tarifa: preberi iz dokumenta ali po lastnem znanju za vrsto ribe
 Država porekla: 2-črkovna ISO koda (IT, HR, MA, ID, NO...)"""
 
@@ -825,7 +830,9 @@ def _get_supplier_canonical(name: str) -> str:
                         x = x.replace(r," ")
                     return set(w for w in re.sub(r'[,.()/+\-]',' ',x).split() if len(w)>2)
                 common = _nrm(name_up) & _nrm(sn)
-                if common and max(len(w) for w in common) > 3:
+                # Zahtevamo vsaj 2 skupni besedi daljši od 3 znakov — preprečimo napačna ujemanja
+                long_common = [w for w in common if len(w) > 3]
+                if len(long_common) >= 2:
                     return s.get("Name","") or name  # vrni uradno Minimax ime
             total   = data.get("TotalRows", 0)
             fetched = (page-1)*100 + len(rows)
