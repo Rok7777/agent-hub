@@ -133,15 +133,18 @@ def _glava_html(naslov: str, podnaslov: str, logo_b64: str = "") -> str:
 def _sklop_html(naziv: str, artikli: list, pokazi_dobavitelja: bool = False) -> str:
     if not artikli:
         return ""
-    sortirani = sorted(artikli, key=lambda a: a.get("naziv", "").lower())
+    sortirani = sorted(artikli, key=lambda a: (a.get("naziv_slo") or a.get("naziv","")).lower())
     vrstice = ""
     for art in sortirani:
+        naziv_prikaz = art.get("naziv_slo") or art.get("naziv","")
+        lat = art.get("latinski_naziv","")
+        lat_txt = f' <span style="color:#777;font-size:9px;font-style:italic;">({lat})</span>' if lat else ""
         por = f' <span style="color:#999;font-size:9px;">{art.get("poreklo","")}</span>' if art.get("poreklo") else ""
         dob_txt = f' <span style="color:#bbb;font-size:9px;">· {art.get("dobavitelj","")}</span>' if pokazi_dobavitelja and art.get("dobavitelj") else ""
         cena = float(art.get("cena_prodajna") or art.get("cena") or 0)
         cena_str = f"{cena:.2f} €".replace(".", ",") if cena > 0 else "—"
         vrstice += (f'<tr style="border-bottom:0.5px solid #eee;">'
-                    f'<td style="padding:2px 4px;color:#222;">{art.get("naziv","")}{por}{dob_txt}</td>'
+                    f'<td style="padding:2px 4px;color:#222;">{naziv_prikaz}{lat_txt}{por}{dob_txt}</td>'
                     f'<td style="padding:2px 4px;text-align:right;color:#222;white-space:nowrap;">{cena_str}</td>'
                     f'</tr>')
     return (f'<div style="font-size:10px;font-weight:500;color:#e8742a;text-transform:uppercase;'
@@ -165,6 +168,7 @@ Vrni SAMO čist JSON brez markdown, brez komentarjev.
   "artikli": [
     {
       "naziv": "naziv artikla kot piše v ceniku",
+      "naziv_slo": "slovenski prevod naziva artikla — vrsta ribe + velikost + stanje (svež/zmrznjen) + država, npr. 'Brancin 400-600g, svež, Hrvaška'",
       "latinski_naziv": "latinsko ime vrste",
       "cena": 0.00,
       "enota": "kg",
@@ -178,7 +182,8 @@ Vrni SAMO čist JSON brez markdown, brez komentarjev.
 }
 
 Sklop: Gojeno=ribogojnice, Divjaki=divje ulovljene, Lokalna riba=slovensko poreklo.
-Cena=vedno za 1kg brez DDV. Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...)."""
+Cena=vedno za 1kg brez DDV. Poreklo=2-črkovna ISO koda (HR,IT,NO,TR,GR,SI,ES,MA...).
+naziv_slo: VEDNO v slovenščini, kratek in jasen opis artikla za slovenskega kupca."""
 
 
 def _repair_json(raw: str) -> str:
@@ -753,63 +758,106 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
             if filter_s != "Vsi" and sklop != filter_s:
                 continue
             artikli_sklop = nas_cenik.get(sklop, [])
-            # Abecedno sortiranje
-            artikli_sklop_sort = sorted(artikli_sklop, key=lambda a: a.get("naziv","").lower())
-            # Filter iskanje
+            artikli_sklop_sort = sorted(
+                artikli_sklop,
+                key=lambda a: (a.get("naziv_slo") or a.get("naziv","")).lower()
+            )
             if iskanje:
-                artikli_sklop_sort = [a for a in artikli_sklop_sort if iskanje.lower() in a.get("naziv","").lower()]
+                artikli_sklop_sort = [
+                    a for a in artikli_sklop_sort
+                    if iskanje.lower() in (a.get("naziv_slo") or a.get("naziv","")).lower()
+                    or iskanje.lower() in a.get("naziv","").lower()
+                ]
             if not artikli_sklop_sort:
                 continue
             ikona = {"Gojeno": "🐟", "Divjaki": "🌊", "Lokalna riba": "🏔️"}.get(sklop, "")
             st.markdown(f"#### {ikona} {sklop}")
-            h0,h1,h2,h3,h4,h5,h6,h7 = st.columns([3,2,1.2,1.2,1.2,1,1.5,0.6])
-            h0.markdown("**Naziv**"); h1.markdown("**Latinski naziv**")
-            h2.markdown("**Nakupna €**"); h3.markdown("**Prod. €**")
-            h4.markdown("**Marža %**"); h5.markdown("**Por.**")
+
+            # Skupinska marža za sklop
+            sm1, sm2 = st.columns([3, 7])
+            with sm1:
+                skupna_marza = st.number_input(
+                    f"Marža % za vse v {sklop}",
+                    min_value=0.0, max_value=500.0, value=0.0, step=0.5, format="%.1f",
+                    key=f"skupna_marza_{teden['id']}_{ime_cenika}_{sklop}"
+                )
+            with sm2:
+                if st.button(
+                    f"Uporabi {skupna_marza:.0f}% na vse — {sklop}",
+                    key=f"apply_marza_{teden['id']}_{ime_cenika}_{sklop}",
+                    disabled=skupna_marza <= 0
+                ):
+                    for art in artikli_sklop:
+                        nc_v = float(art.get("cena", 0))
+                        if nc_v > 0:
+                            art["marza_pct"]     = skupna_marza
+                            art["cena_prodajna"] = round(nc_v * (1 + skupna_marza / 100), 2)
+                    st.session_state["ceniki_tedni"] = tedni
+                    _save_ceniki(tedni)
+                    st.rerun()
+
+            h0,h1,h2,h3,h4,h5,h6,h7 = st.columns([2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
+            h0.markdown("**SLO naziv**"); h1.markdown("**Latinski naziv**")
+            h2.markdown("**Poreklo**"); h3.markdown("**Nakupna €**")
+            h4.markdown("**Marža %**"); h5.markdown("**Prod. €**")
             h6.markdown("**Dobavitelj ↙**"); h7.markdown("")
             st.markdown("---")
+
             for a_idx, art in enumerate(artikli_sklop_sort):
-                lat_key  = (art.get("latinski_naziv") or art.get("naziv","")).lower().strip()
+                lat_key = (art.get("latinski_naziv") or art.get("naziv","")).lower().strip()
                 if lat_key not in vse_cene_cache:
                     primerjave = []
-                    for cenik in teden.get("ceniki_dob",[]):
-                        for a2 in cenik.get("artikli",[]):
+                    for cenik in teden.get("ceniki_dob", []):
+                        for a2 in cenik.get("artikli", []):
                             lat2 = (a2.get("latinski_naziv") or a2.get("naziv","")).lower().strip()
                             if lat2 == lat_key:
                                 primerjave.append(f"{cenik['dobavitelj']}: {a2.get('cena',0):.2f} €")
                     vse_cene_cache[lat_key] = primerjave
                 primerjave = vse_cene_cache[lat_key]
                 uid = f"{teden['id']}_{ime_cenika}_{sklop}_{a_idx}"
-                c0,c1,c2,c3,c4,c5,c6,c7 = st.columns([3,2,1.2,1.2,1.2,1,1.5,0.6])
+                c0,c1,c2,c3,c4,c5,c6,c7 = st.columns([2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
                 with c0:
-                    art["naziv"] = st.text_input("naziv", value=art.get("naziv",""),
-                                                  key=f"naziv_{uid}", label_visibility="collapsed")
+                    art["naziv_slo"] = st.text_input(
+                        "slo", value=art.get("naziv_slo") or art.get("naziv",""),
+                        key=f"nslo_{uid}", label_visibility="collapsed"
+                    )
                 with c1:
-                    st.caption(art.get("latinski_naziv",""))
+                    st.caption(art.get("latinski_naziv","—"))
                 with c2:
-                    art["cena"] = st.number_input("nc", value=float(art.get("cena",0)),
-                                                   min_value=0.0, step=0.01, format="%.2f",
-                                                   key=f"cena_{uid}", label_visibility="collapsed")
+                    st.caption(art.get("poreklo","—"))
                 with c3:
-                    new_pc = st.number_input("pc", value=float(art.get("cena_prodajna",0)),
-                                              min_value=0.0, step=0.01, format="%.2f",
-                                              key=f"prod_{uid}", label_visibility="collapsed")
+                    new_nc = st.number_input(
+                        "nc", value=float(art.get("cena",0)),
+                        min_value=0.0, format="%.2f",
+                        key=f"cena_{uid}", label_visibility="collapsed"
+                    )
+                    if new_nc != float(art.get("cena",0)):
+                        art["cena"] = new_nc
+                        m = float(art.get("marza_pct",0))
+                        if new_nc > 0 and m > 0:
+                            art["cena_prodajna"] = round(new_nc * (1 + m/100), 2)
+                with c4:
+                    new_m = st.number_input(
+                        "marža", value=float(art.get("marza_pct",0)),
+                        min_value=0.0, max_value=500.0, format="%.1f",
+                        key=f"marza_{uid}", label_visibility="collapsed"
+                    )
+                    if new_m != float(art.get("marza_pct",0)):
+                        art["marza_pct"] = new_m
+                        nc_v = float(art.get("cena",0))
+                        if nc_v > 0:
+                            art["cena_prodajna"] = round(nc_v * (1 + new_m/100), 2)
+                with c5:
+                    new_pc = st.number_input(
+                        "pc", value=float(art.get("cena_prodajna",0)),
+                        min_value=0.0, format="%.2f",
+                        key=f"prod_{uid}", label_visibility="collapsed"
+                    )
                     if new_pc != float(art.get("cena_prodajna",0)):
                         art["cena_prodajna"] = new_pc
                         nc_v = float(art.get("cena",0))
                         if nc_v > 0 and new_pc > 0:
                             art["marza_pct"] = round((new_pc/nc_v - 1)*100, 1)
-                with c4:
-                    nc_v = float(art.get("cena",0))
-                    pc_v = float(art.get("cena_prodajna",0))
-                    if nc_v > 0 and pc_v > 0:
-                        marza = round((pc_v/nc_v - 1)*100, 1)
-                        art["marza_pct"] = marza
-                        st.metric("", f"{marza:.1f}%", label_visibility="collapsed")
-                    else:
-                        st.caption("—")
-                with c5:
-                    st.caption(art.get("poreklo",""))
                 with c6:
                     dob = art.get("dobavitelj","")
                     if primerjave and len(primerjave) > 1:
@@ -818,7 +866,6 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                         st.caption(dob)
                 with c7:
                     if st.button("✕", key=f"rm_{uid}", help="Odstrani artikel"):
-                        # Poišči po identiteti objekta (id) — zanesljivo tudi pri sortiranih listah
                         art_id = id(art)
                         orig_idx = next((i for i, a in enumerate(artikli_sklop) if id(a) == art_id), None)
                         if orig_idx is not None:
@@ -897,7 +944,9 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                 try:
                     import pandas as pd, io
                     vrstice_xl = [{
-                        "Sklop": s, "Artikel": a.get("naziv",""),
+                        "Sklop": s,
+                        "Artikel": a.get("naziv_slo") or a.get("naziv",""),
+                        "Latinski naziv": a.get("latinski_naziv",""),
                         "Poreklo": a.get("poreklo",""),
                         "Cena €/kg": float(a.get("cena_prodajna") or a.get("cena") or 0),
                     } for s, a in izbrani_izvoz]
