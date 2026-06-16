@@ -818,17 +818,23 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
     tid       = teden["id"]
 
     # ── Apliciranje skupinske marže iz session_state ─────────────────────
-    # (aplicirano pred renderiranjem da so vrednosti ažurne)
     for sklop in SKLOPI:
         for podsklop in PODSKOPI:
             sm_key = f"skupna_marza_{tid}_{ime_cenika}_{sklop}_{podsklop}"
             m = st.session_state.get(sm_key, 0.0)
             if m and m > 0:
-                for art in nas_cenik.get(sklop,{}).get(podsklop,[]):
+                artikli_sm = nas_cenik.get(sklop,{}).get(podsklop,[])
+                arts_sm    = sorted(artikli_sm, key=lambda a: (a.get("naziv_slo") or a.get("naziv","")).lower())
+                for a_idx, art in enumerate(arts_sm):
                     nc_v = float(art.get("cena",0))
                     if nc_v > 0:
+                        pc   = round(nc_v*(1+m/100), 2)
                         art["marza_pct"]     = m
-                        art["cena_prodajna"] = round(nc_v*(1+m/100), 2)
+                        art["cena_prodajna"] = pc
+                        # Posodobi session_state polj da se osvežijo v UI
+                        uid = f"{tid}_{ime_cenika}_{sklop}_{podsklop}_{a_idx}"
+                        st.session_state[f"marza_{uid}"] = float(m)
+                        st.session_state[f"prod_{uid}"]  = float(pc)
 
     # ── Apliciranje posameznih marž iz session_state ─────────────────────
     for sklop in SKLOPI:
