@@ -1,10 +1,11 @@
 """
 Tab: Temeljnice — dnevni izkupiček
-Ureja: chat "Ločeni procesi za knjiženje blagajn"
+Ureja: Gazda AI
 Samostojen modul — brez config.py
 """
 
 import io
+import os
 import streamlit as st
 import pandas as pd
 from collections import defaultdict
@@ -17,7 +18,8 @@ def _secret(key, default=""):
     try:
         return st.secrets[key]
     except Exception:
-        return default
+        pass
+    return os.environ.get(key, default)
 
 
 def _make_client() -> MinimaxClient:
@@ -196,7 +198,6 @@ def render():
     df_sestevek = pd.DataFrame(vrstice)
     st.dataframe(df_sestevek, use_container_width=True, hide_index=True)
 
-    # Excel izvoz seštevka
     xlsx = _excel_download(df_sestevek)
     st.download_button(
         label="⬇️ Prenesi seštevek (Excel)",
