@@ -706,6 +706,79 @@ def _dolocii_latinski(naziv: str) -> str:
         return {}, f"PDF napaka: {str(e)}"
 
 
+def _parse_alemar_pdf(pdf_bytes: bytes) -> tuple:
+    """Prebere Alemar PDF cenik z pdfplumber — brez AI."""
+    try:
+        import pdfplumber, io
+        artikli = []
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            dobavitelj = "ALEMAR"
+            datum = ""
+            for page in pdf.pages:
+                if not datum:
+                    tekst = page.extract_text() or ""
+                    import re
+                    m = re.search(r'(\d{2}/\d{2}/\d{4})', tekst)
+                    if m:
+                        try:
+                            datum = datetime.strptime(m.group(1), "%d/%m/%Y").strftime("%Y-%m-%d")
+                        except:
+                            pass
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        if not row or not row[0] or row[0] == 'Articolo':
+                            continue
+                        naziv = (row[1] or "").replace('\n', ' ').strip()
+                        if not naziv:
+                            continue
+                        prezzo       = (row[6] or "").strip()
+                        prezzo_collo = (row[7] or "").strip() if len(row) > 7 else ""
+                        peso         = (row[5] or "1").strip()
+                        cena = 0.0
+                        if prezzo:
+                            try:
+                                cena = float(prezzo.replace(',', '.'))
+                            except:
+                                pass
+                        elif prezzo_collo and peso:
+                            try:
+                                cena = round(float(prezzo_collo.replace(',','.')) /
+                                             float(peso.replace(',','.')), 2)
+                            except:
+                                pass
+                        if cena <= 0:
+                            continue
+                        poreklo = ""
+                        for p_kw, p_iso in [("CROAZIA","HR"),("GRECIA","GR"),("SPAGNA","ES"),
+                                             ("NORVEGIA","NO"),("SCOZIA","GB"),("SICILIA","IT"),
+                                             ("ITALIA","IT"),("OLANDA","NL"),("CANADA","CA")]:
+                            if p_kw in naziv.upper():
+                                poreklo = p_iso
+                                break
+                        latinski  = _dolocii_latinski(naziv)
+                        sklop     = _dolocii_sklop_iz_naziva(naziv, latinski)
+                        naziv_slo = _prevedi_naziv(naziv)
+                        artikli.append({
+                            "naziv":          naziv,
+                            "naziv_slo":      naziv_slo,
+                            "latinski_naziv": latinski,
+                            "cena":           cena,
+                            "enota":          "kg",
+                            "poreklo":        poreklo,
+                            "sklop":          sklop,
+                            "podsklop":       _dolocii_podsklop({"naziv": naziv, "naziv_slo": naziv_slo}),
+                        })
+        return {
+            "dobavitelj": dobavitelj,
+            "datum":      datum,
+            "valuta":     "EUR",
+            "artikli":    artikli,
+        }, None
+    except Exception as e:
+        return {}, f"PDF napaka: {str(e)}"
+
+
 def _parse_fiorital_excel(file_bytes: bytes, fname: str) -> tuple:
     """Prebere Fiorital Excel cenik — brez AI. Vzame zadnjo ne-nič ceno."""
     try:
