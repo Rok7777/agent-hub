@@ -762,30 +762,50 @@ def _parse_genericni_excel(file_bytes: bytes, fname: str) -> tuple:
         return {}, str(e)
 
 
+def _zaznaj_format(file_bytes: bytes, ext: str) -> str:
+    """Zazna dobavitelja/format iz vsebine dokumenta — ne iz imena datoteke."""
+    try:
+        if ext == "pdf":
+            import pdfplumber, io
+            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                tekst = (pdf.pages[0].extract_text() or "").upper()
+            if "ALEMAR" in tekst or "LISTINO" in tekst:
+                return "alemar_pdf"
+            return "pdf_neznan"
+        elif ext in ("xlsx", "xls"):
+            import pandas as pd, io
+            df = pd.read_excel(io.BytesIO(file_bytes), header=None, nrows=5)
+            tekst = " ".join(str(v) for v in df.values.flatten() if str(v) != "nan").upper()
+            if "FIORITAL" in tekst or "CJENIK" in tekst:
+                return "fiorital_excel"
+            return "excel_neznan"
+        elif ext == "csv":
+            return "csv_neznan"
+    except Exception:
+        pass
+    return "neznan"
+
+
 def _parse_cenik(file_bytes: bytes, fname: str, ftype: str) -> tuple:
-    """Router — izbere pravi parser glede na tip in ime datoteke."""
+    """Router — prepozna dobavitelja iz vsebine dokumenta, ne iz imena datoteke."""
     ft  = ftype.lower()
     ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-    fname_up = fname.upper()
+    if "pdf" in ft:      ext = "pdf"
+    elif "excel" in ft or "spreadsheet" in ft: ext = "xlsx"
+    elif "csv" in ft:    ext = "csv"
 
-    if "pdf" in ft or ext == "pdf":
-        # Alemar ima "LISTINO" v imenu
-        if "LISTINO" in fname_up or "ALEMAR" in fname_up:
-            return _parse_alemar_pdf(file_bytes)
-        # Ostali PDF → AI
-        return _parse_pdf_claude(file_bytes)
+    format_tip = _zaznaj_format(file_bytes, ext)
 
-    elif "excel" in ft or "spreadsheet" in ft or ext in ("xlsx","xls"):
-        # Fiorital ima "CJENIK" v imenu
-        if "CJENIK" in fname_up or "FIORITAL" in fname_up:
-            return _parse_fiorital_excel(file_bytes, fname)
-        # Ostali Excel → generični parser
-        return _parse_genericni_excel(file_bytes, fname)
-
-    elif "csv" in ft or ext == "csv":
-        return _parse_csv_claude(file_bytes, fname)
-
-    return {}, f"Neznan format: {fname}"
+    if format_tip == "alemar_pdf":
+        return _parse_alemar_pdf(file_bytes)
+    elif format_tip == "fiorital_excel":
+        return _parse_fiorital_excel(file_bytes, fname)
+    elif format_tip == "pdf_neznan":
+        return {}, "Neznan PDF format — pošlji vzorec cenika Gazdi da doda parser za tega dobavitelja."
+    elif format_tip == "excel_neznan":
+        return {}, "Neznan Excel format — pošlji vzorec cenika Gazdi da doda parser za tega dobavitelja."
+    else:
+        return {}, f"Neznan format: {fname}"
 
 # ─── Kronološki filter ────────────────────────────────────────────────────────
 
@@ -1623,9 +1643,9 @@ def render():
         st.header("⚙️ Nov teden")
         col_a, col_b = st.columns(2)
         with col_a:
-            d_od = st.date_input("Od", value=date.today(), key="nt_od")
+            d_od = st.date_input("Od", value=date.today(), key="nt_od", format="DD.MM.YYYY")
         with col_b:
-            d_do = st.date_input("Do", value=date.today(), key="nt_do")
+            d_do = st.date_input("Do", value=date.today(), key="nt_do", format="DD.MM.YYYY")
         if st.button("➕ Ustvari nov teden", use_container_width=True, key="btn_nov_teden"):
             nov = _nov_teden(_parse_datum_input(d_od), _parse_datum_input(d_do))
             tedni.append(nov)
