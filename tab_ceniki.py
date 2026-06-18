@@ -540,24 +540,89 @@ def _prevedi_naziv(naziv: str) -> str:
 def _dolocii_sklop_iz_naziva(naziv: str, latinski: str) -> str:
     """Določi sklop na podlagi latinskega/originalnega naziva."""
     lat = latinski.lower()
-    naz = naziv.lower()
+    naz = naziv.upper()
+
     # Gojene ribe po latinskem imenu
     gojeni_latinski = {
         "dicentrarchus labrax", "sparus aurata", "salmo salar",
         "oncorhynchus mykiss", "mytilus galloprovincialis",
         "sander lucioperca", "silurus glanis", "cyprinus carpio",
+        "acipenser", "scophthalmus maximus",
     }
     if any(g in lat for g in gojeni_latinski):
-        return "Gojeno"
-    # Lokalna riba
-    if "hr" in naz or "slovenija" in naz or "si" in naz:
-        if any(w in lat for w in ["oncorhynchus", "salmo trutta"]):
+        # Lokalna riba — Slovenija/Hrvaška postrv
+        if ("HR" in naz or "SLOVENIJA" in naz) and "ONCORHYNCHUS" in lat:
             return "Lokalna riba"
+        return "Gojeno"
+
+    # Gojene ribe po nazivu (Alemar nima latinskega — prepoznaj po imenu)
+    gojeni_nazivi = {
+        "BRANZINO", "BRANCIN", "ORATA", "SALMONE", "LOSOS",
+        "TROTA SALMONATA", "TROTA NORMALE", "LOSOSOVA POSTRV", "NAVADNA POSTRV",
+        "OMBRINA BOCCADORO", "SENČAR ZLATA", "SOGLIOLA ALLEVATA", "GOJENA MORSKA",
+        "ROMBO ALLEVATO", "BRANZINO CROAZIA", "BRANZINO GRECIA", "BRANZINO SPAGNA",
+        "ORATA CROAZIA", "ORATA GRECIA", "SALMONE SCOZIA", "SALMONE NORVEGIA",
+        "LOSOS 4", "LOSOS 5", "ŠKOTSKI LOSOS",
+    }
+    if any(g in naz for g in gojeni_nazivi):
+        # Lokalna riba — Slovenija/Hrvaška postrv
+        if ("HR" in naz or "SLOVENIJA" in naz) and any(w in naz for w in ["POSTRV","TROTA","PASTRVA"]):
+            return "Lokalna riba"
+        return "Gojeno"
+
+    # Lokalna riba — slovensko poreklo
+    if any(w in naz for w in ["SLOVENIJA", "RIBOGOJNICA", "LIBO"]):
+        return "Lokalna riba"
+
     # Divjaki — vse ostalo
     return "Divjaki"
 
 
-def _parse_alemar_pdf(pdf_bytes: bytes) -> tuple:
+# Slovar IT naziv → latinski naziv za Alemar
+_ALEMAR_LATINSKI = {
+    "BRANZINO": "Dicentrarchus labrax",
+    "ORATA": "Sparus aurata",
+    "SALMONE": "Salmo salar",
+    "TROTA": "Oncorhynchus mykiss",
+    "ANGUILLA": "Anguilla anguilla",
+    "DENTICE": "Dentex dentex",
+    "DENTICE GIBBOSO": "Dentex gibbosus",
+    "ROMBO CHIODATO": "Scophthalmus maximus",
+    "SOGLIOLA": "Solea solea",
+    "MERLUZZO": "Merluccius merluccius",
+    "POLPO": "Octopus vulgaris",
+    "SEPPIA": "Sepia officinalis",
+    "TOTANO": "Illex illecebrosus",
+    "CALAMARO": "Loligo vulgaris",
+    "ASTICE EUROPEO": "Homarus gammarus",
+    "ASTICE AMERICANO": "Homarus americanus",
+    "RANA PESCATRICE": "Lophius piscatorius",
+    "CODA DI ROSPO": "Lophius piscatorius",
+    "RICCIOLA": "Seriola dumerili",
+    "CERNIA": "Epinephelus marginatus",
+    "CERNIA GIALLA": "Epinephelus costae",
+    "PAGELLO": "Pagellus erythrinus",
+    "PAGRO": "Pagrus pagrus",
+    "PESCE SPADA": "Xiphias gladius",
+    "SGOMBRO": "Scomber scombrus",
+    "OMBRINA": "Argyrosomus regius",
+    "CAPPASANTA": "Pecten maximus",
+    "GRANCEOLA": "Maja squinado",
+    "TONNO": "Thunnus albacares",
+    "PESCE SAN PIETRO": "Zeus faber",
+    "MOSCARDINO": "Eledone moschata",
+    "GRANCIPORRO": "Cancer pagurus",
+    "TRIGLIA": "Mullus surmuletus",
+}
+
+def _dolocii_latinski(naziv: str) -> str:
+    """Poišče latinski naziv iz Alemar slovarja."""
+    naziv_up = naziv.upper()
+    best_key, best_val = "", ""
+    for kljuc, lat in _ALEMAR_LATINSKI.items():
+        if kljuc in naziv_up and len(kljuc) > len(best_key):
+            best_key, best_val = kljuc, lat
+    return best_val
     """Prebere Alemar PDF cenik z pdfplumber — brez AI."""
     try:
         import pdfplumber, io
@@ -618,8 +683,8 @@ def _parse_alemar_pdf(pdf_bytes: bytes) -> tuple:
                             if p_kw in naziv.upper():
                                 poreklo = p_iso
                                 break
-                        latinski = ""
-                        sklop    = _dolocii_sklop_iz_naziva(naziv, latinski)
+                        latinski  = _dolocii_latinski(naziv)
+                        sklop     = _dolocii_sklop_iz_naziva(naziv, latinski)
                         naziv_slo = _prevedi_naziv(naziv)
                         artikli.append({
                             "naziv":          naziv,
