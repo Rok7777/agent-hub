@@ -4,6 +4,8 @@ Dokumentacija: https://moj.minimax.si/SI/API
 """
 
 import requests
+import json
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -534,10 +536,10 @@ class MinimaxClient:
         """
         Posodobi dokument z dodelitvami lotov.
         - orig_rows posodobimo z BatchNumber/Quantity/Price
-        - Dodatne vrstice (drugi loti, zamenjave) dodamo kot nove
-        - no_match/no_lots: original ostane nespremenjen (vidno v dokumentu)
+        - Dodatne vrstice (drugi loti, zamenjave, odpisi) dodamo kot nove
+        - no_match/no_lots: original ostane nespremenjen
         - partial z lotom: nova vrstica z lotom + nova vrstica brez lota (ostanek)
-        - partial brez lota: nova vrstica brez BatchNumber (vidno kot nekrita količina)
+        - partial brez lota: nova vrstica brez BatchNumber (nekrita količina)
         """
         fresh     = self.get_entry_detail(entry_id)
         orig_rows = fresh.get("StockEntryRows") or []
@@ -564,8 +566,7 @@ class MinimaxClient:
                     "BatchNumber":   r["lot"],
                     "Note":          r.get("opis", "") or "",
                 }
-                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
-                if r.get("unit"):          row["UnitOfMeasurement"] = r["unit"]
+                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
                 lp = float(r.get("lot_price") or 0)
                 if lp > 0:
                     row["Price"] = lp
@@ -576,14 +577,12 @@ class MinimaxClient:
                 continue
             # Vrstice brez lota — ohrani za ročno korekcijo
             if r.get("status") in ("no_lots", "no_match"):
-                continue  # orig_rows loop doda original nespremenjen
+                continue
             if r.get("status") == "partial":
                 # Dodaj vrstico ne glede na to ali ima lot ali ne
-                # Brez lota = nekrita količina vidna v dokumentu
                 row = {
                     "Item":          {"ID": r["article_id"]},
                     "Quantity":      r["quantity_assigned"],
-                    "SellingPrice":  r.get("selling_price"),
                     "WarehouseFrom": default_wh_from,
                     "Note":          r.get("opis", "") or "",
                 }
@@ -593,6 +592,7 @@ class MinimaxClient:
                     if lp > 0:
                         row["Price"] = lp
                         row["Value"] = round(lp * r["quantity_assigned"], 4)
+                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
                 if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
                 extra_rows.append(row)
                 continue
@@ -601,25 +601,23 @@ class MinimaxClient:
             result_art = r.get("article_id")
 
             if orig_art == result_art and rid not in lot_by_rowid:
-                # Isti artikel — posodobi original
                 lot_by_rowid[rid] = r.get("lot", "")
                 qty_by_rowid[rid] = r["quantity_assigned"]
                 lp = float(r.get("lot_price") or 0)
                 if lp > 0:
                     price_by_rowid[rid] = (lp, round(lp * r["quantity_assigned"], 4))
             else:
-                # Pametna zamenjava ali drugi lot — nova vrstica
                 if orig_art != result_art and rid not in lot_by_rowid:
                     replaced_row_ids.add(rid)
                 row = {
                     "Item":          {"ID": result_art},
                     "Quantity":      r["quantity_assigned"],
-                    "SellingPrice":  r.get("selling_price"),
                     "WarehouseFrom": default_wh_from,
                     "Note":          r.get("opis", "") or "",
                 }
                 if r.get("lot"):  row["BatchNumber"]       = r["lot"]
                 if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
+                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
                 lp = float(r.get("lot_price") or 0)
                 if lp > 0:
                     row["Price"] = lp
@@ -657,6 +655,19 @@ class MinimaxClient:
             return cleaned
 
         final_rows.extend([_clean_row(r) for r in extra_rows])
+
+        # DEBUG — shrani body v /data/debug_put.json pred PUT requestom
+        try:
+            debug_body = {
+                "entry_id": entry_id,
+                "num_final_rows": len(final_rows),
+                "final_rows": final_rows,
+            }
+            debug_path = os.path.join(os.environ.get("DATA_DIR", "/data"), "debug_put.json")
+            with open(debug_path, "w", encoding="utf-8") as f:
+                json.dump(debug_body, f, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            pass
 
         body = {**fresh, "StockEntryRows": final_rows}
         return self._put(f"/stockentry/{entry_id}", body)
