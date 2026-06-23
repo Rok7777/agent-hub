@@ -579,7 +579,6 @@ class MinimaxClient:
             if r.get("status") in ("no_lots", "no_match"):
                 continue
             if r.get("status") == "partial":
-                # Dodaj vrstico ne glede na to ali ima lot ali ne
                 row = {
                     "Item":          {"ID": r["article_id"]},
                     "Quantity":      r["quantity_assigned"],
@@ -638,6 +637,8 @@ class MinimaxClient:
                 if row_id in price_by_rowid:
                     row["Price"] = price_by_rowid[row_id][0]
                     row["Value"] = price_by_rowid[row_id][1]
+            # Odstrani null vrednosti iz originalnih vrstic — Minimax zavrne PUT z null RowVersion
+            row = {k: v for k, v in row.items() if v is not None}
             final_rows.append(row)
 
         # Dodaj nove vrstice (očiščene)
