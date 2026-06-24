@@ -536,10 +536,8 @@ class MinimaxClient:
         """
         Posodobi dokument z dodelitvami lotov.
         - orig_rows posodobimo z BatchNumber/Quantity/Price
-        - Dodatne vrstice (drugi loti, zamenjave, odpisi) dodamo kot nove
-        - no_match/no_lots: original ostane nespremenjen
-        - partial z lotom: nova vrstica z lotom + nova vrstica brez lota (ostanek)
-        - partial brez lota: nova vrstica brez BatchNumber (nekrita količina)
+        - Dodatne vrstice (drugi loti, zamenjave) dodamo kot nove
+        - no_match/no_lots/partial: original ostane nespremenjen
         """
         fresh     = self.get_entry_detail(entry_id)
         orig_rows = fresh.get("StockEntryRows") or []
@@ -559,26 +557,19 @@ class MinimaxClient:
         for r in new_rows:
             # Odpisi z row_id=None — dodaj kot nove vrstice
             if r.get("_writeoff") and r.get("row_id") is None and r.get("lot"):
-                lp = float(r.get("lot_price") or 0)
-                sp = float(r.get("selling_price") or 0) or lp  # prodajna = nabavna če ni določena
                 row = {
-                    "Item":                    {"ID": r["article_id"]},
-                    "Quantity":                r["quantity_assigned"],
-                    "WarehouseFrom":           default_wh_from,
-                    "BatchNumber":             r["lot"],
-                    "Note":                    r.get("opis", "") or "",
-                    "DiscountPercent":         0.0,
-                    "MarginPercent":           0.0,
-                    "SellingPriceIncludesVAT": "D",
-                    "Mass":                    0.0,
+                    "Item":          {"ID": r["article_id"]},
+                    "Quantity":      r["quantity_assigned"],
+                    "WarehouseFrom": default_wh_from,
+                    "BatchNumber":   r["lot"],
+                    "Note":          r.get("opis", "") or "",
                 }
-                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
+                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
+                if r.get("unit"):          row["UnitOfMeasurement"] = r["unit"]
+                lp = float(r.get("lot_price") or 0)
                 if lp > 0:
                     row["Price"] = lp
                     row["Value"] = round(lp * r["quantity_assigned"], 4)
-                if sp > 0:
-                    row["SellingPrice"] = sp
-                    row["SellingValue"] = round(sp * r["quantity_assigned"], 4)
                 extra_rows.append(row)
                 continue
             if r.get("_writeoff"):
@@ -587,21 +578,22 @@ class MinimaxClient:
             if r.get("status") in ("no_lots", "no_match"):
                 continue
             if r.get("status") == "partial":
-                row = {
-                    "Item":          {"ID": r["article_id"]},
-                    "Quantity":      r["quantity_assigned"],
-                    "WarehouseFrom": default_wh_from,
-                    "Note":          r.get("opis", "") or "",
-                }
+                # Partial ima lot — dodaj kot novo vrstico
                 if r.get("lot"):
-                    row["BatchNumber"] = r["lot"]
+                    row = {
+                        "Item":          {"ID": r["article_id"]},
+                        "Quantity":      r["quantity_assigned"],
+                        "SellingPrice":  r.get("selling_price"),
+                        "WarehouseFrom": default_wh_from,
+                        "Note":          r.get("opis", "") or "",
+                        "BatchNumber":   r["lot"],
+                    }
+                    if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
                     lp = float(r.get("lot_price") or 0)
                     if lp > 0:
                         row["Price"] = lp
                         row["Value"] = round(lp * r["quantity_assigned"], 4)
-                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
-                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
-                extra_rows.append(row)
+                    extra_rows.append(row)
                 continue
             rid        = r.get("row_id", 0)
             orig_art   = (orig_by_rownum.get(rid, {}).get("Item") or {}).get("ID")
@@ -619,12 +611,12 @@ class MinimaxClient:
                 row = {
                     "Item":          {"ID": result_art},
                     "Quantity":      r["quantity_assigned"],
+                    "SellingPrice":  r.get("selling_price"),
                     "WarehouseFrom": default_wh_from,
                     "Note":          r.get("opis", "") or "",
                 }
                 if r.get("lot"):  row["BatchNumber"]       = r["lot"]
                 if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
-                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
                 lp = float(r.get("lot_price") or 0)
                 if lp > 0:
                     row["Price"] = lp
@@ -650,16 +642,14 @@ class MinimaxClient:
         # Dodaj nove vrstice (očiščene)
         def _clean_row(row):
             KEEP = {"StockEntryRowId", "Item", "Quantity", "BatchNumber",
-                    "WarehouseFrom", "SellingPrice", "SellingValue",
-                    "UnitOfMeasurement", "Note", "Price", "Value",
-                    "DiscountPercent", "MarginPercent",
-                    "SellingPriceIncludesVAT", "Mass"}
+                    "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note",
+                    "Price", "Value"}
             cleaned = {}
             for k, v in row.items():
                 if k not in KEEP: continue
                 if v is None: continue
                 if k == "BatchNumber" and not v: continue
-                if k in ("SellingPrice", "SellingValue", "Price", "Value") and v == 0.0: continue
+                if k in ("SellingPrice", "Price", "Value") and v == 0.0: continue
                 cleaned[k] = {"ID": v["ID"]} if isinstance(v, dict) and "ID" in v else v
             return cleaned
 
