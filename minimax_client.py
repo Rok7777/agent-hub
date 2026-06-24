@@ -706,7 +706,7 @@ def parse_entry_to_lines(entry_detail: dict, item_units: dict = None) -> list[di
                    item.get("UOM") or item.get("MeasureUnit") or
                    (item_units.get(item_id) if item_units and item_id else None) or "")
         lines.append({
-            "row_id":             i,
+            "row_id":             item.get("RowNumber", i + 2) - 1,
             "stock_entry_row_id": item.get("StockEntryRowId"),
             "article_id":         item_id,
             "article_code":       item.get("ItemCode", "") or item_fk.get("Code", "") or str(item_id or ""),
