@@ -1,724 +1,602 @@
 """
-Minimax API odjemalec.
-Dokumentacija: https://moj.minimax.si/SI/API
+Lot assignment engine — FIFO + smart matching za ribje artikle.
 """
 
-import requests
-import json
-import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
+import re
 
 
-BASE     = "https://moj.minimax.si/SI/API"
-AUTH_URL = "https://moj.minimax.si/SI/AUT/OAuth20/Token"
+# ─── Lot date parsing ─────────────────────────────────────────────────────────
 
-LOCATIONS = {
-    "MPK1": {"name": "Potujoča 1",        "analytic_name": "MPK1"},
-    "MPK2": {"name": "Potujoča 2",        "analytic_name": "MPK2"},
-    "MPK3": {"name": "Potujoča 3",        "analytic_name": "MPK3"},
-    "MPOC": {"name": "Ribarnica Domžale", "analytic_name": "MPOC"},
-}
-
-BLAGAJNE = {
-    "MPK1": "Maloprodaja kombi 1",
-    "MPK2": "Maloprodaja kombi 2",
-    "MPK3": "Maloprodaja kombi 3",
-    "MPOC": "Maloprodaja Orehovlje",
-}
-
-
-class MinimaxClient:
-    def __init__(self, username: str, password: str, client_id: str,
-                 client_secret: str, org_id: int):
-        self.username      = username
-        self.password      = password
-        self.client_id     = client_id
-        self.client_secret = client_secret
-        self.org_id        = org_id
-        self._token          = None
-        self._token_expiry   = datetime.min
-        self._analytics_map  = None
-
-    # ── Auth ─────────────────────────────────────────────────────────────────
-
-    def _get_token(self) -> str:
-        if self._token and datetime.now() < self._token_expiry:
-            return self._token
-        r = requests.post(AUTH_URL, data={
-            "grant_type":    "password",
-            "username":      self.username,
-            "password":      self.password,
-            "client_id":     self.client_id,
-            "client_secret": self.client_secret,
-        }, timeout=15)
-        if not r.ok:
-            raise Exception(f"Prijava neuspešna ({r.status_code}): {r.text[:300]}")
-        data = r.json()
-        self._token = data["access_token"]
-        expires_in  = int(data.get("expires_in", 3600))
-        from datetime import timedelta
-        self._token_expiry = datetime.now() + timedelta(seconds=expires_in - 60)
-        return self._token
-
-    def _headers(self) -> dict:
-        return {
-            "Authorization": f"Bearer {self._get_token()}",
-            "Content-Type":  "application/json",
-        }
-
-    def _get(self, path: str, params: dict = None) -> dict:
-        url = f"{BASE}/api/orgs/{self.org_id}{path}"
-        r = requests.get(url, headers=self._headers(), params=params, timeout=20)
-        r.raise_for_status()
-        return r.json()
-
-    def _put(self, path: str, body: dict) -> dict:
-        url = f"{BASE}/api/orgs/{self.org_id}{path}"
-        r = requests.put(url, headers=self._headers(), json=body, timeout=20)
-        if not r.ok:
-            raise Exception(f"PUT {path} → {r.status_code}: {r.text[:500]}")
-        return r.json()
-
-    def _post(self, path: str, body: dict) -> dict:
-        url = f"{BASE}/api/orgs/{self.org_id}{path}"
-        r = requests.post(url, headers=self._headers(), json=body, timeout=20)
-        if not r.ok:
-            raise Exception(f"POST {path} → {r.status_code}: {r.text[:500]}")
-        return r.json()
-
-    # ── Journal (Temeljnice) ──────────────────────────────────────────────────
-
-    def get_journal_drafts(self) -> list[dict]:
-        di_ids = []
-        page   = 1
-        while True:
-            data = self._get("/journals", params={
-                "JournalType": "DI",
-                "CurrentPage": page,
-                "PageSize":    50,
-            })
-            rows = data.get("Rows", [])
-            for row in rows:
-                di_ids.append(row.get("JournalId"))
-            total   = data.get("TotalRows", 0)
-            fetched = (page - 1) * 50 + len(rows)
-            if fetched >= total or not rows:
-                break
-            page += 1
-
-        result = []
-        for jid in di_ids:
-            try:
-                j = self.get_journal(jid)
-                if str(j.get("Status", "")) == "O":
-                    result.append(j)
-            except Exception:
-                continue
-        return result
-
-    def get_journal_drafts_debug(self) -> dict:
-        try:
-            osnutki = self.get_journal_drafts()
-            k1 = {"najdeno": len(osnutki), "ids": [j.get("JournalId") for j in osnutki]}
-        except Exception as e:
-            k1 = {"napaka": str(e)}
-            osnutki = []
-
-        k2 = []
-        for j in osnutki:
-            try:
-                p = self.parse_journal_placila(j)
-                k2.append({
-                    "id":            j.get("JournalId"),
-                    "entries_count": len(j.get("JournalEntries", [])),
-                    "parse_ok":      p is not None,
-                    "sifra":         p.get("analitika_sifra") if p else None,
-                    "skupaj":        p.get("skupaj") if p else None,
-                })
-            except Exception as e:
-                k2.append({"id": j.get("JournalId"), "napaka": str(e)})
-
-        k3 = {}
-        if osnutki:
-            jid = osnutki[0].get("JournalId")
-            try:
-                j       = self.get_journal(jid)
-                entries = j.get("JournalEntries", [])
-                k3["prvi_osnutek"] = {
-                    "JournalId":   jid,
-                    "Description": j.get("Description"),
-                    "entries": [{
-                        "Account":  e.get("Account"),
-                        "Analytic": e.get("Analytic"),
-                        "Debit":    e.get("Debit"),
-                        "Credit":   e.get("Credit"),
-                    } for e in entries]
-                }
-            except Exception as e:
-                k3["prvi_osnutek"] = {"napaka": str(e)}
-
-        return {"k1_get_drafts": k1, "k2_parse": k2, "k3_direktno": k3}
-
-    def get_journal(self, journal_id: int) -> dict:
-        return self._get(f"/journals/{journal_id}")
-
-    def update_journal(self, journal_id: int, journal_data: dict) -> dict:
-        return self._put(f"/journals/{journal_id}", journal_data)
-
-    def parse_journal_placila(self, journal: dict) -> dict | None:
-        entries     = journal.get("JournalEntries", [])
-        datum       = journal.get("JournalDate", "")[:10]
-        journal_id  = journal.get("JournalId")
-        row_version = journal.get("RowVersion", "")
-
-        ID_GOTOVINA = 72537347
-        ID_KARTICA  = 72537491
-
-        data_1652 = None
-        data_1000 = None
-
-        import re
-
-        def _analytic_sifra_from_code(code):
-            m = re.search(r"(MPK\d+|MPOC)", code or "")
-            return m.group(1) if m else ""
-
-        def _analytic_sifra(entry):
-            an    = entry.get("Analytic") or {}
-            code  = an.get("Code", "") or ""
-            desc  = entry.get("Description", "") or ""
-            jdesc = journal.get("Description", "") or ""
-            combined = f"{code} {desc} {jdesc}"
-            m = re.search(r"(MPK\d+|MPOC)", combined)
-            return m.group(1) if m else ""
-
-        for entry in entries:
-            acc_id  = (entry.get("Account") or {}).get("ID")
-            an_obj  = entry.get("Analytic") or {}
-            an_id   = an_obj.get("ID")
-            an_code = an_obj.get("Code", "") or ""
-            if not an_code and an_id:
-                an_code = self._get_analytic_code(an_id)
-            sifra = _analytic_sifra_from_code(an_code) or _analytic_sifra(entry)
-
-            debit  = float(entry.get("Debit", 0) or 0)
-            credit = float(entry.get("Credit", 0) or 0)
-            znesek = debit if debit > 0 else credit
-
-            if acc_id == ID_KARTICA and not data_1652:
-                data_1652 = {"analitika": an_code, "sifra": sifra, "znesek": znesek}
-            elif acc_id == ID_GOTOVINA and not data_1000:
-                data_1000 = {"analitika": an_code, "sifra": sifra, "znesek": znesek}
-
-        if not data_1652 and not data_1000:
-            return None
-
-        an_polno        = (data_1652 or data_1000)["analitika"]
-        sifra           = (data_1652 or data_1000)["sifra"]
-        znesek_kartica  = data_1652["znesek"] if data_1652 else 0.0
-        znesek_gotovina = data_1000["znesek"] if data_1000 else 0.0
-        skupaj          = round(znesek_kartica + znesek_gotovina, 2)
-        rezim = "oba" if (data_1652 and data_1000) else ("samo_kartica" if data_1652 else "samo_gotovina")
-
-        return {
-            "journal_id":      journal_id,
-            "datum":           datum,
-            "analitika_sifra": sifra,
-            "analitika_polno": an_polno,
-            "blagajna_naziv":  BLAGAJNE.get(sifra, sifra),
-            "znesek_kartica":  znesek_kartica,
-            "znesek_gotovina": znesek_gotovina,
-            "skupaj":          skupaj,
-            "rezim":           rezim,
-            "row_version":     row_version,
-            "entries":         entries,
-            "journal_raw":     journal,
-        }
-
-    def popravi_in_potrdi_journal(self, podatki: dict) -> bool:
-        ID_GOTOVINA = 72537347
-        ID_KARTICA  = 72537491
-
-        journal = self.get_journal(podatki["journal_id"])
-        entries = journal.get("JournalEntries", [])
-
-        stranka_obj = None
-        for e in entries:
-            s = e.get("Customer") or e.get("Supplier")
-            if s and s.get("ID"):
-                stranka_obj = s
-                break
-
-        if not stranka_obj:
-            stranka_obj = {"ID": 17414634}
-
-        nove_entries, entry_1652, entry_1000 = [], None, None
-        for entry in entries:
-            acc      = entry.get("Account") or {}
-            acc_id   = acc.get("ID")
-            acc_name = (acc.get("Name", "") or "").lower()
-            is_kartica  = (acc_id == ID_KARTICA)  or "1652" in acc_name
-            is_gotovina = (acc_id == ID_GOTOVINA) or ("1000 -" in acc_name)
-            is_120000   = (acc_id == 130744074)   or "120000" in acc_name
-            if is_kartica and not entry_1652:    entry_1652 = entry
-            elif is_gotovina and not entry_1000: entry_1000 = entry
-            elif is_120000:                      pass
-            else:                                nove_entries.append(entry)
-
-        ref_entry    = entry_1652 or entry_1000
-        analitika_id = (ref_entry.get("Analytic") or {}).get("ID") if ref_entry else None
-        konto_120000_id = 130744074
-        journal_date = journal.get("JournalDate", "")
-        entry_date   = journal_date if journal_date else datetime.now().strftime("%Y-%m-%dT00:00:00")
-        if ref_entry and ref_entry.get("EntryDate"):
-            entry_date = ref_entry.get("EntryDate")
-
-        template = dict(nove_entries[0]) if nove_entries else {}
-
-        nova = {
-            **template,
-            "Account":                  {"ID": konto_120000_id},
-            "Analytic":                 {"ID": analitika_id} if analitika_id else None,
-            "Customer":                 stranka_obj,
-            "Debit":                    podatki["skupaj"],
-            "Credit":                   0,
-            "DebitInDomesticCurrency":  podatki["skupaj"],
-            "CreditInDomesticCurrency": 0,
-            "TransactionDate":          journal_date,
-            "DueDate":                  journal_date,
-        }
-        for f in ["JournalEntryId", "RowVersion", "RecordDtModified", "ResourceUrl", "Journal"]:
-            nova.pop(f, None)
-        nove_entries.append(nova)
-
-        self.update_journal(podatki["journal_id"], {
-            **journal,
-            "Status":         "P",
-            "JournalEntries": nove_entries,
-        })
-        return True
-
-    # ── Analitike ─────────────────────────────────────────────────────────────
-
-    def _get_analytic_code(self, analytic_id) -> str:
-        if self._analytics_map is None:
-            self._analytics_map = {}
-            try:
-                for row in self.get_analytics():
-                    aid  = row.get("AnalyticId")
-                    code = row.get("Code", "") or ""
-                    if aid and code:
-                        self._analytics_map[aid] = code
-            except Exception:
-                pass
-        return self._analytics_map.get(analytic_id, "")
-
-    def get_analytics(self) -> list[dict]:
-        result = []
-        page   = 1
-        while True:
-            data = self._get("/analytics", params={"CurrentPage": page, "PageSize": 100})
-            rows = data.get("Rows", [])
-            result.extend(rows)
-            if len(result) >= data.get("TotalRows", 0):
-                break
-            page += 1
-        return result
-
-    def get_analytic_id(self, analytic_code: str) -> Optional[int]:
-        for row in self.get_analytics():
-            if row.get("Code", "").upper() == analytic_code.upper():
-                return row.get("AnalyticId")
+def parse_lot_date(lot_code: str) -> Optional[datetime]:
+    """
+    Zadnjih 6 znakov lota je vedno DDMMYY.
+    Primer: PR300326 → 30/03/2026, FP271125 → 27/11/2025
+    """
+    if not lot_code or len(lot_code) < 6:
+        return None
+    try:
+        return datetime.strptime(lot_code[-6:], "%d%m%y")
+    except ValueError:
         return None
 
-    # ── Osnutki dokumentov ────────────────────────────────────────────────────
 
-    RETAIL_CUSTOMER = "končni kupec - maloprodaja"
+# ─── Pogoji svežosti artikla ──────────────────────────────────────────────────
 
-    def get_draft_entries(self, analytic_id: int) -> list[dict]:
-        result = []
-        page   = 1
-        while True:
-            data = self._get("/stockentry", params={
-                "StockEntryType":    "I",
-                "StockEntrySubtype": "S",
-                "Status":            "O",
-                "AnalyticId":        analytic_id,
-                "CurrentPage":       page,
-                "PageSize":          50,
-            })
-            rows = data.get("Rows", [])
-            for row in rows:
-                customer_name = row.get("Customer", {}).get("Name", "")
-                if self.RETAIL_CUSTOMER in customer_name.lower():
-                    result.append(row)
-            total   = data.get("TotalRows", 0)
-            fetched = (page - 1) * 50 + len(rows)
-            if fetched >= total:
-                break
-            page += 1
-        return result
+_FRESH_RE = re.compile('sve[žz]|sveži|svežih|svežim|bakala', re.IGNORECASE)
+_DELI_RE  = re.compile(r'^\(deli', re.IGNORECASE)
+_FROZEN_RE = re.compile(r'zamrznjen|odtaljen', re.IGNORECASE)
 
-    def get_entry_detail(self, entry_id: int) -> dict:
-        return self._get(f"/stockentry/{entry_id}")
+_SEAFOOD_RE = re.compile(
+    'brancin|orada|losos|postrv|sard|oslič|oslic|huj|tun|lignji|kozice|'
+    'skampi|škampi|klapavice|ostrig|hobotnica|sipa|lubin|kovac|kovač|'
+    'šur|platesa|trska|polenovka|bakala|zobatec|špar|kirnja|arbun|morsk|'
+    'som|lubin|romb|skuš|inčun|pic|mugilid|'
+    'pokrovač|kočic',
+    re.IGNORECASE
+)
+_MAQFINO_RE   = re.compile(r'maQfino', re.IGNORECASE)
+_TESTENINE_RE = re.compile(r'testenin', re.IGNORECASE)
+_V_OLJU_RE    = re.compile(r'v olju', re.IGNORECASE)
+_MARINIRAN_RE = re.compile(r'mariniran', re.IGNORECASE)
+_IZVLECEK_RE  = re.compile(r'izvle[cč]ek', re.IGNORECASE)
+_KAVIAR_RE    = re.compile(r'kaviar', re.IGNORECASE)
 
-    # ── Zaloga po lotih ───────────────────────────────────────────────────────
+def is_seafood(name: str) -> bool:
+    """Vrne True če je artikel riba ali morska hrana."""
+    return bool(_SEAFOOD_RE.search(name))
 
-    def get_stock_by_lots(self, warehouse_id: int) -> list[dict]:
-        result = []
-        page   = 1
-        while True:
-            data = self._get("/stocks", params={
-                "WarehouseId":          warehouse_id,
-                "ResultsByBatchNumber": "Y",
-                "CurrentPage":          page,
-                "PageSize":             200,
-            })
-            rows = data.get("Rows", [])
-            result.extend(rows)
-            if len(result) >= data.get("TotalRows", 0):
-                break
-            page += 1
-        return result
+def is_fresh_or_deli(name: str) -> bool:
+    """Vrne True če artikel zahteva 14-dnevno mejo lotov (sveže ribe + kaviar)."""
+    return bool(_DELI_RE.search(name) or _FRESH_RE.search(name) or _KAVIAR_RE.search(name))
 
-    def get_stock_for_items(self, warehouse_id: int, item_ids: list[int]) -> list[dict]:
-        from collections import defaultdict
-        from datetime import datetime, timedelta
+def get_lot_warning_days(name: str) -> int:
+    if is_fresh_or_deli(name):
+        return 16
+    if _FROZEN_RE.search(name):
+        return 330
+    if _MAQFINO_RE.search(name):
+        return 150
+    if _MARINIRAN_RE.search(name):
+        return 180
+    if _V_OLJU_RE.search(name):
+        return 365
+    if _IZVLECEK_RE.search(name):
+        return 365
+    if _TESTENINE_RE.search(name):
+        return 1095
+    return 0
 
-        numeric_wh_id = warehouse_id
-        try:
-            for wh in self.get_warehouses():
-                wh_num  = wh.get("WarehouseId") or wh.get("ID")
-                wh_code = wh.get("Code", "")
-                if str(wh_num) == str(warehouse_id) or wh_code == str(warehouse_id):
-                    numeric_wh_id = wh_num
-                    break
-        except Exception:
-            pass
 
-        item_info = {}
-        try:
-            base = self.get_stock_by_lots(warehouse_id)
-            for r in base:
-                aid = (r.get("Item") or {}).get("ID")
-                if aid:
-                    item_info[aid] = {
-                        "ItemName":          r.get("ItemName", ""),
-                        "UnitOfMeasurement": r.get("UnitOfMeasurement", "kg"),
-                    }
-        except Exception:
-            pass
+# ─── Kalo faktor ─────────────────────────────────────────────────────────────
 
-        lot_qty   = defaultdict(lambda: defaultdict(float))
-        lot_price = defaultdict(lambda: defaultdict(float))
-        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
+_SARDELA_RE = re.compile('sard', re.IGNORECASE)
+_LOSOS_RE   = re.compile('losos', re.IGNORECASE)
+_TRIM_RE    = re.compile('trim', re.IGNORECASE)
 
-        for entry_type, subtype, sign in [("P", "L", 1.0), ("I", "S", -1.0)]:
-            page = 1
-            while True:
-                try:
-                    data = self._get("/stockentry", params={
-                        "StockEntryType":    entry_type,
-                        "StockEntrySubtype": subtype,
-                        "Status":            "P",
-                        "DateFrom":          date_from,
-                        "CurrentPage":       page,
-                        "PageSize":          50,
-                    })
-                    rows = data.get("Rows", [])
-                    for entry in rows:
-                        eid = entry.get("StockEntryId")
-                        if not eid: continue
-                        try:
-                            detail = self.get_entry_detail(eid)
-                            for row in (detail.get("StockEntryRows") or []):
-                                wh_from = (row.get("WarehouseFrom") or {}).get("ID")
-                                wh_to   = (row.get("WarehouseTo") or {}).get("ID")
-                                if entry_type == "P" and str(wh_to) != str(numeric_wh_id): continue
-                                if entry_type == "I" and str(wh_from) != str(numeric_wh_id): continue
-                                item_id = (row.get("Item") or {}).get("ID")
-                                batch   = row.get("BatchNumber", "") or ""
-                                qty     = float(row.get("Quantity") or 0)
-                                price   = float(row.get("Price") or 0)
-                                if item_id and batch and qty > 0:
-                                    lot_qty[item_id][batch] += sign * qty
-                                    if price > 0:
-                                        lot_price[item_id][batch] = price
-                                    if item_id not in item_info:
-                                        item_info[item_id] = {
-                                            "ItemName":          row.get("ItemName") or (row.get("Item") or {}).get("Name", ""),
-                                            "UnitOfMeasurement": row.get("UnitOfMeasurement", "kg"),
-                                        }
-                        except Exception: continue
-                    total   = data.get("TotalRows", 0)
-                    fetched = (page - 1) * 50 + len(rows)
-                    if fetched >= total: break
-                    page += 1
-                except Exception: break
+KALO_FACTOR = 1.10
 
-        result = []
-        for item_id, batches in lot_qty.items():
-            info = item_info.get(item_id, {})
-            for batch, qty in batches.items():
-                if qty > 0.001:
-                    result.append({
-                        "Item":              {"ID": item_id},
-                        "ItemName":          info.get("ItemName", ""),
-                        "ItemCode":          "",
-                        "BatchNumber":       batch,
-                        "Quantity":          round(qty, 4),
-                        "UnitOfMeasurement": info.get("UnitOfMeasurement", "kg"),
-                        "Price":             lot_price.get(item_id, {}).get(batch, 0),
-                    })
-        return result
+_LOSOSOVA_RE = re.compile(r'lososov', re.IGNORECASE)
 
-    def diagnose_lots(self, warehouse_id: int) -> dict:
-        from datetime import datetime, timedelta
-        date_from = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%dT00:00:00")
-        found = []
-        for etype in ["P", "I"]:
-            for subtype in ["S", "L", "P", "R"]:
-                try:
-                    data = self._get("/stockentry", params={
-                        "StockEntryType": etype, "StockEntrySubtype": subtype,
-                        "Status": "P", "DateFrom": date_from,
-                        "CurrentPage": 1, "PageSize": 5,
-                    })
-                    rows = data.get("Rows", [])
-                    if rows:
-                        eid = rows[0].get("StockEntryId")
-                        if eid:
-                            detail = self.get_entry_detail(eid)
-                            for r in (detail.get("StockEntryRows") or []):
-                                if r.get("BatchNumber"):
-                                    found.append({
-                                        "type":    f"{etype}/{subtype}",
-                                        "batch":   r.get("BatchNumber"),
-                                        "wh_from": (r.get("WarehouseFrom") or {}).get("ID"),
-                                        "wh_to":   (r.get("WarehouseTo") or {}).get("ID"),
-                                        "our_wh":  warehouse_id,
-                                    })
-                except Exception: pass
-        return {"found": found, "warehouse_id": warehouse_id}
+def get_kalo_factor(article_name: str) -> float:
+    return 1.0
 
-    def get_item_units(self, item_ids: list[int]) -> dict[int, str]:
-        result = {}
-        try:
-            page = 1
-            while True:
-                data    = self._get("/items/itemsdata", params={"CurrentPage": page, "PageSize": 500})
-                rows    = data.get("Rows") or data if isinstance(data, list) else []
-                if not rows and isinstance(data, dict):
-                    rows = data.get("Rows", [])
-                for row in rows:
-                    aid  = row.get("ItemId") or (row.get("Item") or {}).get("ID")
-                    unit = row.get("UnitOfMeasurement") or row.get("Unit") or ""
-                    if aid and unit: result[int(aid)] = unit
-                total   = data.get("TotalRows", 0) if isinstance(data, dict) else 0
-                fetched = (page - 1) * 500 + len(rows)
-                if fetched >= total or not rows: break
-                page += 1
-        except Exception:
-            for item_id in item_ids:
-                try:
-                    d    = self._get(f"/items/{item_id}")
-                    unit = d.get("UnitOfMeasurement") or d.get("Unit") or ""
-                    if unit: result[item_id] = unit
-                except Exception: continue
-        return result
 
-    def get_warehouses(self) -> list[dict]:
-        data = self._get("/warehouses", params={"CurrentPage": 1, "PageSize": 100})
-        return data.get("Rows", [])
+# ─── Opozorilo starih lotov ───────────────────────────────────────────────────
 
-    def update_entry_with_lots(self, entry_id: int, entry_data: dict, new_rows: list[dict]) -> dict:
-        """
-        Posodobi dokument z dodelitvami lotov.
-        - orig_rows posodobimo z BatchNumber/Quantity/Price
-        - Dodatne vrstice (drugi loti, zamenjave, odpisi) dodamo kot nove
-        - no_match/no_lots: original ostane nespremenjen
-        - partial z lotom: nova vrstica z lotom + nova vrstica brez lota (ostanek)
-        - partial brez lota: nova vrstica brez BatchNumber (nekrita količina)
-        """
-        fresh     = self.get_entry_detail(entry_id)
-        orig_rows = fresh.get("StockEntryRows") or []
-
-        orig_by_rownum = {r.get("RowNumber", 0) - 1: r for r in orig_rows}
-
-        default_wh_from = None
-        if orig_rows:
-            default_wh_from = orig_rows[0].get("WarehouseFrom")
-
-        lot_by_rowid     = {}
-        qty_by_rowid     = {}
-        price_by_rowid   = {}
-        extra_rows       = []
-        replaced_row_ids = set()
-
-        for r in new_rows:
-            # Odpisi z row_id=None — dodaj kot nove vrstice
-            if r.get("_writeoff") and r.get("row_id") is None and r.get("lot"):
-                row = {
-                    "Item":          {"ID": r["article_id"]},
-                    "Quantity":      r["quantity_assigned"],
-                    "WarehouseFrom": default_wh_from,
-                    "BatchNumber":   r["lot"],
-                    "Note":          r.get("opis", "") or "",
-                }
-                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
-                lp = float(r.get("lot_price") or 0)
-                if lp > 0:
-                    row["Price"] = lp
-                    row["Value"] = round(lp * r["quantity_assigned"], 4)
-                extra_rows.append(row)
+def check_old_lots(stock: dict, today: datetime, article_ids: set = None, article_dates: dict = None) -> list[dict]:
+    warnings = []
+    for key, data in stock.items():
+        art_name  = data.get('article_name', key)
+        if article_ids is not None:
+            art_id = data.get('article_id')
+            if art_id not in article_ids:
                 continue
-            if r.get("_writeoff"):
+        threshold = get_lot_warning_days(art_name)
+        if threshold == 0:
+            continue
+
+        art_id   = data.get('article_id')
+        ref_date = (article_dates.get(art_id) if article_dates and art_id else None) or today
+
+        for lot in data.get('lots', []):
+            if lot.get('quantity', 0) <= 0:
                 continue
-            # Vrstice brez lota — ohrani za ročno korekcijo
-            if r.get("status") in ("no_lots", "no_match"):
+            lot_date = parse_lot_date(lot['code'])
+            if lot_date is None:
                 continue
-            if r.get("status") == "partial":
-                row = {
-                    "Item":          {"ID": r["article_id"]},
-                    "Quantity":      r["quantity_assigned"],
-                    "WarehouseFrom": default_wh_from,
-                    "Note":          r.get("opis", "") or "",
-                }
-                if r.get("lot"):
-                    row["BatchNumber"] = r["lot"]
-                    lp = float(r.get("lot_price") or 0)
-                    if lp > 0:
-                        row["Price"] = lp
-                        row["Value"] = round(lp * r["quantity_assigned"], 4)
-                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
-                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
-                extra_rows.append(row)
-                continue
-            rid        = r.get("row_id", 0)
-            orig_art   = (orig_by_rownum.get(rid, {}).get("Item") or {}).get("ID")
-            result_art = r.get("article_id")
-
-            if orig_art == result_art and rid not in lot_by_rowid:
-                lot_by_rowid[rid] = r.get("lot", "")
-                qty_by_rowid[rid] = r["quantity_assigned"]
-                lp = float(r.get("lot_price") or 0)
-                if lp > 0:
-                    price_by_rowid[rid] = (lp, round(lp * r["quantity_assigned"], 4))
-            else:
-                if orig_art != result_art and rid not in lot_by_rowid:
-                    replaced_row_ids.add(rid)
-                row = {
-                    "Item":          {"ID": result_art},
-                    "Quantity":      r["quantity_assigned"],
-                    "WarehouseFrom": default_wh_from,
-                    "Note":          r.get("opis", "") or "",
-                }
-                if r.get("lot"):  row["BatchNumber"]       = r["lot"]
-                if r.get("unit"): row["UnitOfMeasurement"] = r["unit"]
-                if r.get("selling_price"): row["SellingPrice"] = r["selling_price"]
-                lp = float(r.get("lot_price") or 0)
-                if lp > 0:
-                    row["Price"] = lp
-                    row["Value"] = round(lp * r["quantity_assigned"], 4)
-                extra_rows.append(row)
-
-        # Posodobi orig_rows — preskoči nadomeščene vrstice
-        final_rows = []
-        for orig in orig_rows:
-            row_id = orig.get("RowNumber", 1) - 1
-            if row_id in replaced_row_ids:
-                continue
-            row = dict(orig)
-            if row_id in lot_by_rowid:
-                if lot_by_rowid[row_id]:
-                    row["BatchNumber"] = lot_by_rowid[row_id]
-                row["Quantity"] = qty_by_rowid[row_id]
-                if row_id in price_by_rowid:
-                    row["Price"] = price_by_rowid[row_id][0]
-                    row["Value"] = price_by_rowid[row_id][1]
-            # Odstrani null vrednosti iz originalnih vrstic — Minimax zavrne PUT z null RowVersion
-            row = {k: v for k, v in row.items() if v is not None}
-            final_rows.append(row)
-
-        # Dodaj nove vrstice (očiščene)
-        def _clean_row(row):
-            KEEP = {"StockEntryRowId", "Item", "Quantity", "BatchNumber",
-                    "WarehouseFrom", "SellingPrice", "UnitOfMeasurement", "Note",
-                    "Price", "Value"}
-            cleaned = {}
-            for k, v in row.items():
-                if k not in KEEP: continue
-                if v is None: continue
-                if k == "BatchNumber" and not v: continue
-                if k in ("SellingPrice", "Price", "Value") and v == 0.0: continue
-                cleaned[k] = {"ID": v["ID"]} if isinstance(v, dict) and "ID" in v else v
-            return cleaned
-
-        final_rows.extend([_clean_row(r) for r in extra_rows])
-
-        # DEBUG — shrani body v /data/debug_put.json pred PUT requestom
-        try:
-            debug_body = {
-                "entry_id": entry_id,
-                "num_final_rows": len(final_rows),
-                "final_rows": final_rows,
-            }
-            debug_path = os.path.join(os.environ.get("DATA_DIR", "/data"), "debug_put.json")
-            with open(debug_path, "w", encoding="utf-8") as f:
-                json.dump(debug_body, f, ensure_ascii=False, indent=2, default=str)
-        except Exception:
-            pass
-
-        body = {**fresh, "StockEntryRows": final_rows}
-        return self._put(f"/stockentry/{entry_id}", body)
+            days_old = (ref_date - lot_date).days
+            if days_old >= threshold:
+                warnings.append({
+                    'article':  art_name,
+                    'lot':      lot['code'],
+                    'days_old': days_old,
+                    'qty':      round(lot['quantity'], 3),
+                    'unit':     lot.get('unit', 'kg'),
+                    'warning':  f"Lot star {days_old} dni (opozorilo pri {threshold} dneh)",
+                })
+    warnings.sort(key=lambda x: x['days_old'], reverse=True)
+    return warnings
 
 
-# ── Pretvorba ─────────────────────────────────────────────────────────────────
+# ─── Filtriranje lotov (FIFO) ─────────────────────────────────────────────────
 
-def parse_stock_to_engine_format(stock_rows: list[dict]) -> dict[str, dict]:
-    result: dict[str, dict] = {}
-    for row in stock_rows:
-        name  = row.get("ItemName", "")
-        code  = row.get("ItemCode", "") or ""
-        aid   = row.get("Item", {}).get("ID")
-        batch = row.get("BatchNumber", "")
-        qty   = float(row.get("Quantity") or 0)
-        unit  = row.get("UnitOfMeasurement") or row.get("Unit") or ""
-        if not aid or qty <= 0: continue
-        key = str(aid)
-        if key not in result:
-            result[key] = {"article_id": aid, "article_code": code, "article_name": name, "lots": []}
-        if batch:
-            result[key]["lots"].append({
-                "code":      batch,
-                "quantity":  qty,
-                "unit":      unit,
-                "lot_price": float(row.get("Price") or 0),
-            })
+def get_eligible_lots(lots: list[dict], article_name: str, today: datetime) -> list[dict]:
+    needs_14d = is_fresh_or_deli(article_name)
+
+    result = []
+    for lot in lots:
+        if lot.get('quantity', 0) <= 0:
+            continue
+        d = parse_lot_date(lot['code'])
+        if d is None:
+            result.append({**lot, '_date': datetime(2099, 1, 1), '_aged': False})
+            continue
+        if d > today:
+            continue
+        days = (today - d).days
+        if needs_14d and days > 30:
+            continue
+        result.append({**lot, '_date': d, '_aged': bool(needs_14d and 21 <= days <= 30), 'lot_price': lot.get('lot_price', lot.get('price', 0))})
+
+    result.sort(key=lambda x: x['_date'])
     return result
 
 
-def parse_entry_to_lines(entry_detail: dict, item_units: dict = None) -> list[dict]:
-    rows  = entry_detail.get("StockEntryRows") or []
-    lines = []
-    for i, item in enumerate(rows):
-        item_fk = item.get("Item") or {}
-        item_id = item_fk.get("ID")
-        unit    = (item.get("UnitOfMeasurement") or item.get("Unit") or
-                   item.get("UOM") or item.get("MeasureUnit") or
-                   (item_units.get(item_id) if item_units and item_id else None) or "")
-        lines.append({
-            "row_id":             i,
-            "stock_entry_row_id": item.get("StockEntryRowId"),
-            "article_id":         item_id,
-            "article_code":       item.get("ItemCode", "") or item_fk.get("Code", "") or str(item_id or ""),
-            "article_name":       item.get("ItemName", "") or item_fk.get("Name", ""),
-            "quantity":           float(item.get("Quantity") or 0),
-            "unit":               unit,
-            "selling_price":      item.get("SellingPrice") or item.get("Price"),
-            "lot":                item.get("BatchNumber", "") or "",
-            "opis":               item.get("SerialNumber", "") or "",
-            "row_version":        item.get("RowVersion", ""),
-        })
-    return lines
+# ─── Smart matching ───────────────────────────────────────────────────────────
+
+_CODE_RE   = re.compile(r'^\(([^)]+)\)\s*')
+_FILLET_RE = re.compile(r'\bfil[ei]', re.IGNORECASE)
+
+_SIZE_G = [
+    (0,100),(100,200),(200,300),(300,400),(400,600),
+    (600,800),(800,1000),(1000,1500),(1500,2000),
+    (2000,3000),(3000,5000),(5000,10000)
+]
+_SIZE_KG = [
+    (0,1),(1,2),(2,3),(3,4),(4,5),(5,7),(7,10),(10,20),(20,50)
+]
+_SIZE_COUNT = [
+    (1,5),(5,10),(10,20),(20,40),(40,80),(80,120),(120,200)
+]
+
+_ORIGINS = [
+    'HRVAŠKA','GRČIJA','NORVEŠKA','TURČIJA','ŠPANIJA','ITALIJA',
+    'PORTUGAL','MAROKO','PERU','VIETNAM','INDIJA','INDONEZIJA',
+    'FILIPINI','TAJSKA','SLOVENIJA','FRANCIJA','DANSKA','ŠKOTSKA',
+]
+
+def _get_code(name: str) -> Optional[str]:
+    m = _CODE_RE.match(name.strip())
+    return m.group(1) if m else None
+
+def _strip_code(name: str) -> str:
+    return _CODE_RE.sub('', name).strip()
+
+_LOSOSOVA_SPEC_RE = re.compile(r'lososov', re.IGNORECASE)
+
+def _get_species(name: str) -> Optional[str]:
+    clean = _strip_code(name).upper()
+    if _LOSOSOVA_SPEC_RE.search(clean):
+        return "LOSOSOVA POSTRV"
+    seg = re.split(r'[,\(]', clean)[0].strip()
+    return seg if seg else None
+
+def _has_fillet(name: str) -> bool:
+    return bool(_FILLET_RE.search(name))
+
+def _get_size(name: str) -> Optional[tuple]:
+    m = re.search(r'(\d+)[\u2013\-\/](\d+)\s*(g|kg)?', name, re.IGNORECASE)
+    if not m:
+        return None
+    lo, hi = int(m.group(1)), int(m.group(2))
+    unit = (m.group(3) or '').lower()
+    return (lo, hi, unit)
+
+def _size_distance(s1: Optional[tuple], s2: Optional[tuple]) -> int:
+    if s1 is None or s2 is None:
+        return 3
+    lo1, hi1, u1 = s1
+    lo2, hi2, u2 = s2
+    if u1 == 'kg': lo1, hi1, u1 = lo1*1000, hi1*1000, 'g'
+    if u2 == 'kg': lo2, hi2, u2 = lo2*1000, hi2*1000, 'g'
+    if not u1 and not u2 and lo1 < 200 and lo2 < 200:
+        seq = _SIZE_COUNT
+    else:
+        seq = _SIZE_G
+
+    def idx(lo, hi):
+        for i, (slo, shi) in enumerate(seq):
+            if slo <= lo and hi <= shi * 1.5:
+                return i
+        best_i, best_d = 0, float('inf')
+        for i, (slo, shi) in enumerate(seq):
+            d = abs(lo - slo)
+            if d < best_d:
+                best_d, best_i = d, i
+        return best_i
+
+    i1, i2 = idx(lo1, hi1), idx(lo2, hi2)
+    return abs(i1 - i2)
+
+def _get_origin(name: str) -> Optional[str]:
+    nu = name.upper()
+    for o in _ORIGINS:
+        if o in nu:
+            return o
+    m = re.search(r'FAO\s*\d+', nu)
+    return m.group(0) if m else None
+
+
+def smart_match(
+    sold_name: str,
+    available: dict[str, list[dict]],
+    unit: str
+) -> tuple[Optional[str], str]:
+    sold_sp     = _get_species(sold_name)
+    sold_fillet = _has_fillet(sold_name)
+    sold_size   = _get_size(sold_name)
+    sold_origin = _get_origin(sold_name)
+    sold_code   = _get_code(sold_name)
+
+    if not sold_sp:
+        return None, "vrsta ni določena"
+
+    def has_stock(n):
+        return any(l.get('quantity',0) > 0 for l in available.get(n, []))
+
+    candidates = [
+        n for n in available
+        if _get_species(n) == sold_sp and has_stock(n)
+    ]
+    if not candidates and "LOSOSOVA POSTRV" in (sold_sp or ""):
+        candidates = [
+            n for n in available
+            if "POSTRV" in (_get_species(n) or "").upper() and has_stock(n)
+        ]
+    if not candidates:
+        return None, f"ni zaloge za {sold_sp}"
+
+    _OCISCEN_RE = re.compile(r'oči[sš][cč]en', re.IGNORECASE)
+    sold_ociscen = bool(_OCISCEN_RE.search(sold_name))
+
+    if sold_fillet:
+        fillet_cands = [n for n in candidates if _has_fillet(n)]
+        if not fillet_cands:
+            fillet_cands = [n for n in candidates if _OCISCEN_RE.search(n)]
+        if not fillet_cands:
+            fillet_cands = candidates
+        candidates = fillet_cands
+    elif sold_ociscen:
+        ociscen_cands = [n for n in candidates if _OCISCEN_RE.search(n)]
+        if not ociscen_cands:
+            ociscen_cands = [n for n in candidates if not _has_fillet(n)]
+        if not ociscen_cands:
+            ociscen_cands = candidates
+        candidates = ociscen_cands
+    else:
+        basic_cands = [n for n in candidates if not _has_fillet(n) and not _OCISCEN_RE.search(n)]
+        candidates = basic_cands if basic_cands else candidates
+
+    if not candidates:
+        return None, f"ni ustreznega artikla za {sold_sp}"
+
+    def score(n):
+        size_dist = _size_distance(sold_size, _get_size(n))
+        s = -size_dist * 10
+        art_origin = _get_origin(n)
+        if sold_origin and art_origin:
+            s += 3 if art_origin == sold_origin else 0
+        return s
+
+    best = max(candidates, key=score)
+    best_code = _get_code(best) or '?'
+    sc = sold_code or '?'
+    return best, f"({sc})→({best_code})"
+
+
+# ─── Glavna funkcija dodelitve lotov ─────────────────────────────────────────
+
+def assign_lots(
+    document_lines: list[dict],
+    stock: dict[str, dict],
+    today: datetime
+) -> list[dict]:
+    """Kliče assign_lots_with_virtual z svežo virtualno zalogo."""
+    virtual = {key: [lot.copy() for lot in data['lots']] for key, data in stock.items()}
+    return assign_lots_with_virtual(document_lines, stock, virtual, today)
+
+
+def _merge_lot_lines(lines: list[dict]) -> list[dict]:
+    # Filtriraj vrstice z qty=0 (edge case)
+    lines = [l for l in lines if round(l.get('quantity_assigned', 0), 4) > 0]
+    result = []
+    seen   = {}
+    for line in lines:
+        key = (line.get('row_id', 0), line.get('article_code',''), line.get('lot'))
+        if key not in seen:
+            seen[key] = len(result)
+            result.append({**line})
+        else:
+            existing = result[seen[key]]
+            existing['quantity_assigned'] = round(
+                existing['quantity_assigned'] + line['quantity_assigned'], 4
+            )
+            existing['_sale_qty']    = round(existing.get('_sale_qty', 0) + line.get('_sale_qty', 0), 4)
+            existing['_writeoff_qty']= round(existing.get('_writeoff_qty', 0) + line.get('_writeoff_qty', 0), 4)
+            if line.get('_writeoff') and line.get('opis'):
+                existing['_writeoff_opis'] = line['opis']
+            existing['_writeoff'] = False
+            existing['status']    = 'ok' if existing.get('status') in ('ok','writeoff') else existing.get('status','ok')
+    import re as _re
+    for row in result:
+        wo  = row.get('_writeoff_qty', 0)
+        sal = row.get('_sale_qty', 0)
+        if wo > 0 and sal > 0:
+            wo_opis = row.get('_writeoff_opis', '')
+            m = _re.search(r'star (\d+) dni', wo_opis)
+            dni = m.group(1) if m else '?'
+            base = (row.get('opis') or '').strip()
+            row['opis'] = (base + f' [prodaja {sal}kg + odpis {wo}kg, lot star {dni} dni]').strip()
+    return result
+
+
+def assign_lots_with_virtual(
+    document_lines: list[dict],
+    stock: dict[str, dict],
+    virtual: dict[str, list[dict]],
+    today: datetime
+) -> list[dict]:
+    """
+    Kot assign_lots ampak sprejme zunanjo virtual zalogo.
+    Omogoča skupno obdelavo več dokumentov z deljeno virtualno zalogo.
+    """
+    by_id   = {str(v['article_id']): k for k, v in stock.items() if v.get('article_id')}
+    by_code = {v['article_code']: k for k, v in stock.items() if v.get('article_code')}
+    by_name = {v.get('article_name',''): k for k, v in stock.items()}
+    by_name_ci = {v.get('article_name','').strip().lower(): k for k, v in stock.items()}
+    output  = []
+
+    for line in document_lines:
+        art_id     = str(line.get('article_id') or '')
+        art_code   = line.get('article_code', '')
+        art_name   = line.get('article_name', '')
+        qty_needed = round(float(line['quantity']), 4)
+        unit       = line['unit']
+        base_opis  = (line.get('opis') or '').strip()
+        matched_note = ''
+
+        kalo = get_kalo_factor(art_name)
+        if kalo != 1.0:
+            qty_needed = round(qty_needed * kalo, 4)
+
+        stock_key = (by_id.get(art_id) or by_code.get(art_code) or
+                     by_name.get(art_name) or by_name_ci.get(art_name.strip().lower()))
+        has_vstock = (stock_key is not None and
+                      any(l.get('quantity',0) > 0 for l in virtual.get(stock_key, [])))
+
+        if not has_vstock:
+            avail_with_stock = {}
+            for k, lots in virtual.items():
+                art_nm_k = stock[k].get('article_name', k)
+                if get_eligible_lots(lots, art_nm_k, today):
+                    avail_with_stock[art_nm_k] = lots
+            matched_name, note = smart_match(art_name, avail_with_stock, unit)
+            if matched_name is None:
+                output.append({**line, 'lot': None, 'quantity_assigned': qty_needed,
+                    'opis': f"{base_opis} [brez lota: {note}]".strip(), 'status': 'no_match'})
+                continue
+            stock_key    = by_name.get(matched_name) or matched_name
+            matched_note = note
+
+        name_for_check = art_name if not matched_note else stock.get(stock_key, {}).get('article_name', art_name)
+        eligible = get_eligible_lots(virtual.get(stock_key, []), name_for_check, today)
+
+        if not eligible:
+            avail_sm = {}
+            for k, lots in virtual.items():
+                if k == stock_key:
+                    continue
+                art_nm = stock[k].get('article_name', k)
+                # Samo artikli z vsaj enim eligible lotom
+                if get_eligible_lots(lots, art_nm, today):
+                    avail_sm[art_nm] = lots
+            matched_sm, note_sm = smart_match(art_name, avail_sm, unit)
+            if matched_sm:
+                stock_key    = by_name.get(matched_sm) or matched_sm
+                matched_note = note_sm
+                eligible     = get_eligible_lots(virtual.get(stock_key, []), matched_sm, today)
+            if not eligible:
+                output.append({**line, 'lot': None, 'quantity_assigned': qty_needed,
+                    'opis': f"{base_opis} [brez lota: ni ustreznih lotov]".strip(),
+                    'status': 'no_lots', '_writeoff': False})
+                continue
+
+        remaining  = qty_needed
+        assignments = []
+        fresh_art   = is_fresh_or_deli(name_for_check)
+
+        for lot in eligible:
+            avail = round(lot['quantity'], 4)
+            if avail <= 0:
+                continue
+
+            if lot.get('_aged') and fresh_art:
+                lot_date = parse_lot_date(lot['code'])
+                days_old = (today - lot_date).days if lot_date else 0
+                use_sale = round(min(avail, remaining), 4)
+                if use_sale > 0:
+                    assignments.append((lot['code'], use_sale, 0, False, lot.get('lot_price', 0)))
+                    remaining = round(remaining - use_sale, 4)
+                writeoff = round(avail - use_sale, 4)
+                if writeoff > 0:
+                    assignments.append((lot['code'], writeoff, days_old, True, lot.get('lot_price', 0)))
+                for vl in virtual[stock_key]:
+                    if vl['code'] == lot['code']:
+                        vl['quantity'] = 0.0
+                        break
+            else:
+                if remaining <= 0:
+                    break
+                use = round(min(avail, remaining), 4)
+                assignments.append((lot['code'], use, 0, False, lot.get('lot_price', 0)))
+                remaining = round(remaining - use, 4)
+                for vl in virtual[stock_key]:
+                    if vl['code'] == lot['code']:
+                        vl['quantity'] = round(vl['quantity'] - use, 4)
+                        break
+
+        opis = base_opis
+        if matched_note:
+            opis = (opis + ' ' + matched_note).strip() if opis else matched_note
+
+        stock_data = stock.get(stock_key, {})
+        for entry in assignments:
+            lot_code, qty, forced_days = entry[0], entry[1], entry[2]
+            is_writeoff = entry[3] if len(entry) > 3 else False
+            lp = entry[4] if len(entry) > 4 else 0
+            lot_opis = opis
+            if forced_days > 0:
+                lot_opis = (lot_opis + f' [odpis lota - star {forced_days} dni]').strip()
+            output.append({
+                **line,
+                'article_id':   stock_data.get('article_id', line.get('article_id')),
+                'article_code': stock_data.get('article_code', art_code),
+                'article_name': stock_data.get('article_name', art_name),
+                'lot':          lot_code,
+                'quantity_assigned': qty,
+                'opis':         lot_opis,
+                'status':       'writeoff' if is_writeoff else ('matched' if matched_note else 'ok'),
+                '_writeoff':    is_writeoff,
+                '_writeoff_qty': qty if is_writeoff else 0,
+                '_sale_qty':     qty if not is_writeoff else 0,
+                'lot_price':    lp,
+            })
+
+        if remaining > 0:
+            tried_keys = {stock_key}
+            rem_remaining = remaining
+
+            while rem_remaining > 0:
+                avail_for_remainder = {}
+                for k, lots in virtual.items():
+                    if k in tried_keys:
+                        continue
+                    if any(l.get('quantity', 0) > 0 for l in lots):
+                        sname = stock[k].get('article_name', k)
+                        avail_for_remainder[sname] = lots
+
+                if not avail_for_remainder:
+                    break
+
+                matched_rem, note_rem = smart_match(art_name, avail_for_remainder, unit)
+                rem_stock_key_candidate = by_name.get(matched_rem) or matched_rem
+
+                if not matched_rem or rem_stock_key_candidate in tried_keys:
+                    break
+
+                tried_keys.add(rem_stock_key_candidate)
+                rem_stock_key  = rem_stock_key_candidate
+                rem_eligible   = get_eligible_lots(virtual.get(rem_stock_key, []), matched_rem, today)
+                rem_stock_data = stock.get(rem_stock_key, {})
+
+                if not rem_eligible:
+                    continue
+
+                for lot in rem_eligible:
+                    if rem_remaining <= 0:
+                        break
+                    avail = round(lot['quantity'], 4)
+                    if avail <= 0:
+                        continue
+                    use_lot = round(min(avail, rem_remaining), 4)
+                    use_qty = use_lot  # Samo kar lot dejansko pokrije
+                    lot_shortfall = round(rem_remaining - use_lot, 4)
+                    rem_opis = (opis + f' {note_rem} [zamenjava za razliko]').strip()
+                    if lot_shortfall > 0:
+                        rem_opis = (rem_opis + f' [lot pokrije {use_lot}{unit}, manjka {lot_shortfall}{unit}]').strip()
+                    output.append({**line,
+                        'article_id':        rem_stock_data.get('article_id', line.get('article_id')),
+                        'article_code':      rem_stock_data.get('article_code', art_code),
+                        'article_name':      rem_stock_data.get('article_name', art_name),
+                        'lot':               lot['code'],
+                        'quantity_assigned': use_qty,
+                        'opis':              rem_opis,
+                        'status':            'matched' if lot_shortfall == 0 else 'partial',
+                        '_writeoff':         False,
+                        'lot_price':         lot.get('lot_price', 0),
+                    })
+                    rem_remaining = round(rem_remaining - use_lot, 4)
+                    for vl in virtual[rem_stock_key]:
+                        if vl['code'] == lot['code']:
+                            vl['quantity'] = round(vl['quantity'] - use_lot, 4)
+                            break
+
+            if rem_remaining > 0:
+                output.append({**line,
+                    'article_id':   stock_data.get('article_id', line.get('article_id')),
+                    'article_code': stock_data.get('article_code', art_code),
+                    'article_name': stock_data.get('article_name', art_name),
+                    'lot': None, 'quantity_assigned': rem_remaining,
+                    'opis': (opis + ' [brez lota: premalo zaloge]').strip(),
+                    'status': 'partial', '_writeoff': False,
+                })
+
+    return _merge_lot_lines(output)
+
+
+# ─── Finalizacija odpisov po zadnjem dokumentu ───────────────────────────────
+
+def finalize_writeoffs(
+    virtual: dict[str, list[dict]],
+    stock:   dict[str, dict],
+    last_date: datetime,
+) -> list[dict]:
+    """
+    Po obdelavi vseh dokumentov (ali edinega):
+    Pregleda virtual zalogo in generira odpise za aged lote ki so ostali.
+
+    Aged = 16-30 dni star na dan zadnjega dokumenta.
+    Vrne seznam writeoff vrstic ki gredo na zadnji dokument.
+    """
+    writeoffs = []
+    for stock_key, lots in virtual.items():
+        art_data = stock.get(stock_key, {})
+        art_name = art_data.get('article_name', '')
+        art_code = art_data.get('article_code', '')
+        art_id   = art_data.get('article_id')
+        unit     = art_data.get('unit', 'kg')
+
+        if not is_fresh_or_deli(art_name):
+            continue
+
+        for lot in lots:
+            qty = round(lot.get('quantity', 0), 4)
+            if qty <= 0:
+                continue
+            d = parse_lot_date(lot['code'])
+            if d is None or d > last_date:
+                continue
+            days = (last_date - d).days
+            if not (21 <= days <= 30):
+                continue  # ni aged na dan zadnjega dokumenta
+
+            writeoffs.append({
+                'row_id':            None,
+                'article_id':        art_id,
+                'article_code':      art_code,
+                'article_name':      art_name,
+                'lot':               lot['code'],
+                'quantity':          qty,
+                'quantity_assigned': qty,
+                'unit':              lot.get('unit', unit),
+                'selling_price':     0,
+                'opis':              f'odpis star lot  [odpis lota - star {days} dni]',
+                'status':            'writeoff',
+                '_writeoff':         True,
+                '_writeoff_qty':     qty,
+                '_sale_qty':         0,
+                'lot_price':         lot.get('lot_price', 0),
+            })
+    return writeoffs
