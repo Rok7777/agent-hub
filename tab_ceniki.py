@@ -1676,9 +1676,8 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                         if nc_v > 0 and new_pc > 0:
                             art["marza_pct"] = round((new_pc/nc_v - 1)*100, 1)
 
-    # Shrani po aplikaciji
+    # Posodobi session_state (ne shranjuj na disk — samo ob eksplicitnem "Shrani")
     st.session_state["ceniki_tedni"] = tedni
-    _save_ceniki(tedni)
 
     # ── Avtomatsko prevajanje ob prvem prikazu ───────────────────────────
     prevedi_key = f"prevedeno_{tid}_{ime_cenika}"
@@ -2203,4 +2202,4 @@ def render():
                 _render_analiza(tedni, t_idx, teden["id"])
 
     st.session_state["ceniki_tedni"] = tedni
-    _save_ceniki(tedni)
+    # Ne shranjuj na disk ob vsakem renderu — samo ob eksplicitnem kliku "Shrani"
