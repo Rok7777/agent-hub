@@ -15,6 +15,7 @@ from datetime import datetime, date
 _DATA_DIR   = pathlib.Path(os.environ.get("DATA_DIR", str(pathlib.Path(__file__).parent)))
 CENIKI_FILE    = str(_DATA_DIR / "ceniki.json")
 PREVODI_FILE   = str(_DATA_DIR / "prevodi_slovar.json")
+STAT_FILE      = str(_DATA_DIR / "narocila_statistika.json")
 
 # ─── Konstante ────────────────────────────────────────────────────────────────
 NASI_CENIKI = ["HIT", "HoReCa"]
@@ -64,7 +65,50 @@ def _save_ceniki(tedni: list):
         st.error(f"Napaka shranjevanja: {e}")
 
 
-def _load_prevodi() -> dict:
+def _load_stat() -> dict:
+    """Naloži statistiko naročil: {dobavitelj: {naziv: stevilo}}."""
+    try:
+        if os.path.exists(STAT_FILE):
+            with open(STAT_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_stat(stat: dict):
+    try:
+        with open(STAT_FILE, "w", encoding="utf-8") as f:
+            json.dump(stat, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _belezi_narocilo(artikli: list):
+    """Ob potrditvi naročila zabeleži kateri artikli so bili naročeni."""
+    stat = _load_stat()
+    for art in artikli:
+        dob   = art.get("dobavitelj","") or "—"
+        naziv = (art.get("naziv","") or "").strip()
+        if not naziv:
+            continue
+        if dob not in stat:
+            stat[dob] = {}
+        stat[dob][naziv] = stat[dob].get(naziv, 0) + 1
+    _save_stat(stat)
+
+
+def _zelena_oznaka(dobavitelj: str, naziv: str) -> str:
+    """Vrne zeleno oznako glede na število preteklih naročil."""
+    stat = _load_stat()
+    n = stat.get(dobavitelj, {}).get(naziv, 0)
+    if n >= 10:
+        return "🟢🟢🟢"
+    elif n >= 5:
+        return "🟢🟢"
+    elif n >= 1:
+        return "🟢"
+    return ""
     """Naloži shranjene prevode iz diska."""
     try:
         if os.path.exists(PREVODI_FILE):
@@ -1425,7 +1469,9 @@ def _render_narocilo(teden: dict, tedni: list):
             "kol", min_value=0.0, value=0.0, step=1.0, format="%.0f",
             key=f"nar_kol_{teden['id']}_{i}", label_visibility="collapsed"
         )
-        rc[2].caption(art["naziv_orig"])
+        # Zelena oznaka glede na pogostost naročanja
+        zelena = _zelena_oznaka(art["dobavitelj"], art["naziv_orig"])
+        rc[2].caption(f"{zelena} {art['naziv_orig']}" if zelena else art["naziv_orig"])
         rc[3].caption(art.get("naziv_slo","—"))
         rc[4].caption(art.get("latinski_naziv","—"))
         rc[5].caption(art["dobavitelj"])
@@ -1438,6 +1484,7 @@ def _render_narocilo(teden: dict, tedni: list):
     if not izbrani:
         st.caption("Izberi artikle zgoraj za pripravo naročila.")
         return
+    st.caption("🟢 1-4x naročeno  ·  🟢🟢 5-9x  ·  🟢🟢🟢 10x+")
 
     # ── Grupiraj po dobavitelju ───────────────────────────────────────────
     po_dob: dict = {}
@@ -1476,9 +1523,12 @@ def _render_narocilo(teden: dict, tedni: list):
                     ws = writer.sheets["Narocilo"]
                     for col_l, w in zip(["A","B","C","D"], [38, 22, 12, 8]):
                         ws.column_dimensions[col_l].width = w
+                excel_data = buf.getvalue()
+                # Zabeleži naročilo v statistiko
+                _belezi_narocilo(arts)
                 st.download_button(
                     f"⬇️ Naročilo — {dob}",
-                    data=buf.getvalue(),
+                    data=excel_data,
                     file_name=f"narocilo_{dob.replace(' ','_')}_{teden['datum_od']}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"dl_nar_{teden['id']}_{dob}",
@@ -2165,10 +2215,12 @@ def render():
                                         orig_idx = next((i for i,a in enumerate(artikli) if id(a)==id(art)), a_idx)
                                         # Rdeče ozadje če nima prevoda
                                         nima_prev = not _ima_prevod(art)
+                                        # Zelena oznaka pogostosti naročanja
+                                        zelena = _zelena_oznaka(cenik.get("dobavitelj",""), art.get("naziv",""))
                                         if nima_prev:
                                             st.markdown('<div style="background:#fff0f0;border-left:3px solid #e53935;padding:2px 6px;margin:1px 0;border-radius:4px;">', unsafe_allow_html=True)
                                         ac = st.columns([2.5,2,2,1.5,1.2,1,1.2])
-                                        ac[0].text_input("Orig", value=art.get("naziv",""), key=f"an_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed", disabled=True)
+                                        ac[0].text_input("Orig", value=f"{zelena} {art.get('naziv','')}" if zelena else art.get("naziv",""), key=f"an_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed", disabled=True)
                                         new_slo = ac[1].text_input("SLO", value=art.get("naziv_slo",""), key=f"aslo_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed", placeholder="🔴 vpiši prevod..." if nima_prev else "")
                                         art["naziv_slo"] = new_slo
                                         ac[2].caption(art.get("latinski_naziv","—"))
@@ -2182,7 +2234,6 @@ def render():
                                             st.markdown('</div>', unsafe_allow_html=True)
                                     if st.button("💾 Shrani popravke", key=f"save_dob_{_tid}_{cenik['id']}",
                                                   type="primary", use_container_width=True):
-                                        # Shrani prevode v slovar za vedno
                                         _dodaj_prevode(artikli)
                                         st.session_state["ceniki_tedni"] = tedni
                                         _save_ceniki(tedni)
@@ -2191,6 +2242,7 @@ def render():
                                             st.success("✅ Shranjeno. Vsi prevodi so v spominu.")
                                         else:
                                             st.warning(f"Shranjeno. Še {brez_po} artiklov brez prevoda.")
+                                    st.caption("🟢 1-4x naročeno  ·  🟢🟢 5-9x  ·  🟢🟢🟢 10x+")
 
             with tab_hit:
                 _render_nas_cenik("HIT", teden, tedni)
