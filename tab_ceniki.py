@@ -1469,9 +1469,7 @@ def _render_narocilo(teden: dict, tedni: list):
             "kol", min_value=0.0, value=0.0, step=1.0, format="%.0f",
             key=f"nar_kol_{teden['id']}_{i}", label_visibility="collapsed"
         )
-        # Zelena oznaka glede na pogostost naročanja
-        zelena = _zelena_oznaka(art["dobavitelj"], art["naziv_orig"])
-        rc[2].caption(f"{zelena} {art['naziv_orig']}" if zelena else art["naziv_orig"])
+        rc[2].caption(art["naziv_orig"])
         rc[3].caption(art.get("naziv_slo","—"))
         rc[4].caption(art.get("latinski_naziv","—"))
         rc[5].caption(art["dobavitelj"])
@@ -1916,15 +1914,21 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                     vse_cene_cache[lat_key] = prim
                 prim = vse_cene_cache[lat_key]
                 uid  = f"{tid}_{ime_cenika}_{sklop}_{podsklop}_{a_idx}"
+                naziv_orig = art.get("naziv","")
+                dob_art    = art.get("dobavitelj","")
+                zelena     = _zelena_oznaka(dob_art, naziv_orig)
                 c0,c1,c2,c3,c4,c5,c6,c7,c8 = st.columns([0.5,2.5,2,1.5,1.2,1.2,1.2,1.5,0.5])
                 with c0:
                     st.checkbox("", key=f"izvoz_sel_{tid}_{ime_cenika}_{sklop}_{podsklop}_{a_idx}",
                                 help="Vključi v izvoz za stranke")
                 with c1:
                     naziv_val = art.get("naziv_slo") or art.get("naziv","")
-                    art["naziv_slo"] = st.text_input(
+                    new_val = st.text_input(
                         "slo", value=naziv_val,
                         key=f"nslo_{uid}", label_visibility="collapsed")
+                    art["naziv_slo"] = new_val
+                    if zelena:
+                        st.caption(zelena)
                 with c2:
                     st.caption(art.get("latinski_naziv","—"))
                 with c3:
