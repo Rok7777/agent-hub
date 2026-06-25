@@ -2192,7 +2192,7 @@ def render():
                                     artikli_sort = sorted(artikli, key=lambda a: (
                                         SKLOPI.index(a.get("sklop","Divjaki")) if a.get("sklop","Divjaki") in SKLOPI else 99,
                                         PODSKOPI.index(a.get("podsklop","Cele ribe")) if a.get("podsklop","Cele ribe") in PODSKOPI else 99,
-                                        a.get("naziv","").lower()
+                                        (a.get("naziv_slo") or a.get("naziv","")).lower()
                                     ))
                                     brez = sum(1 for a in artikli if not _ima_prevod(a))
                                     if brez > 0:
