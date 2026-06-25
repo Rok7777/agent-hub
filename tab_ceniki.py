@@ -13,7 +13,8 @@ from datetime import datetime, date
 
 # ─── Poti ────────────────────────────────────────────────────────────────────
 _DATA_DIR   = pathlib.Path(os.environ.get("DATA_DIR", str(pathlib.Path(__file__).parent)))
-CENIKI_FILE = str(_DATA_DIR / "ceniki.json")
+CENIKI_FILE    = str(_DATA_DIR / "ceniki.json")
+PREVODI_FILE   = str(_DATA_DIR / "prevodi_slovar.json")
 
 # ─── Konstante ────────────────────────────────────────────────────────────────
 NASI_CENIKI = ["HIT", "HoReCa"]
@@ -61,6 +62,62 @@ def _save_ceniki(tedni: list):
             json.dump(tedni, f, ensure_ascii=False, indent=2)
     except Exception as e:
         st.error(f"Napaka shranjevanja: {e}")
+
+
+def _load_prevodi() -> dict:
+    """Naloži shranjene prevode iz diska."""
+    try:
+        if os.path.exists(PREVODI_FILE):
+            with open(PREVODI_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_prevodi(prevodi: dict):
+    """Shrani prevode na disk."""
+    try:
+        with open(PREVODI_FILE, "w", encoding="utf-8") as f:
+            json.dump(prevodi, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _dodaj_prevode(artikli: list):
+    """Iz artiklov izvleče naziv→naziv_slo pare in jih doda v slovar."""
+    prevodi = _load_prevodi()
+    spremenjen = False
+    for art in artikli:
+        naziv     = (art.get("naziv","") or "").strip()
+        naziv_slo = (art.get("naziv_slo","") or "").strip()
+        if naziv and naziv_slo and naziv_slo != naziv:
+            if prevodi.get(naziv) != naziv_slo:
+                prevodi[naziv] = naziv_slo
+                spremenjen = True
+    if spremenjen:
+        _save_prevodi(prevodi)
+
+
+def _uporabi_prevode(artikli: list) -> list:
+    """Aplicira shranjene prevode na artikle — samo za tiste brez prevoda."""
+    prevodi = _load_prevodi()
+    if not prevodi:
+        return artikli
+    for art in artikli:
+        naziv     = (art.get("naziv","") or "").strip()
+        naziv_slo = (art.get("naziv_slo","") or "").strip()
+        if naziv and (not naziv_slo or naziv_slo == naziv):
+            if naziv in prevodi:
+                art["naziv_slo"] = prevodi[naziv]
+    return artikli
+
+
+def _ima_prevod(art: dict) -> bool:
+    """Vrne True če artikel ima veljaven prevod."""
+    naziv     = (art.get("naziv","") or "").strip()
+    naziv_slo = (art.get("naziv_slo","") or "").strip()
+    return bool(naziv_slo and naziv_slo != naziv)
 
 
 def _nov_teden(datum_od: str, datum_do: str) -> dict:
@@ -434,78 +491,237 @@ def _parse_csv_claude(file_bytes: bytes, fname: str) -> tuple:
 # ─── Slovar za prevajanje (IT/HR → SLO) ─────────────────────────────────────
 
 _PREVOD_SLOVAR = {
-    # Italijanščina → slovenščina (ključi UPPERCASE)
-    "ANGUILLA": "Jegulja", "ANELLO DI TOTANO GIGANTE DEL PACIFICO": "Obroček velikega pacifiškega lignja",
-    "ANELLO DI TOTANO GIGANTE": "Obroček velikega lignja", "ANELLO DI TOTANO": "Obroček lignja",
-    "ARROSTO DI SALMONE E MERLUZZO": "Pečenka lososa in osliča",    "ASTICE AMERICANO CANADA": "Ameriški jastog Kanada", "ASTICE AMERICANO": "Ameriški jastog",
-    "ASTICE EUROPEO": "Evropski jastog", "ASTICE JUMBO": "Jastog jumbo",
-    "BRANZINO CROAZIA": "Brancin Hrvaška", "BRANZINO GRECIA": "Brancin Grčija",
-    "BRANZINO SPAGNA": "Brancin Španija", "BRANZINO": "Brancin",
-    "CALAMARO FARCITO": "Polnjeni liganj", "CALAMARO": "Liganj",
-    "CAPPASANTA ATLANTICA": "Atlantska pokrovača", "CAPPASANTA": "Pokrovača",
-    "CERNIA GIALLA": "Rumeni kiranj", "CERNIA": "Kiranj",
+    # ── ALEMAR (IT → SLO) ────────────────────────────────────────────────
+    "ANELLO DI TOTANO GIGANTE DEL PACIFICO IN SALAMOIA DECONGELATO": "Obroček velikega pacifiškega lignja v slanici, odmrznjen",
+    "ANELLO DI TOTANO GIGANTE DEL PACIFICO": "Obroček velikega pacifiškega lignja",
+    "ANELLO DI TOTANO GIGANTE": "Obroček velikega lignja",
+    "ANELLO DI TOTANO": "Obroček lignja",
+    "ANGUILLA SPINATA": "Jegulja brez kosti, odprta kot knjiga",
+    "ANGUILLA": "Jegulja",
+    "ARROSTO DI SALMONE E MERLUZZO": "Pečenka lososa in osliča",
+    "ASTICE AMERICANO CANADA": "Ameriški jastog Kanada",
+    "ASTICE AMERICANO": "Ameriški jastog",
+    "ASTICE EUROPEO": "Evropski jastog",
+    "ASTICE JUMBO": "Jastog jumbo",
+    "BRANZINO CROAZIA": "Brancin Hrvaška",
+    "BRANZINO GRECIA": "Brancin Grčija",
+    "BRANZINO SPAGNA": "Brancin Španija",
+    "BRANZINO": "Brancin",
+    "CALAMARO FARCITO CON MACINATO DI MERLUZZO": "Polnjeni liganj z mletim osličem",
+    "CALAMARO FARCITO": "Polnjeni liganj",
+    "CALAMARO": "Liganj",
+    "CAPPASANTA ATLANTICA M/GUSCIO": "Atlantska pokrovača, pol lupine",
+    "CAPPASANTA ATLANTICA": "Atlantska pokrovača",
+    "CAPPASANTA": "Pokrovača",
+    "CERNIA GIALLA": "Rumeni kiranj",
+    "CERNIA": "Kiranj",
     "CODA DI ROSPO": "Rep morskega vraga",
     "CUORE DI MERLUZZO NORDICO": "Srce nordijskega osliča",
-    "DENTICE GIBBOSO": "Grbasti zobatec", "DENTICE": "Zobatec",
+    "DENTICE GIBBOSO": "Grbasti zobatec",
+    "DENTICE": "Zobatec",
     "FILETTO DI SALMONE NORVEGIA": "File norveškega lososa",
     "FILETTO DI SARDINA": "File sardinele",
     "FILETTO DI STOCCAFISSO AMMOLLATO": "File namočene polenovke",
-    "FILETTO EGLEFINO": "File vahnje", "FILETTO HALIBUT": "File halibuta",
+    "FILETTO EGLEFINO": "File vahnje",
+    "FILETTO HALIBUT SPAGNA DECONGELATO": "File halibuta, odmrznjen",
+    "FILETTO HALIBUT": "File halibuta",
     "FILETTO PERSICO AFRICANO": "File afriškega ostriža",
-    "FILETTO PLATESSA": "File plešca", "FILETTO SALMONE": "File lososa",
-    "FILETTO TROTA NORMALE": "File navadne postrvi", "FILETTO TROTA SALMONATA": "File lososove postrvi",
-    "FILONE DI TONNO OBESO": "Filon debelega tuna", "FILONE DI TONNO ROSSO": "Filon rdečega tuna",
+    "FILETTO PLATESSA": "File plešca",
+    "FILETTO SALMONE SUP.NORVEGIA": "File vrhunskega norveškega lososa",
+    "FILETTO SALMONE": "File lososa",
+    "FILETTO TROTA NORMALE": "File navadne postrvi",
+    "FILETTO TROTA SALMONATA": "File lososove postrvi",
+    "FILONE DI TONNO OBESO SUPERFROZEN": "Filon debelega tuna, superfrozen",
+    "FILONE DI TONNO ROSSO SENZA VENTRESCA": "Filon rdečega tuna brez trebuha",
+    "FILONE DI TONNO ROSSO": "Filon rdečega tuna",
     "FILONE TONNO A PINNE GIALLE": "Filon rumenoplavutega tuna",
-    "FILONE TONNO": "Filon tuna", "FILONE DI TONNO": "Filon tuna",
+    "FILONE TONNO": "Filon tuna",
+    "FILONE DI TONNO": "Filon tuna",
     "FISH BURGER DI TROTA": "Fish burger iz postrvi",
-    "GRANCEOLA FEMMINA": "Samica rakovice", "GRANCEOLA MASCHIO": "Samec rakovice", "GRANCEOLA": "Rakovica",
+    "GRANCEOLA FEMMINA": "Samica rakovice",
+    "GRANCEOLA MASCHIO": "Samec rakovice",
+    "GRANCEOLA": "Rakovica",
     "GRANCIPORRO ATLANTICO": "Atlantska rakovica",
-    "MERLUZZO NORDICO": "Nordijski oslič", "MERLUZZO": "Oslič",
-    "MOLO INTERO": "Cel mol", "MOLO": "Mol",
-    "MOSCARDINO ESTERO": "Muškatni hobotničnik", "MOSCARDINO": "Hobotničnik",
-    "OMBRINA BOCCADORO": "Senčar zlata usta", "OMBRINA OCELLATA": "Pikasta senčarka", "OMBRINA": "Senčar",
-    "ORATA CROAZIA": "Orada Hrvaška", "ORATA GRECIA": "Orada Grčija", "ORATA": "Orada",
-    "PAGELLO FRAGOLINO": "Rdeči ribon", "PAGRO MAGGIORE": "Veliki pagr", "PAGRO": "Pagr",
-    "PESCE SAN PIETRO": "Svetopeterska riba", "PESCE SPADA": "Mečarica",
+    "MERLUZZO NORDICO": "Nordijski oslič",
+    "MERLUZZO": "Oslič",
+    "MOLO INTERO ESTERO": "Cel mol",
+    "MOLO": "Mol",
+    "MOSCARDINO ESTERO": "Muškatni hobotničnik",
+    "MOSCARDINO": "Hobotničnik",
+    "OMBRINA BOCCADORO CROAZIA": "Senčar zlata usta, Hrvaška",
+    "OMBRINA BOCCADORO": "Senčar zlata usta",
+    "OMBRINA OCELLATA": "Pikasta senčarka",
+    "OMBRINA": "Senčar",
+    "ORATA CROAZIA": "Orada Hrvaška",
+    "ORATA GRECIA": "Orada Grčija",
+    "ORATA": "Orada",
+    "PAGELLO FRAGOLINO": "Rdeči ribon",
+    "PAGRO MAGGIORE": "Veliki pagr",
+    "PAGRO": "Pagr",
+    "PESCE SAN PIETRO": "Svetopeterska riba",
+    "PESCE SPADA FILONE EXTRA": "Filon mečarice",
+    "PESCE SPADA FRESCO": "Sveža mečarica",
+    "PESCE SPADA": "Mečarica",
+    "POLPA DI GRANCHIO PASTORIZZATA": "Pasterizirana rakova mezga",
     "POLPA DI GRANCHIO": "Rakova mezga",
-    "POLPO COMUNE": "Navadna hobotnica", "POLPO DECONGELATO": "Odmrznjena hobotnica", "POLPO": "Hobotnica",
+    "POLPO COMUNE": "Navadna hobotnica",
+    "POLPO DECONGELATO": "Odmrznjena hobotnica",
+    "POLPO": "Hobotnica",
     "RANA PESCATRICE": "Morski vrag",
-    "RICCIOLA OCEANICA": "Oceanska pisana limača", "RICCIOLA": "Pisana limača",
-    "ROMBO CHIODATO": "Trnja morska plošča", "ROMBO": "Morska plošča",
-    "SALMONE SCOZIA": "Škotski losos", "SALMONE": "Losos",
-    "SEPPIA GROSSA PULITA": "Očiščena velika sipa", "SEPPIA NERA": "Črna sipa",
-    "SEPPIA PICCOLA PULITA": "Očiščena mala sipa", "SEPPIA": "Sipa",
-    "SGOMBRO": "Skuša", "SOASO ESTERO": "Komarča", "SOGLIOLA ALLEVATA": "Gojena morska plošča",
+    "RICCIOLA OCEANICA ALLEVATA": "Gojena oceanska pisana limača",
+    "RICCIOLA OCEANICA": "Oceanska pisana limača",
+    "RICCIOLA": "Pisana limača",
+    "ROMBO CHIODATO": "Trnja morska plošča",
+    "ROMBO": "Morska plošča",
+    "SALMONE SCOZIA": "Škotski losos",
+    "SALMONE SUP.NORVEGIA": "Vrhunski norveški losos",
+    "SALMONE": "Losos",
+    "SEPPIA GROSSA PULITA": "Očiščena velika sipa",
+    "SEPPIA NERA NASSA/RETE": "Črna sipa",
+    "SEPPIA NERA": "Črna sipa",
+    "SEPPIA PICCOLA PULITA": "Očiščena mala sipa",
+    "SEPPIA": "Sipa",
+    "SGOMBRO FRANCIA": "Skuša Francija",
+    "SGOMBRO": "Skuša",
+    "SOASO ESTERO": "Komarča",
+    "SOGLIOLA ALLEVATA": "Gojena morska plošča",
     "SPIEDINO GHIOTTO": "Ribji ražnjič",
-    "STOCCAFISSO AMMOLLATO": "Namočena polenovka", "STOCCAFISSO": "Polenovka",
-    "STRISCE DI TOTANO GIGANTE": "Trakovi velikega lignja",
+    "STOCCAFISSO AMMOLLATO": "Namočena polenovka",
+    "STOCCAFISSO": "Polenovka",
+    "STRISCE DI TOTANO GIGANTE DEL PACIFICO": "Trakovi velikega pacifiškega lignja",
+    "TENTACOLI DI TOTANO IN SALAMOIA": "Lovke lignja v slanici",
     "TENTACOLI DI TOTANO": "Lovke lignja",
-    "TONNETTO": "Mala tuna", "TONNO": "Tun",
-    "TOTANO GIGANTE": "Veliki liganj", "TOTANO": "Liganj",
+    "TONNETTO O ALLETTERATO": "Mala tuna",
+    "TONNETTO": "Mala tuna",
+    "TOTANO GIGANTE DEL PACIFICO": "Veliki pacifiški liganj",
+    "TOTANO GIGANTE": "Veliki liganj",
+    "TOTANO": "Liganj",
     "TRACINA": "Pauk riba",
-    "TRIGLIA DI SCOGLIO": "Skalnati barbun", "TRIGLIA": "Barbun",
-    "TROTA NORMALE EVISCERATA": "Navadna postrv, očiščena", "TROTA NORMALE INTERA": "Navadna postrv, cela",
-    "TROTA SALMONATA EVISCERATA": "Lososova postrv, očiščena", "TROTA SALMONATA INTERA": "Lososova postrv, cela",
-    "TROTA": "Postrv", "UOVA DI SEPPIA": "Jajca sipe",
-    # Hrvaščina → slovenščina
-    "Skuša": "Skuša", "Trupac": "Trupec", "Tuna BLUEFIN": "Modroplavuta tuna",
-    "Tuna žutoperajna": "Rumenoplavuta tuna", "Tuna dugoperajna ALALUNGA": "Dolgoplavutna tuna (alalunga)",
-    "Šarun": "Šur", "Palamida": "Palamida", "Luc": "Luc", "Gavun": "Gavun",
-    "Srdela": "Sardela", "Inćun": "Sardon", "Lokarda": "Lokarda",
-    "Haringa": "Sled", "Strijelka": "Strijelka", "Lica": "Lica",
-    "Brancin": "Brancin", "Orada": "Orada", "Losos": "Losos",
-    "Filet lososa": "File lososa", "Pastrva": "Postrv",
-    "Pastrva dužičasta": "Dužičasta postrv", "Filet dužičaste pastrve": "File dužičaste postrvi",
-    "Smuđ": "Smuč", "Jastog": "Jastog", "Škamp": "Škamp",
-    "Hobotnica": "Hobotnica", "Liganj": "Liganj", "Sipa": "Sipa",
-    "Dagnja": "Klapavica", "Kamenica": "Ostriga", "Kapesanta": "Pokrovača",
-    "Kozica": "Kozica", "Grgeč": "Ostriž", "Som": "Som",
-    "Kirnja": "Kiranj", "Oslić": "Oslič", "List": "Morska plošča",
-    "Kovač": "Kovač", "Pic": "Pic", "Špar": "Špar",
-    "Šur": "Šur", "Arbun": "Arbun", "Salpa": "Salpa",
-    "Fratar": "Fratar", "Pirka": "Pirka", "Pagar": "Pagr",
-    "Ušata": "Ušata", "Šnjur": "Šnjur", "Cipol": "Cipal",
-    "Zubatac": "Zobatec", "Murina": "Murena",
+    "TRIGLIA DI SCOGLIO": "Skalnati barbun",
+    "TRIGLIA": "Barbun",
+    "TROTA NORMALE EVISCERATA": "Navadna postrv, očiščena",
+    "TROTA NORMALE INTERA": "Navadna postrv, cela",
+    "TROTA SALMONATA EVISCERATA": "Lososova postrv, očiščena",
+    "TROTA SALMONATA INTERA": "Lososova postrv, cela",
+    "TROTA SALMONATA": "Lososova postrv",
+    "TROTA NORMALE": "Navadna postrv",
+    "TROTA": "Postrv",
+    "UOVA DI SEPPIA": "Jajca sipe",
+    # ── FIORITAL (HR → SLO) ──────────────────────────────────────────────
+    "Skuša": "Skuša",
+    "Trupac": "Trupec",
+    "Tuna BLUEFIN očišćena": "Modroplavuta tuna, očiščena",
+    "Tuna BLUEFIN": "Modroplavuta tuna",
+    "Tuna žutoperajna": "Rumenoplavuta tuna",
+    "Tuna dugoperajna ALALUNGA": "Dolgoplavutna tuna (alalunga)",
+    "Tuna dugoperajna": "Dolgoplavutna tuna",
+    "Šarun": "Šur",
+    "Palamida": "Palamida",
+    "Luc": "Luc",
+    "Gavun": "Gavun",
+    "Haringa": "Sled",
+    "Srdela": "Sardela",
+    "Inćun": "Sardon",
+    "Lokarda": "Lokarda",
+    "Lica": "Lica",
+    "Strijelka": "Strijelka",
+    "Losos SUP": "Vrhunski losos",
+    "Losos": "Losos",
+    "Filet lososa TRIM C": "File lososa TRIM C",
+    "Filet lososa": "File lososa",
+    "Smuđ": "Smuč",
+    "Pastrva očišćena": "Postrv, očiščena",
+    "Pastrva dužičasta": "Dužičasta postrv",
+    "Pastrva": "Postrv",
+    "Filet dužičaste pastrve": "File dužičaste postrvi",
+    "Brancin": "Brancin",
+    "Orada": "Orada",
+    "Veliki romb": "Veliki romb",
+    "Pagar japanski": "Japonski pagr",
+    "Hama": "Hama",
+    "Gof": "Gof",
+    "Filet nilskog ostriža": "File nilskega ostriža",
+    "Filet tune": "File tuna",
+    "Filet bakalara": "File trske",
+    "Filet oslića": "File osliča",
+    "Filet kovača": "File kovača",
+    "Filet crvenog bodečnjaka": "File rdečega škrpinca",
+    "Filet lista": "File morske plošče",
+    "Filet trlje": "File barbuna",
+    "Filet hame": "File hame",
+    "Filet sabljarke": "File mečarice",
+    "Filet haringe": "File sleda",
+    "Filet atlantskog bakalara": "File atlantske trske",
+    "Filet grdobine": "File morskega vraga",
+    "Filet srdele": "File sardinele",
+    "Filet kokota": "File lastavice",
+    "Filet iverka": "File iverke",
+    "Filet skuše": "File skuše",
+    "Filet velikog romba": "File velikega romba",
+    "Filet brancina": "File brancina",
+    "Filet orade": "File orade",
+    "Kovač": "Kovač",
+    "Škrpina": "Škrpinec",
+    "Bodečnjak": "Škrpinec bodičar",
+    "Zubatac": "Zobatec",
+    "Zmijičnjak repaš": "Zmijičnjak repaš",
+    "Pagar - Snapper parangal": "Pagr parangal",
+    "Pagar - Snapper mreža": "Pagr mreža",
+    "Pagar": "Pagr",
+    "Arbun": "Arbun",
+    "Ovćica": "Ovčica",
+    "Ovčica": "Ovčica",
+    "Kirnja": "Kiranj",
+    "Šarag": "Šarag",
+    "Sabljarka": "Mečarica",
+    "Bakalar očišćeni": "Očiščena trska",
+    "Grdobina": "Morski vrag",
+    "Rep grdobine": "Rep morskega vraga",
+    "Obrazi grdobine": "Lička morskega vraga",
+    "Iverak": "Iverka",
+    "Pišmolj": "Molič",
+    "Ugor": "Morski jeguljec",
+    "Cipal": "Cipal",
+    "Lastavica balavica": "Lastavica",
+    "Lastavica": "Lastavica",
+    "Ušata": "Ušata",
+    "Lampuga": "Lampuga",
+    "Trlja kamenjarka": "Skalnati barbun",
+    "Trlja blatarica": "Blatni barbun",
+    "Trlja": "Barbun",
+    "Krila raže": "Peruti raže",
+    "Bugva": "Bukva",
+    "Pic": "Pic",
+    "Salpa": "Salpa",
+    "Oslić extra": "Oslič extra",
+    "Oslić parangal": "Oslič parangal",
+    "Oslić": "Oslič",
+    "Morski pas oguljeni": "Olupljeni morski pes",
+    "Morski pas": "Morski pes",
+    "Jegulja": "Jegulja",
+    "Jastog MED": "Sredozemski jastog",
+    "Mediteranski hlap": "Mediteranski hlap",
+    "Hlap": "Hlap",
+    "Smeđa rakovica": "Rjavi rakovič",
+    "Velika rakovica": "Velika rakovica",
+    "Škamp": "Škamp",
+    "Kozice": "Kozice",
+    "Velika kapica": "Velika pokrovača",
+    "Velike kapice": "Velike pokrovače",
+    "Škljenci": "Soleni (kaplonge)",
+    "Kućica": "Kočice",
+    "Kamenice": "Ostrige",
+    "Dagnje": "Klapavice",
+    "Lignja": "Liganj",
+    "Lignjun atlantski": "Atlantski liganj",
+    "Lignjun": "Liganj",
+    "Sipa": "Sipa",
+    "Hobotnica": "Hobotnica",
+    "Muzgavac crni": "Moškatna hobotnica",
+    "Muzgavac": "Hobotničnik",
+    "Raža": "Raža",
+    "Oradela": "Mala orada",
+    "List": "Morska plošča",
 }
 
 def _prevedi_naziv(naziv: str) -> str:
@@ -1489,41 +1705,44 @@ def _render_nas_cenik(ime_cenika: str, teden: dict, tedni: list):
                  key=f"auto_{tid}_{ime_cenika}",
                  disabled=not teden.get("ceniki_dob")):
         aktivni = _najnovejsi_ceniki(teden["ceniki_dob"])
+        # Označi aktivne (za primerjavo) in neaktivne (celotni)
+        za_primerjavo = [c for c in aktivni if c.get("aktiven", True)]
+        samo_celotni  = [c for c in aktivni if not c.get("aktiven", True)]
+
+        import re as _re
         vse: dict = {}
-        for cenik in aktivni:
+
+        def _dodaj_v_vse(cenik, primerjaj):
             dob = cenik.get("dobavitelj","")
             for art in cenik.get("artikli",[]):
                 cena = float(art.get("cena",0) or 0)
-                if cena <= 0:
-                    continue  # ni dobavljivo
+                if cena <= 0: continue
                 naziv = (art.get("naziv","") or "").strip()
-                if not naziv:
-                    continue
-
-                # Ključ = latinski naziv + poreklo + velikost iz naziva
-                # Tako: Brancin 200/300 Grčija ≠ Brancin 200/300 Hrvaška (različna)
-                #       Brancin 200/300 Grčija od Alemarja = Brancin 200/300 Grčija od Fioritala (isti → cenejši)
-                lat     = (art.get("latinski_naziv","") or "").lower().strip()
-                poreklo = (art.get("poreklo","") or "").upper().strip()
-                # Izvleci velikostni razred iz naziva (npr. "200/300", "1000/1500", "4/5")
-                import re as _re
+                if not naziv: continue
+                lat      = (art.get("latinski_naziv","") or "").lower().strip()
+                poreklo  = (art.get("poreklo","") or "").upper().strip()
                 velikost = "/".join(_re.findall(r'\d+', naziv))
-                kljuc = f"{lat}|{poreklo}|{velikost}" if lat else f"{naziv.upper()}|{poreklo}"
-
-                if kljuc not in vse or cena < float(vse[kljuc]["cena"]):
+                kljuc    = f"{lat}|{poreklo}|{velikost}" if lat else f"{naziv.upper()}|{poreklo}"
+                naziv_slo = art.get("naziv_slo","").strip() or naziv
+                if kljuc not in vse:
                     vse[kljuc] = {
-                        "naziv":          naziv,
-                        "naziv_slo":      art.get("naziv_slo","") or naziv,
+                        "naziv": naziv, "naziv_slo": naziv_slo,
                         "latinski_naziv": art.get("latinski_naziv",""),
-                        "cena":           cena,
-                        "enota":          art.get("enota","kg"),
-                        "poreklo":        art.get("poreklo",""),
-                        "sklop":          art.get("sklop","Divjaki"),
-                        "podsklop":       _dolocii_podsklop(art),
-                        "cena_prodajna":  0.0,
-                        "marza_pct":      0.0,
-                        "dobavitelj":     dob,
+                        "cena": cena, "enota": art.get("enota","kg"),
+                        "poreklo": art.get("poreklo",""),
+                        "sklop": art.get("sklop","Divjaki"),
+                        "podsklop": _dolocii_podsklop(art),
+                        "cena_prodajna": 0.0, "marza_pct": 0.0, "dobavitelj": dob,
                     }
+                elif primerjaj and cena < float(vse[kljuc]["cena"]):
+                    vse[kljuc].update({"cena": cena, "dobavitelj": dob, "naziv_slo": naziv_slo})
+
+        # Neoznačeni → dodaj celotne (brez primerjave)
+        for cenik in samo_celotni:
+            _dodaj_v_vse(cenik, primerjaj=False)
+        # Označeni → primerjaj med seboj, vzemi najcenejšega
+        for cenik in za_primerjavo:
+            _dodaj_v_vse(cenik, primerjaj=True)
 
         nas_cenik = _prazen_nas_cenik()
         for art_data in vse.values():
@@ -1886,11 +2105,27 @@ def render():
                 if not teden.get("ceniki_dob"):
                     st.caption("Naloži PDF/Excel/CSV cenike dobaviteljev z gumbom zgoraj.")
                 else:
+                    # Checkbox za izbiro cenikov pri samodejnem sestavljanju
+                    st.caption("☑ Označi cenike ki se upoštevajo pri iskanju najboljše cene:")
                     for cenik in teden["ceniki_dob"]:
+                        brez_prev = sum(1 for a in cenik.get("artikli",[]) if not _ima_prevod(a))
+                        rdeca = " 🔴" if brez_prev > 0 else ""
                         c_label = (f"🏭 **{cenik['dobavitelj']}**  ·  "
                                    f"{_fmt_datum(cenik.get('datum','')) or '—'}  ·  "
-                                   f"{len(cenik.get('artikli',[]))} artiklov  ·  `{cenik.get('fname','')}`")
-                        col_exp, col_rm = st.columns([11, 1])
+                                   f"{len(cenik.get('artikli',[]))} artiklov"
+                                   f"{f'  ·  🔴 {brez_prev} brez prevoda' if brez_prev else ''}"
+                                   f"  ·  `{cenik.get('fname','')}`")
+
+                        col_chk, col_exp, col_rm = st.columns([0.5, 11, 0.5])
+                        with col_chk:
+                            # Checkbox za vključitev v samodejno sestavljanje
+                            st.checkbox("",
+                                key=f"cenik_aktiven_{_tid}_{cenik['id']}",
+                                value=cenik.get("aktiven", True),
+                                help="Vključi v iskanje najboljše cene")
+                            # Shrani vrednost checkboxa v cenik
+                            cenik["aktiven"] = st.session_state.get(
+                                f"cenik_aktiven_{_tid}_{cenik['id']}", True)
                         with col_rm:
                             if st.button("✕", key=f"rm_dob_{_tid}_{cenik['id']}"):
                                 teden["ceniki_dob"] = [c for c in teden["ceniki_dob"] if c["id"] != cenik["id"]]
@@ -1903,11 +2138,16 @@ def render():
                                 if not artikli:
                                     st.caption("Ni artiklov.")
                                 else:
+                                    # Aplicira shranjene prevode
+                                    _uporabi_prevode(artikli)
                                     artikli_sort = sorted(artikli, key=lambda a: (
                                         SKLOPI.index(a.get("sklop","Divjaki")) if a.get("sklop","Divjaki") in SKLOPI else 99,
                                         PODSKOPI.index(a.get("podsklop","Cele ribe")) if a.get("podsklop","Cele ribe") in PODSKOPI else 99,
                                         a.get("naziv","").lower()
                                     ))
+                                    brez = sum(1 for a in artikli if not _ima_prevod(a))
+                                    if brez > 0:
+                                        st.warning(f"🔴 {brez} artiklov nima slovenskega prevoda — vpišite prevod in kliknite 'Shrani popravke'.")
                                     hh = st.columns([2.5, 2, 2, 1.5, 1.2, 1, 1.2])
                                     for col, h in zip(hh, ["Orig. naziv","SLO prevod","Latinski naziv","Poreklo","Cena €/kg","Sklop","Podsklop"]):
                                         col.markdown(f"**{h}**")
@@ -1924,20 +2164,34 @@ def render():
                                             st.markdown(f"**{sep_label}**")
                                             cur_sklop, cur_ps = sklop, podsklop
                                         orig_idx = next((i for i,a in enumerate(artikli) if id(a)==id(art)), a_idx)
+                                        # Rdeče ozadje če nima prevoda
+                                        nima_prev = not _ima_prevod(art)
+                                        if nima_prev:
+                                            st.markdown('<div style="background:#fff0f0;border-left:3px solid #e53935;padding:2px 6px;margin:1px 0;border-radius:4px;">', unsafe_allow_html=True)
                                         ac = st.columns([2.5,2,2,1.5,1.2,1,1.2])
-                                        art["naziv"]     = ac[0].text_input("Orig", value=art.get("naziv",""), key=f"an_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed")
-                                        art["naziv_slo"] = ac[1].text_input("SLO",  value=art.get("naziv_slo",""), key=f"aslo_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed", placeholder="slo prevod...")
+                                        ac[0].text_input("Orig", value=art.get("naziv",""), key=f"an_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed", disabled=True)
+                                        new_slo = ac[1].text_input("SLO", value=art.get("naziv_slo",""), key=f"aslo_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed", placeholder="🔴 vpiši prevod..." if nima_prev else "")
+                                        art["naziv_slo"] = new_slo
                                         ac[2].caption(art.get("latinski_naziv","—"))
                                         ac[3].caption(art.get("poreklo","—"))
-                                        art["cena"]   = ac[4].number_input("€", value=float(art.get("cena",0)), min_value=0.0, format="%.2f", key=f"ac_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed")
-                                        cur_s  = art.get("sklop","Divjaki")
+                                        art["cena"] = ac[4].number_input("€", value=float(art.get("cena",0)), min_value=0.0, format="%.2f", key=f"ac_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed")
+                                        cur_s   = art.get("sklop","Divjaki")
                                         cur_ps2 = art.get("podsklop","Cele ribe")
                                         art["sklop"]    = ac[5].selectbox("Sklop", SKLOPI, index=SKLOPI.index(cur_s) if cur_s in SKLOPI else 1, key=f"as_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed")
                                         art["podsklop"] = ac[6].selectbox("PS", PODSKOPI, index=PODSKOPI.index(cur_ps2) if cur_ps2 in PODSKOPI else 0, key=f"aps_{_tid}_{cenik['id']}_{orig_idx}", label_visibility="collapsed")
-                                    if st.button("💾 Shrani popravke", key=f"save_dob_{_tid}_{cenik['id']}"):
+                                        if nima_prev:
+                                            st.markdown('</div>', unsafe_allow_html=True)
+                                    if st.button("💾 Shrani popravke", key=f"save_dob_{_tid}_{cenik['id']}",
+                                                  type="primary", use_container_width=True):
+                                        # Shrani prevode v slovar za vedno
+                                        _dodaj_prevode(artikli)
                                         st.session_state["ceniki_tedni"] = tedni
                                         _save_ceniki(tedni)
-                                        st.success("Shranjeno.")
+                                        brez_po = sum(1 for a in artikli if not _ima_prevod(a))
+                                        if brez_po == 0:
+                                            st.success("✅ Shranjeno. Vsi prevodi so v spominu.")
+                                        else:
+                                            st.warning(f"Shranjeno. Še {brez_po} artiklov brez prevoda.")
 
             with tab_hit:
                 _render_nas_cenik("HIT", teden, tedni)
